@@ -44,13 +44,12 @@ uv run symphony-dbcli github-app convert --code CODE
 ```
 
 This writes `.symphony/github-app.env` and `.symphony/github-app.private-key.pem`
-with `0600` permissions. Install the app on the target DBCLI repositories, then
-source the env file and list installations:
+with `0600` permissions. Local CLI commands load `.symphony/github-app.env`
+automatically without overriding existing environment variables.
+
+Install the app on the target DBCLI repositories, then list installations:
 
 ```bash
-set -a
-. .symphony/github-app.env
-set +a
 uv run symphony-dbcli github-app installations
 ```
 

@@ -20,6 +20,7 @@ from .config import (
     write_workflow,
 )
 from .dashboard import serve_dashboard
+from .env import load_local_env, parse_env_file
 from .github import GitHubClient
 from .github_app import default_manifest, write_manifest_form
 from .orchestrator import Orchestrator, WorkflowWatcher, load_and_record_workflow
@@ -28,6 +29,7 @@ from .worktree import WorktreeManager
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_local_env()
     parser = build_parser()
     args = parser.parse_args(argv)
     command = cast(Callable[[argparse.Namespace], int], args.func)
@@ -252,7 +254,7 @@ def cmd_github_app_convert(args: argparse.Namespace) -> int:
 
 def cmd_github_app_installations(args: argparse.Namespace) -> int:
     config = _load_config_if_exists(args.workflow)
-    for key, value in _read_env_file(".symphony/github-app.env").items():
+    for key, value in parse_env_file(".symphony/github-app.env").items():
         os.environ.setdefault(key, value)
     installations = GitHubClient(config.github).list_app_installations()
     if not installations:
@@ -302,20 +304,6 @@ def _load_config_if_exists(workflow_path: str) -> WorkflowConfig:
     if path.exists():
         return load_workflow(path)
     return default_config()
-
-
-def _read_env_file(path: str) -> dict[str, str]:
-    env_path = Path(path)
-    if not env_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if value:
-            values[key] = value
-    return values
 
 
 if __name__ == "__main__":
