@@ -6,6 +6,10 @@ __pycache__/
 *.py[cod]
 *.db
 *.db-*
+.env
+.env.*
+.symphony/
+*.pem
 dist/
 build/
 *.egg-info/

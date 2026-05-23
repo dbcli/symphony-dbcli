@@ -126,6 +126,14 @@ table {
   border-collapse: collapse;
 }
 
+pre {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
 th,
 td {
   text-align: left;

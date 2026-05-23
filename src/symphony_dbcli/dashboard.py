@@ -75,6 +75,18 @@ def render_attempt(store: Store, attempt_id: int) -> str:
     )
 
 
+def render_github_app_callback(code: str, state: str) -> str:
+    return (
+        _templates()
+        .get_template("github_app_callback.html")
+        .render(
+            title="GitHub App Created",
+            code=code,
+            state=state,
+        )
+    )
+
+
 def _handler_factory(store: Store) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -88,6 +100,15 @@ def _handler_factory(store: Store) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/ask":
                 params = urllib.parse.parse_qs(parsed.query)
                 self._send_html(render_ask(store, params.get("q", [""])[0]))
+                return
+            if parsed.path == "/github-app/callback":
+                params = urllib.parse.parse_qs(parsed.query)
+                self._send_html(
+                    render_github_app_callback(
+                        params.get("code", [""])[0],
+                        params.get("state", [""])[0],
+                    )
+                )
                 return
             if parsed.path.startswith("/issues/"):
                 parts = parsed.path.strip("/").split("/")

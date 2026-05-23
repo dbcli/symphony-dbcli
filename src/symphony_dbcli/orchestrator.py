@@ -7,9 +7,10 @@ from pathlib import Path
 
 from .config import WorkflowConfig, WorkflowError, parse_workflow
 from .github import GitHubClient, GitHubError
+from .gitops import GitWorktree
 from .runner import CodexRunner
 from .store import IssueSnapshot, Store
-from .worktree import WorktreeManager
+from .worktree import WorktreeAllocation, WorktreeManager
 
 
 class OrchestratorError(RuntimeError):
@@ -143,7 +144,12 @@ class Orchestrator:
             )
             self.store.record_worker_log(attempt_id, "info", result.final_message)
             self._complete_github_side_effects(
-                attempt_id, repo, issue_number, resolved_task_type, result.final_message
+                attempt_id,
+                repo,
+                issue_number,
+                resolved_task_type,
+                result.final_message,
+                allocation,
             )
             self.store.finish_attempt(attempt_id, "review", "needs_review")
             return attempt_id
@@ -166,6 +172,7 @@ class Orchestrator:
         issue_number: int,
         task_type: str,
         final_message: str,
+        allocation: WorktreeAllocation,
     ) -> None:
         if self.config.policy.dry_run:
             self.store.record_comment(
@@ -177,6 +184,8 @@ class Orchestrator:
                 "drafted",
             )
             return
+        if task_type == "code" and self.config.policy.open_pull_requests:
+            self._publish_code_task(attempt_id, repo, issue_number, final_message, allocation)
         if task_type == "research" and self.config.policy.post_research_answers:
             url = self.github.create_comment(repo, issue_number, final_message)
             self.store.record_comment(attempt_id, repo, issue_number, url, final_message, "posted")
@@ -185,6 +194,75 @@ class Orchestrator:
             self.github.remove_label(repo, issue_number, self.config.labels.working)
         except GitHubError:
             pass
+
+    def _publish_code_task(
+        self,
+        attempt_id: int,
+        repo: str,
+        issue_number: int,
+        final_message: str,
+        allocation: WorktreeAllocation,
+    ) -> None:
+        worktree = GitWorktree(allocation.worktree_path)
+        if worktree.has_changes():
+            self.store.record_timeline_event(attempt_id, phase="git", event_type="commit_started")
+            commit = worktree.commit_all(f"Work on {repo}#{issue_number}")
+            self.store.record_timeline_event(
+                attempt_id,
+                phase="git",
+                event_type="committed",
+                message=commit.sha,
+                data={"message": commit.message},
+            )
+            commit_sha = commit.sha
+        elif worktree.commits_since(allocation.commit_sha) > 0:
+            commit_sha = worktree.head_sha()
+            self.store.record_timeline_event(
+                attempt_id,
+                phase="git",
+                event_type="existing_commits_detected",
+                message=commit_sha,
+            )
+        else:
+            self.store.record_comment(
+                attempt_id,
+                repo,
+                issue_number,
+                "",
+                "Code worker finished without repository changes.\n\n" + final_message,
+                "drafted",
+            )
+            return
+        self.store.update_attempt_workspace(
+            attempt_id,
+            base_repo_path=allocation.base_repo_path,
+            worktree_path=allocation.worktree_path,
+            branch=allocation.branch,
+            commit_sha=commit_sha,
+        )
+        self.github.push_branch(repo=repo, worktree_path=allocation.worktree_path, branch=allocation.branch)
+        self.store.record_timeline_event(
+            attempt_id,
+            phase="github",
+            event_type="branch_pushed",
+            message=allocation.branch,
+        )
+        pr = self.github.create_pull_request(
+            repo=repo,
+            title=f"Work on #{issue_number}",
+            head=allocation.branch,
+            base=self.github.default_branch(repo),
+            body=final_message,
+            draft=True,
+        )
+        self.store.record_pr(attempt_id, repo, pr.number, pr.url, pr.title)
+        self.store.record_timeline_event(
+            attempt_id,
+            phase="github",
+            event_type="pull_request_created",
+            message=pr.url,
+            data={"number": pr.number},
+        )
 
 
 def build_worker_prompt(

@@ -11,4 +11,5 @@ repos:
       - id: mypy
         additional_dependencies:
           - jinja2>=3.1
+          - pyjwt[crypto]>=2.10
           - types-jinja2>=2.11.9

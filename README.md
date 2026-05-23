@@ -10,7 +10,7 @@ The project is intentionally lightweight for the first implementation:
 - SQLite for durable state, workflow version history, and worker metrics.
 - GitHub Issues as the tracker.
 - Git worktrees for parallel per-issue coding workers.
-- A stdlib-powered dashboard for status and operational questions.
+- A Jinja-rendered dashboard for status and operational questions.
 
 ## Quick Start
 
@@ -23,6 +23,39 @@ uv run symphony-dbcli serve
 
 The default workflow is safe for local development. GitHub writes require
 credentials before workers can comment, label issues, or open pull requests.
+
+## GitHub App Setup
+
+Generate a local manifest form:
+
+```bash
+uv run symphony-dbcli github-app manifest --account amjith
+```
+
+Open `.symphony/github-app-manifest.html` in a browser and submit the form.
+GitHub will redirect to `http://127.0.0.1:8765/github-app/callback` with a
+temporary code. If the dashboard is not running, copy the `code` from the
+browser address bar.
+
+Exchange the code within one hour:
+
+```bash
+uv run symphony-dbcli github-app convert --code CODE
+```
+
+This writes `.symphony/github-app.env` and `.symphony/github-app.private-key.pem`
+with `0600` permissions. Install the app on the target DBCLI repositories, then
+source the env file and list installations:
+
+```bash
+set -a
+. .symphony/github-app.env
+set +a
+uv run symphony-dbcli github-app installations
+```
+
+Set `SYMPHONY_GITHUB_INSTALLATION_ID` in the env file to the installation id for
+the account that owns the DBCLI repositories.
 
 ## Development
 

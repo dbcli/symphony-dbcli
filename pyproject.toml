@@ -8,6 +8,7 @@ authors = [{ name = "Amjith Ramanujam" }]
 license = "MIT"
 dependencies = [
   "jinja2>=3.1",
+  "pyjwt[crypto]>=2.10",
 ]
 
 [project.scripts]

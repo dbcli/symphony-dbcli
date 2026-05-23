@@ -45,10 +45,14 @@ class LabelConfig:
 @dataclass(frozen=True)
 class GitHubConfig:
     repos: list[str] = field(default_factory=lambda: ["dbcli/pgcli", "dbcli/mycli", "dbcli/litecli"])
+    auth_strategy: str = "auto"
     token_env: str = "SYMPHONY_GITHUB_TOKEN"
+    fallback_token_env: str = "GH_TOKEN"
     app_id_env: str = "SYMPHONY_GITHUB_APP_ID"
     installation_id_env: str = "SYMPHONY_GITHUB_INSTALLATION_ID"
+    private_key_env: str = "SYMPHONY_GITHUB_PRIVATE_KEY"
     private_key_path_env: str = "SYMPHONY_GITHUB_PRIVATE_KEY_PATH"
+    webhook_secret_env: str = "SYMPHONY_GITHUB_WEBHOOK_SECRET"
     api_base_url: str = "https://api.github.com"
 
 
@@ -177,6 +181,8 @@ def validate_config(config: WorkflowConfig) -> None:
         errors.append("tracker.kind must be 'github'.")
     if config.workspace.strategy != "worktree":
         errors.append("workspace.strategy must be 'worktree'.")
+    if config.github.auth_strategy not in {"auto", "github_app", "token"}:
+        errors.append("github.auth_strategy must be 'auto', 'github_app', or 'token'.")
     if config.workers.max_global < 1:
         errors.append("workers.max_global must be at least 1.")
     if config.workers.max_per_repo < 1:

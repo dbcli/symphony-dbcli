@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
 import time
@@ -19,6 +20,8 @@ from .config import (
     write_workflow,
 )
 from .dashboard import serve_dashboard
+from .github import GitHubClient
+from .github_app import default_manifest, write_manifest_form
 from .orchestrator import Orchestrator, WorkflowWatcher, load_and_record_workflow
 from .store import Store
 from .worktree import WorktreeManager
@@ -86,6 +89,29 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_sub = worktree.add_subparsers(required=True)
     cleanup = worktree_sub.add_parser("cleanup", help="Prune stale git worktree metadata")
     cleanup.set_defaults(func=cmd_worktree_cleanup)
+
+    github_app = subcommands.add_parser("github-app", help="GitHub App setup commands")
+    github_app_sub = github_app.add_subparsers(required=True)
+    manifest = github_app_sub.add_parser("manifest", help="Write a GitHub App manifest HTML form")
+    manifest.add_argument("--account", default="amjith", help="User or organization that will own the app")
+    manifest.add_argument("--owner-type", choices=["user", "org"], default="user")
+    manifest.add_argument("--name", default="symphony-dbcli")
+    manifest.add_argument("--homepage-url", default="https://github.com/amjith/symphony-dbcli")
+    manifest.add_argument("--redirect-url", default="http://127.0.0.1:8765/github-app/callback")
+    manifest.add_argument("--webhook-url", default="https://github.com/amjith/symphony-dbcli")
+    manifest.add_argument("--out", default=".symphony/github-app-manifest.html")
+    manifest.set_defaults(func=cmd_github_app_manifest)
+
+    convert = github_app_sub.add_parser("convert", help="Exchange a manifest code for app credentials")
+    convert.add_argument("--code", required=True)
+    convert.add_argument("--env-out", default=".symphony/github-app.env")
+    convert.add_argument("--private-key-out", default=".symphony/github-app.private-key.pem")
+    convert.set_defaults(func=cmd_github_app_convert)
+
+    installations = github_app_sub.add_parser(
+        "installations", help="List installations for the configured app"
+    )
+    installations.set_defaults(func=cmd_github_app_installations)
 
     return parser
 
@@ -176,6 +202,68 @@ def cmd_worktree_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_github_app_manifest(args: argparse.Namespace) -> int:
+    manifest = default_manifest(
+        account=args.account,
+        owner_type=args.owner_type,
+        name=args.name,
+        homepage_url=args.homepage_url,
+        redirect_url=args.redirect_url,
+        webhook_url=args.webhook_url,
+    )
+    path = write_manifest_form(manifest, args.out)
+    print(f"Wrote {path}")
+    print("Open this file in a browser, submit the form, then run:")
+    print("  uv run symphony-dbcli github-app convert --code CODE")
+    return 0
+
+
+def cmd_github_app_convert(args: argparse.Namespace) -> int:
+    config = _load_config_if_exists(args.workflow)
+    conversion = GitHubClient(config.github).convert_manifest_code(args.code)
+    private_key_path = Path(args.private_key_out)
+    private_key_path.parent.mkdir(parents=True, exist_ok=True)
+    private_key_path.write_text(conversion.pem, encoding="utf-8")
+    private_key_path.chmod(0o600)
+
+    env_path = Path(args.env_out)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        "\n".join(
+            [
+                f"{config.github.app_id_env}={conversion.app_id}",
+                f"{config.github.installation_id_env}=",
+                f"{config.github.private_key_path_env}={private_key_path.resolve()}",
+                f"{config.github.webhook_secret_env}={conversion.webhook_secret}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env_path.chmod(0o600)
+
+    print(f"Wrote {private_key_path}")
+    print(f"Wrote {env_path}")
+    print(f"GitHub App: {conversion.html_url or conversion.slug}")
+    print("Install the app on the DBCLI repos, source the env file, then run:")
+    print("  uv run symphony-dbcli github-app installations")
+    return 0
+
+
+def cmd_github_app_installations(args: argparse.Namespace) -> int:
+    config = _load_config_if_exists(args.workflow)
+    for key, value in _read_env_file(".symphony/github-app.env").items():
+        os.environ.setdefault(key, value)
+    installations = GitHubClient(config.github).list_app_installations()
+    if not installations:
+        print("No installations found for this app.")
+        return 0
+    for installation in installations:
+        print(f"{installation.id} {installation.account_login} ({installation.account_type})")
+    print(f"Set {config.github.installation_id_env} to the installation id for the target account.")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     config, _, store = _load_config_store_and_record(args.workflow)
     if not args.no_poll:
@@ -214,6 +302,20 @@ def _load_config_if_exists(workflow_path: str) -> WorkflowConfig:
     if path.exists():
         return load_workflow(path)
     return default_config()
+
+
+def _read_env_file(path: str) -> dict[str, str]:
+    env_path = Path(path)
+    if not env_path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if value:
+            values[key] = value
+    return values
 
 
 if __name__ == "__main__":
