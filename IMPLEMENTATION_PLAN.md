@@ -87,21 +87,24 @@ Minimum v1 configuration fields:
 - `github.repos: ["dbcli/pgcli", "dbcli/mycli", "dbcli/litecli"]`
 - label mappings for active, terminal, blocked, task type, and review states
 - `workspace.strategy: worktree`
-- `workspace.root`, defaulting to a persistent exe.dev path such as
-  `/srv/symphony/worktrees`
-- `workspace.bare_repos_root`, defaulting to a persistent exe.dev path such as
-  `/srv/symphony/repos`
+- `workspace.root`, defaulting locally to `.symphony/worktrees`
+- `workspace.bare_repos_root`, defaulting locally to `.symphony/repos`
 - maximum concurrent workers globally and per repo
 - per-repo workspace bootstrap hooks
 - Codex command/settings pass-through
 - dashboard host/port settings
-- SQLite database path
+- SQLite database path, defaulting locally to `.symphony/symphony.db`
+- runtime profiles for local and production defaults
 
 The default local configuration should run without credentials for development
 where possible, but GitHub writes require a configured GitHub App.
 
 Runtime configuration behavior:
 
+- Profile selection uses `--profile`, then `SYMPHONY_PROFILE`, then
+  `[profile].active`, then `local`.
+- The generated workflow includes `local` defaults under `.symphony/` and `prod`
+  defaults under `/srv/symphony`.
 - The orchestrator watches `WORKFLOW.md` for changes while running.
 - A valid update is applied without restarting the service.
 - Every accepted workflow version is recorded in SQLite with timestamp,
@@ -123,7 +126,8 @@ Worktree behavior:
 - For each issue attempt, create a branch named with a deterministic prefix,
   such as `symphony/dbcli-pgcli-123-attempt-2`.
 - Create a worktree under `workspace.root`, such as
-  `/srv/symphony/worktrees/dbcli_pgcli_123_attempt_2`.
+  `.symphony/worktrees/dbcli_pgcli_123_attempt_2` locally or
+  `/srv/symphony/worktrees/dbcli_pgcli_123_attempt_2` in production.
 - Never let two active workers share a worktree path or branch.
 - Remove stale worktrees only through an explicit cleanup command or retention
   policy; do not delete active or recently failed attempts automatically.
@@ -251,7 +255,7 @@ Initial commands:
 - `symphony-dbcli status`
 
 The CLI should read configuration from `WORKFLOW.md` by default, with explicit
-flags for database path, log level, and dry-run mode.
+flags for profile selection, database path, log level, and dry-run mode.
 
 ## exe.dev Deployment
 
@@ -259,9 +263,9 @@ Run the v1 service on a single exe.dev VM.
 
 Deployment assumptions:
 
-- SQLite database lives on the persistent VM disk.
-- Shared base repositories and per-attempt worktrees live under persistent
-  paths such as `/srv/symphony/repos` and `/srv/symphony/worktrees`.
+- SQLite database lives on the persistent VM disk under the `prod` profile.
+- Shared base repositories and per-attempt worktrees live under the `prod`
+  profile's `/srv/symphony/repos` and `/srv/symphony/worktrees` paths.
 - Dashboard is exposed through exe.dev private HTTPS.
 - Codex App Server is launched locally per worker over stdio.
 - The Codex WebSocket listener is not exposed remotely.

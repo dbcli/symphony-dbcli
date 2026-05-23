@@ -17,11 +17,15 @@ class OrchestratorError(RuntimeError):
     """Raised when orchestration cannot continue."""
 
 
-def load_and_record_workflow(store: Store, workflow_path: str | Path) -> tuple[WorkflowConfig, int]:
+def load_and_record_workflow(
+    store: Store,
+    workflow_path: str | Path,
+    profile: str | None = None,
+) -> tuple[WorkflowConfig, int]:
     path = Path(workflow_path)
     content = path.read_text(encoding="utf-8")
     try:
-        config = parse_workflow(content)
+        config = parse_workflow(content, profile=profile)
     except WorkflowError as exc:
         store.record_workflow_version(path, content, None, status="rejected", error=str(exc))
         raise
@@ -30,9 +34,10 @@ def load_and_record_workflow(store: Store, workflow_path: str | Path) -> tuple[W
 
 
 class WorkflowWatcher:
-    def __init__(self, store: Store, workflow_path: str | Path):
+    def __init__(self, store: Store, workflow_path: str | Path, profile: str | None = None):
         self.store = store
         self.workflow_path = Path(workflow_path)
+        self.profile = profile
         self._last_hash = ""
         self.current_config: WorkflowConfig | None = None
         self.current_version_id: int | None = None
@@ -42,7 +47,11 @@ class WorkflowWatcher:
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if digest == self._last_hash and self.current_config and self.current_version_id:
             return self.current_config, self.current_version_id, False
-        config, version_id = load_and_record_workflow(self.store, self.workflow_path)
+        config, version_id = load_and_record_workflow(
+            self.store,
+            self.workflow_path,
+            profile=self.profile,
+        )
         self._last_hash = digest
         self.current_config = config
         self.current_version_id = version_id

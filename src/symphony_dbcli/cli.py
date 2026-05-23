@@ -14,6 +14,7 @@ from .config import (
     WorkflowConfig,
     WorkflowError,
     default_config,
+    default_config_for_profile,
     load_workflow,
     prompt_for_config,
     validate_config,
@@ -46,6 +47,11 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="symphony-dbcli")
     parser.add_argument("--workflow", default="WORKFLOW.md", help="Path to WORKFLOW.md")
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Workflow profile to use; overrides SYMPHONY_PROFILE and [profile].active",
+    )
     subcommands = parser.add_subparsers(required=True)
 
     init_workflow = subcommands.add_parser("init-workflow", help="Interactively create WORKFLOW.md")
@@ -127,25 +133,26 @@ def cmd_init_workflow(args: argparse.Namespace) -> int:
 
 
 def cmd_init_db(args: argparse.Namespace) -> int:
-    config = _load_config_if_exists(args.workflow)
+    profile = _runtime_profile(args)
+    config = _load_config_if_exists(args.workflow, profile=profile)
     store = Store(config.database.path)
     store.init()
     workflow_path = Path(args.workflow)
     if workflow_path.exists():
-        load_and_record_workflow(store, workflow_path)
+        load_and_record_workflow(store, workflow_path, profile=profile)
     print(f"Initialized {config.database.path}")
     return 0
 
 
 def cmd_workflow_validate(args: argparse.Namespace) -> int:
-    config = load_workflow(args.workflow)
+    config = load_workflow(args.workflow, profile=_runtime_profile(args))
     validate_config(config)
-    print(f"{args.workflow} is valid")
+    print(f"{args.workflow} is valid for profile={config.profile.active}")
     return 0
 
 
 def cmd_workflow_history(args: argparse.Namespace) -> int:
-    config = _load_config_if_exists(args.workflow)
+    config = _load_config_if_exists(args.workflow, profile=_runtime_profile(args))
     store = Store(config.database.path)
     store.init()
     for row in store.workflow_history(args.limit):
@@ -155,10 +162,11 @@ def cmd_workflow_history(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    config = _load_config_if_exists(args.workflow)
+    config = _load_config_if_exists(args.workflow, profile=_runtime_profile(args))
     store = Store(config.database.path)
     store.init()
     summary = store.dashboard_summary()
+    print(f"profile={config.profile.active} database={config.database.path}")
     print(
         f"issues={summary['issue_count']} running={summary['running_attempts']} queued={summary['queued_attempts']}"
     )
@@ -173,7 +181,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    config = _load_config_if_exists(args.workflow)
+    config = _load_config_if_exists(args.workflow, profile=_runtime_profile(args))
     store = Store(config.database.path)
     store.init()
     print(answer_question(store, " ".join(args.question)))
@@ -181,14 +189,20 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 
 def cmd_poll_once(args: argparse.Namespace) -> int:
-    config, version_id, store = _load_config_store_and_record(args.workflow)
+    config, version_id, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
     synced = Orchestrator(config, store, version_id).poll_once()
     print(f"Synced {synced} issues")
     return 0
 
 
 def cmd_worker_run(args: argparse.Namespace) -> int:
-    config, version_id, store = _load_config_store_and_record(args.workflow)
+    config, version_id, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
     attempt_id = Orchestrator(config, store, version_id).run_issue(
         args.repo,
         args.issue,
@@ -199,7 +213,7 @@ def cmd_worker_run(args: argparse.Namespace) -> int:
 
 
 def cmd_worktree_cleanup(args: argparse.Namespace) -> int:
-    config = load_workflow(args.workflow)
+    config = load_workflow(args.workflow, profile=_runtime_profile(args))
     print(WorktreeManager(config.workspace).cleanup_prunable())
     return 0
 
@@ -221,7 +235,7 @@ def cmd_github_app_manifest(args: argparse.Namespace) -> int:
 
 
 def cmd_github_app_convert(args: argparse.Namespace) -> int:
-    config = _load_config_if_exists(args.workflow)
+    config = _load_config_if_exists(args.workflow, profile=_runtime_profile(args))
     conversion = GitHubClient(config.github).convert_manifest_code(args.code)
     private_key_path = Path(args.private_key_out)
     private_key_path.parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +267,7 @@ def cmd_github_app_convert(args: argparse.Namespace) -> int:
 
 
 def cmd_github_app_installations(args: argparse.Namespace) -> int:
-    config = _load_config_if_exists(args.workflow)
+    config = _load_config_if_exists(args.workflow, profile=_runtime_profile(args))
     for key, value in parse_env_file(".symphony/github-app.env").items():
         os.environ.setdefault(key, value)
     installations = GitHubClient(config.github).list_app_installations()
@@ -267,7 +281,10 @@ def cmd_github_app_installations(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    config, _, store = _load_config_store_and_record(args.workflow)
+    config, _, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
     if not args.no_poll:
         thread = threading.Thread(target=_poll_loop, args=(args, store), daemon=True)
         thread.start()
@@ -276,7 +293,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def _poll_loop(args: argparse.Namespace, store: Store) -> None:
-    watcher = WorkflowWatcher(store, args.workflow)
+    watcher = WorkflowWatcher(store, args.workflow, profile=_runtime_profile(args))
     interval = 60
     while True:
         try:
@@ -291,19 +308,26 @@ def _poll_loop(args: argparse.Namespace, store: Store) -> None:
         time.sleep(interval)
 
 
-def _load_config_store_and_record(workflow_path: str) -> tuple[WorkflowConfig, int, Store]:
-    config = load_workflow(workflow_path)
+def _load_config_store_and_record(
+    workflow_path: str,
+    profile: str | None,
+) -> tuple[WorkflowConfig, int, Store]:
+    config = load_workflow(workflow_path, profile=profile)
     store = Store(config.database.path)
     store.init()
-    config, version_id = load_and_record_workflow(store, workflow_path)
+    config, version_id = load_and_record_workflow(store, workflow_path, profile=profile)
     return config, version_id, store
 
 
-def _load_config_if_exists(workflow_path: str) -> WorkflowConfig:
+def _load_config_if_exists(workflow_path: str, profile: str | None) -> WorkflowConfig:
     path = Path(workflow_path)
     if path.exists():
-        return load_workflow(path)
-    return default_config()
+        return load_workflow(path, profile=profile)
+    return default_config_for_profile(profile=profile)
+
+
+def _runtime_profile(args: argparse.Namespace) -> str | None:
+    return cast(str | None, args.profile)
 
 
 if __name__ == "__main__":

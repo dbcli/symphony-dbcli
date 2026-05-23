@@ -24,6 +24,20 @@ uv run symphony-dbcli serve
 The default workflow is safe for local development. GitHub writes require
 credentials before workers can comment, label issues, or open pull requests.
 
+## Profiles
+
+`WORKFLOW.md` includes explicit runtime profiles. The default `local` profile
+keeps SQLite, shared repos, and worktrees under `.symphony/` so local iteration
+does not need privileged filesystem paths. The `prod` profile uses `/srv/symphony`
+paths and binds the dashboard to `0.0.0.0` for hosted deployment.
+
+Profile precedence is:
+
+1. `--profile`, for example `uv run symphony-dbcli --profile prod serve`
+2. `SYMPHONY_PROFILE`
+3. `[profile].active` in `WORKFLOW.md`
+4. `local`
+
 ## GitHub App Setup
 
 Generate a local manifest form:
