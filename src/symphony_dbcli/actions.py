@@ -136,7 +136,17 @@ def default_action_registry() -> ActionRegistry:
             human_gate_allowed=False,
             description="Fetch pull request metadata for review, merge, and cleanup decisions.",
             input_fields=frozenset({"repo", "pull_request_number"}),
-            output_fields=frozenset({"pull_request_number", "state", "merged_at", "is_merged"}),
+            output_fields=frozenset(
+                {
+                    "pull_request_number",
+                    "pull_request_url",
+                    "pull_request_title",
+                    "state",
+                    "merged_at",
+                    "is_merged",
+                    "head_sha",
+                }
+            ),
         ),
         PrimitiveSpec(
             name="github.fetch_ci_status",
@@ -148,7 +158,7 @@ def default_action_registry() -> ActionRegistry:
             human_gate_allowed=False,
             description="Fetch CI/check-run status for a pull request.",
             input_fields=frozenset({"repo", "pull_request_number"}),
-            output_fields=frozenset({"state", "conclusion", "failed_checks"}),
+            output_fields=frozenset({"sha", "state", "conclusion", "failed_checks", "checks"}),
         ),
         PrimitiveSpec(
             name="codex.research_issue",

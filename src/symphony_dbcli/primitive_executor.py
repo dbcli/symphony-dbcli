@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, cast
 
 from .config import WorkflowConfig
-from .github import GitHubClient, GitHubError, GitHubIssue, PullRequest
+from .github import GitHubCiStatus, GitHubClient, GitHubComment, GitHubError, GitHubIssue, PullRequest
 from .review_actions import GitHubReviewClient, ReviewActionError, ReviewActions
 from .runner import CodexRunner
 from .store import Store
@@ -21,11 +21,17 @@ from .worktree import WorktreeManager
 class PrimitiveGitHubClient(Protocol):
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]: ...
 
+    def issue(self, repo: str, issue_number: int) -> GitHubIssue: ...
+
+    def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]: ...
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
 
     def remove_label(self, repo: str, issue_number: int, label: str) -> None: ...
 
     def pull_request(self, repo: str, number: int) -> PullRequest: ...
+
+    def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus: ...
 
 
 @dataclass(frozen=True)
@@ -93,8 +99,16 @@ class PrimitiveExecutor:
         return PrimitiveOutcome({"synced": synced})
 
     def execute(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        if context.transition.action == "github.fetch_issue":
+            return self._fetch_issue(context)
+        if context.transition.action == "github.fetch_comments":
+            return self._fetch_comments(context)
         if context.transition.action == "github.apply_labels":
             return self._apply_labels(context)
+        if context.transition.action == "github.fetch_pull_request":
+            return self._fetch_pull_request(context)
+        if context.transition.action == "github.fetch_ci_status":
+            return self._fetch_ci_status(context)
         if context.transition.action == "workspace.allocate":
             return self._allocate_workspace(context)
         if context.transition.action == "workspace.run_setup":
@@ -106,6 +120,16 @@ class PrimitiveExecutor:
         if context.transition.action == "github.post_issue_comment":
             return self._post_issue_comment(context)
         raise PrimitiveExecutionError(f"Primitive {context.transition.action} is not implemented.")
+
+    def _fetch_issue(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        issue = self.github.issue(context.repo, context.issue_number)
+        snapshot = issue.snapshot(self.config.labels, self.config.workers.default_task_type)
+        self.store.upsert_issue(snapshot)
+        return PrimitiveOutcome({"issue": asdict(snapshot)})
+
+    def _fetch_comments(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        comments = self.github.list_comments(context.repo, context.issue_number)
+        return PrimitiveOutcome({"comments": [asdict(comment) for comment in comments]})
 
     def _apply_labels(self, context: PrimitiveContext) -> PrimitiveOutcome:
         add, remove = self._label_changes(context.transition.to_state)
@@ -161,6 +185,35 @@ class PrimitiveExecutor:
                 "commit_sha": allocation.commit_sha,
             }
         )
+
+    def _fetch_pull_request(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        pull_request = self.github.pull_request(context.repo, pull_request_number)
+        if context.attempt_id is not None:
+            self.store.record_pr(
+                context.attempt_id,
+                repo=context.repo,
+                number=pull_request.number,
+                url=pull_request.url,
+                title=pull_request.title,
+                state=pull_request.state,
+                merged_at=pull_request.merged_at,
+            )
+        return PrimitiveOutcome(
+            {
+                "pull_request_number": pull_request.number,
+                "pull_request_url": pull_request.url,
+                "pull_request_title": pull_request.title,
+                "state": pull_request.state,
+                "merged_at": pull_request.merged_at,
+                "is_merged": pull_request.is_merged,
+                "head_sha": pull_request.head_sha,
+            }
+        )
+
+    def _fetch_ci_status(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        return PrimitiveOutcome(asdict(self.github.ci_status(context.repo, pull_request_number)))
 
     def _run_setup(self, context: PrimitiveContext) -> PrimitiveOutcome:
         if not context.worktree_path:

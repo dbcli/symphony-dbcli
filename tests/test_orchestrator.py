@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from symphony_dbcli.config import WorkflowConfig, WorkspaceConfig, default_config
-from symphony_dbcli.github import GitHubIssue, PullRequest
+from symphony_dbcli.github import GitHubCheckRun, GitHubCiStatus, GitHubComment, GitHubIssue, PullRequest
 from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveOutcome
 from symphony_dbcli.store import IssueSnapshot, Store
@@ -273,6 +273,22 @@ class FakeCleanupGitHub:
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
         return []
 
+    def issue(self, repo: str, issue_number: int) -> GitHubIssue:
+        return GitHubIssue(
+            repo=repo,
+            number=issue_number,
+            title="Issue",
+            body="",
+            url=f"https://github.com/{repo}/issues/{issue_number}",
+            state="open",
+            labels=[],
+            author="",
+            updated_at="",
+        )
+
+    def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]:
+        return []
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         return
 
@@ -293,6 +309,15 @@ class FakeCleanupGitHub:
             title="Fix #245",
             state="closed",
             merged_at="2026-05-24T14:00:00Z",
+        )
+
+    def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus:
+        return GitHubCiStatus(
+            sha="",
+            state="success",
+            conclusion="success",
+            failed_checks=[],
+            checks=[GitHubCheckRun(name="tests", status="completed", conclusion="success", url="")],
         )
 
 

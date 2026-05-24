@@ -352,14 +352,15 @@ hardcoded Python control flow and into `WORKFLOW.md`. Python should provide a
 small set of typed, durable action primitives; `WORKFLOW.md` should define how
 those primitives are composed into automatic transitions and human-gated steps.
 
-- [ ] Define the workflow DSL inside the fenced TOML block in `WORKFLOW.md`.
+- [x] Define the workflow DSL inside the fenced TOML block in `WORKFLOW.md`.
   It must support states, terminal states, automatic transitions, human gates,
   transition conditions, action inputs, action outputs, retry policy, timeout
   policy, and artifact handoff between steps.
   Progress: states, terminal states, automatic/human transitions, conditions,
   retry limits, timeouts, explicit action input/output mappings, and
-  per-primitive guidance are now represented. Artifact handoff semantics still
-  need to be executed at runtime.
+  per-primitive guidance are now represented. Runtime action outputs are now
+  persisted as workflow artifacts and can be mapped into later transition
+  inputs.
 - [x] Extend `WORKFLOW.md` to capture worker preferences outside the state
   machine. These preferences should include review expectations, preferred test
   strategy, project-specific coding style, when to run `/review`, and any
@@ -389,15 +390,14 @@ those primitives are composed into automatic transitions and human-gated steps.
   declare its name, typed input, typed output, side-effect behavior,
   idempotency key strategy, and whether it can run automatically or only after
   a human gate.
-- [ ] Implement the first GitHub primitives: `github.fetch_issues`,
+- [x] Implement the first GitHub primitives: `github.fetch_issues`,
   `github.fetch_issue`, `github.fetch_comments`, `github.apply_labels`,
   `github.create_draft_pr`, `github.post_issue_comment`,
   `github.fetch_pull_request`, and `github.fetch_ci_status`.
-  Progress: primitive specs exist, `github.fetch_issues` and
-  `github.apply_labels`, `github.create_draft_pr`, and
-  `github.post_issue_comment` now execute through the primitive layer, and
-  workflow action runs are recorded by the generic dispatcher. The remaining
-  GitHub read primitives still need dedicated implementations.
+  Progress: all listed GitHub primitives now execute through the primitive
+  layer. Read primitives return typed snapshots that are persisted through
+  workflow action outputs/artifacts; write primitives remain guarded by
+  `policy.dry_run`.
 - [ ] Implement the first Codex primitives: `codex.research_issue`,
   `codex.fix_issue`, `codex.address_pr_comments`, and
   `codex.fix_ci_failures`. These should store worker results in SQLite

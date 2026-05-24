@@ -28,6 +28,7 @@ class PullRequest:
     title: str
     state: str = ""
     merged_at: str = ""
+    head_sha: str = ""
 
     @property
     def is_merged(self) -> bool:
@@ -82,6 +83,33 @@ class GitHubIssue:
         )
 
 
+@dataclass(frozen=True)
+class GitHubComment:
+    id: int
+    url: str
+    body: str
+    author: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class GitHubCheckRun:
+    name: str
+    status: str
+    conclusion: str
+    url: str
+
+
+@dataclass(frozen=True)
+class GitHubCiStatus:
+    sha: str
+    state: str
+    conclusion: str
+    failed_checks: list[GitHubCheckRun]
+    checks: list[GitHubCheckRun]
+
+
 class GitHubClient:
     def __init__(self, config: GitHubConfig):
         self.config = config
@@ -96,20 +124,19 @@ class GitHubClient:
         for item in data:
             if "pull_request" in item:
                 continue
-            issues.append(
-                GitHubIssue(
-                    repo=repo,
-                    number=int(item["number"]),
-                    title=item.get("title") or "",
-                    body=item.get("body") or "",
-                    url=item.get("html_url") or "",
-                    state=item.get("state") or "open",
-                    labels=[label.get("name", "") for label in item.get("labels", [])],
-                    author=(item.get("user") or {}).get("login", ""),
-                    updated_at=item.get("updated_at") or "",
-                )
-            )
+            issues.append(_issue_from_json(repo, item))
         return issues
+
+    def issue(self, repo: str, issue_number: int) -> GitHubIssue:
+        data = self._request_json("GET", f"/repos/{repo}/issues/{issue_number}")
+        return _issue_from_json(repo, data)
+
+    def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]:
+        data = self._request_json(
+            "GET",
+            f"/repos/{repo}/issues/{issue_number}/comments?per_page=100",
+        )
+        return [_comment_from_json(item) for item in data]
 
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         self._require_token()
@@ -159,6 +186,18 @@ class GitHubClient:
     def pull_request(self, repo: str, number: int) -> PullRequest:
         data = self._request_json("GET", f"/repos/{repo}/pulls/{number}")
         return _pull_request_from_json(data)
+
+    def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus:
+        pull_request = self._request_json("GET", f"/repos/{repo}/pulls/{pull_request_number}")
+        sha = _head_sha(pull_request)
+        if not sha:
+            raise GitHubError(f"Pull request {repo}#{pull_request_number} does not have a head SHA.")
+        check_runs = self._request_json(
+            "GET",
+            f"/repos/{repo}/commits/{sha}/check-runs?per_page=100",
+        )
+        combined_status = self._request_json("GET", f"/repos/{repo}/commits/{sha}/status")
+        return _ci_status_from_json(sha, check_runs, combined_status)
 
     def push_branch(self, *, repo: str, worktree_path: str, branch: str) -> None:
         token = self._require_token()
@@ -275,8 +314,107 @@ def _pull_request_from_json(data: dict[str, Any]) -> PullRequest:
         title=str(data["title"]),
         state=str(data.get("state") or ""),
         merged_at=str(data.get("merged_at") or ""),
+        head_sha=_head_sha(data),
     )
+
+
+def _issue_from_json(repo: str, data: dict[str, Any]) -> GitHubIssue:
+    return GitHubIssue(
+        repo=repo,
+        number=int(data["number"]),
+        title=str(data.get("title") or ""),
+        body=str(data.get("body") or ""),
+        url=str(data.get("html_url") or ""),
+        state=str(data.get("state") or "open"),
+        labels=[str(label.get("name") or "") for label in _json_objects(data.get("labels"))],
+        author=str(_json_object(data.get("user")).get("login") or ""),
+        updated_at=str(data.get("updated_at") or ""),
+    )
+
+
+def _comment_from_json(data: dict[str, Any]) -> GitHubComment:
+    return GitHubComment(
+        id=int(data["id"]),
+        url=str(data.get("html_url") or ""),
+        body=str(data.get("body") or ""),
+        author=str(_json_object(data.get("user")).get("login") or ""),
+        created_at=str(data.get("created_at") or ""),
+        updated_at=str(data.get("updated_at") or ""),
+    )
+
+
+def _ci_status_from_json(
+    sha: str,
+    check_runs_data: dict[str, Any],
+    combined_status_data: dict[str, Any],
+) -> GitHubCiStatus:
+    checks = [
+        GitHubCheckRun(
+            name=str(item.get("name") or ""),
+            status=str(item.get("status") or ""),
+            conclusion=str(item.get("conclusion") or ""),
+            url=str(item.get("html_url") or ""),
+        )
+        for item in _json_objects(check_runs_data.get("check_runs"))
+    ]
+    checks.extend(_status_checks_from_json(combined_status_data))
+    failed_checks = [check for check in checks if check.conclusion in FAILURE_CONCLUSIONS]
+    pending_checks = [check for check in checks if check.status != "completed"]
+    if failed_checks:
+        state = "failure"
+    elif pending_checks:
+        state = "pending"
+    else:
+        state = "success" if checks else str(combined_status_data.get("state") or "unknown")
+    return GitHubCiStatus(
+        sha=sha,
+        state=state,
+        conclusion=state,
+        failed_checks=failed_checks,
+        checks=checks,
+    )
+
+
+def _status_checks_from_json(data: dict[str, Any]) -> list[GitHubCheckRun]:
+    return [
+        GitHubCheckRun(
+            name=str(item.get("context") or ""),
+            status=_legacy_status_state(str(item.get("state") or "")),
+            conclusion=_legacy_status_conclusion(str(item.get("state") or "")),
+            url=str(item.get("target_url") or ""),
+        )
+        for item in _json_objects(data.get("statuses"))
+    ]
+
+
+def _legacy_status_state(state: str) -> str:
+    if state in {"success", "failure", "error"}:
+        return "completed"
+    return "pending"
+
+
+def _legacy_status_conclusion(state: str) -> str:
+    if state == "success":
+        return "success"
+    if state in {"failure", "error"}:
+        return "failure"
+    return ""
+
+
+def _head_sha(data: dict[str, Any]) -> str:
+    return str(_json_object(data.get("head")).get("sha") or "")
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    return cast(dict[str, Any], value or {})
+
+
+def _json_objects(value: Any) -> list[dict[str, Any]]:
+    return cast(list[dict[str, Any]], value or [])
 
 
 def _redact_token(value: str, token: str) -> str:
     return value.replace(token, "<redacted>")
+
+
+FAILURE_CONCLUSIONS = frozenset({"failure", "timed_out", "action_required", "cancelled", "startup_failure"})

@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from .actions import DEFAULT_ACTION_REGISTRY, PrimitiveSideEffect
 from .config import WorkflowConfig, WorkflowError, parse_workflow
-from .github import GitHubClient, GitHubIssue, PullRequest
+from .github import GitHubCiStatus, GitHubClient, GitHubComment, GitHubIssue, PullRequest
 from .primitive_executor import (
     PrimitiveContext,
     PrimitiveExecutionError,
@@ -33,11 +33,17 @@ class OrchestratorError(RuntimeError):
 class OrchestratorGitHubClient(Protocol):
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]: ...
 
+    def issue(self, repo: str, issue_number: int) -> GitHubIssue: ...
+
+    def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]: ...
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
 
     def remove_label(self, repo: str, issue_number: int, label: str) -> None: ...
 
     def pull_request(self, repo: str, number: int) -> PullRequest: ...
+
+    def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus: ...
 
 
 @dataclass(frozen=True)
