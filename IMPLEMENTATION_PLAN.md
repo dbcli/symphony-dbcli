@@ -433,6 +433,12 @@ those primitives are composed into automatic transitions and human-gated steps.
   behavior, setup commands, and repo-specific instructions. The dashboard
   should show the proposed `WORKFLOW.md` diff, validate it, and apply it
   without leaving the dashboard.
+- [ ] Upgrade Ask Symphony into a hybrid query system. Keep the current
+  deterministic SQLite fast paths for common questions about issue timing,
+  turns, errors, worker status, workflow versions, and pending gates; add an
+  LLM-backed fallback over structured SQLite context for richer questions such
+  as why a worker is stuck, what changed between attempts, or how to interpret
+  recent failures.
 - [x] Add workflow state-machine visualization to the dashboard. Render states,
   automatic transitions, human gates, terminal states, and the current runtime
   position of active issues so users can verify the workflow intention before
