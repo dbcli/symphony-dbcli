@@ -210,6 +210,23 @@ class Store:
                 ).fetchone(),
             )
 
+    def workflow_instances_ready_for_automation(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT i.*
+                    FROM workflow_instances i
+                    LEFT JOIN attempts a ON a.id = i.attempt_id
+                    WHERE i.status = 'active'
+                      AND (i.attempt_id IS NULL OR a.status NOT IN ('queued', 'running'))
+                    ORDER BY i.updated_at ASC, i.id ASC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            )
+
     def start_workflow_action_run(
         self,
         *,

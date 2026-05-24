@@ -423,6 +423,9 @@ def _poll_loop(args: argparse.Namespace, store: Store, dashboard_state: Dashboar
                 orchestrator.cleanup_merged_pull_request_worktrees()
             except Exception as exc:
                 print(f"worktree cleanup error: {exc}", file=sys.stderr)
+            orchestrator.advance_ready_workflow_instances(
+                allowed_side_effects={"github_read", "github_write", "workspace_write"}
+            )
             if store.start_queued_work_automatically():
                 orchestrator.claim_available()
                 supervisor.start_queued(config)

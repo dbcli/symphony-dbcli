@@ -429,14 +429,14 @@ those primitives are composed into automatic transitions and human-gated steps.
   posting issue comments, creating draft PRs, and marking attempts blocked.
   Draft replies and draft PR title/body are editable before GitHub side
   effects.
-- [ ] Refactor the orchestrator loop so it evaluates workflow instances and
+- [x] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.
   Progress: claim and worker execution now advance workflow instances by
   evaluating automatic transitions from `WORKFLOW.md` and executing primitives
-  through a generic dispatcher. The poll loop still creates candidates from the
-  configured GitHub repos directly, and manual review actions are still
-  route-specific rather than fully gate-driven.
+  through a generic dispatcher. The poll loop also advances ready, idle
+  workflow instances for non-Codex automatic transitions while leaving queued
+  and running attempts to worker processes.
 - [x] Move dashboard review actions to workflow gates. The dashboard should
   render available actions from pending gate rows rather than from hardcoded
   route-specific assumptions.

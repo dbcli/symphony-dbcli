@@ -161,6 +161,28 @@ class Orchestrator:
             claimed += 1
         return claimed
 
+    def advance_ready_workflow_instances(
+        self,
+        *,
+        limit: int = 50,
+        allowed_side_effects: set[PrimitiveSideEffect] | None = None,
+    ) -> int:
+        advanced = 0
+        for instance in self.store.workflow_instances_ready_for_automation(limit=limit):
+            try:
+                result = self._advance_workflow_instance(
+                    int(instance["id"]),
+                    allowed_side_effects=allowed_side_effects,
+                )
+            except Exception as exc:
+                self._fail_workflow_instance(int(instance["id"]), str(exc))
+                raise
+            advanced += result.ran_actions
+            attempt_id = _optional_int(instance["attempt_id"])
+            if attempt_id is not None and result.current_state in self.config.workflow.terminal_states:
+                self.store.finish_attempt(attempt_id, result.current_state, result.current_state)
+        return advanced
+
     def cleanup_merged_pull_request_worktrees(
         self,
         *,
