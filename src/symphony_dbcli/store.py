@@ -423,6 +423,18 @@ class Store:
                 )
             )
 
+    def workflow_state_counts(self) -> dict[str, int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT current_state, COUNT(*) AS count
+                FROM workflow_instances
+                WHERE status = 'active'
+                GROUP BY current_state
+                """
+            )
+            return {str(row["current_state"]): int(row["count"]) for row in rows}
+
     def resolve_workflow_gate(self, gate_id: int, *, decision: str, decided_by: str) -> None:
         now = utc_now()
         with self.connect() as conn:

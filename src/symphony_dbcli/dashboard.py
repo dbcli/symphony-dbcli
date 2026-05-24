@@ -40,6 +40,84 @@ class DashboardRuntime:
         )
 
 
+@dataclass(frozen=True)
+class WorkflowStateView:
+    name: str
+    description: str
+    terminal: bool
+    gate: str
+    active_count: int
+
+
+@dataclass(frozen=True)
+class WorkflowTransitionView:
+    name: str
+    from_state: str
+    to_state: str
+    action: str
+    trigger: str
+    gate: str
+    condition: str
+
+
+@dataclass(frozen=True)
+class WorkflowGateView:
+    id: int
+    gate: str
+    transition_name: str
+    repo: str
+    issue_number: int
+    task_type: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class WorkflowGraphView:
+    states: list[WorkflowStateView]
+    transitions: list[WorkflowTransitionView]
+    pending_gates: list[WorkflowGateView]
+
+    @classmethod
+    def from_config(cls, config: WorkflowConfig, store: Store) -> WorkflowGraphView:
+        state_counts = store.workflow_state_counts()
+        return cls(
+            states=[
+                WorkflowStateView(
+                    name=name,
+                    description=state.description,
+                    terminal=state.terminal,
+                    gate=state.gate,
+                    active_count=state_counts.get(name, 0),
+                )
+                for name, state in config.workflow.states.items()
+            ],
+            transitions=[
+                WorkflowTransitionView(
+                    name=name,
+                    from_state=transition.from_state,
+                    to_state=transition.to_state,
+                    action=transition.action,
+                    trigger=transition.trigger,
+                    gate=transition.gate,
+                    condition=transition.condition,
+                )
+                for name, transition in config.workflow.transitions.items()
+            ],
+            pending_gates=[
+                WorkflowGateView(
+                    id=int(row["id"]),
+                    gate=str(row["gate"]),
+                    transition_name=str(row["transition_name"]),
+                    repo=str(row["repo"]),
+                    issue_number=int(row["issue_number"]),
+                    task_type=str(row["task_type"]),
+                    created_at=str(row["created_at"]),
+                )
+                for row in store.pending_workflow_gates(limit=20)
+            ],
+        )
+
+
 class DashboardState:
     def __init__(self, config: WorkflowConfig):
         self._config = config
@@ -68,16 +146,22 @@ def serve_dashboard(store: Store, host: str, port: int, state: DashboardState | 
     server.serve_forever()
 
 
-def render_index(store: Store, runtime: DashboardRuntime | None = None) -> str:
+def render_index(
+    store: Store,
+    runtime: DashboardRuntime | None = None,
+    config: WorkflowConfig | None = None,
+) -> str:
+    cfg = config or default_config()
     return (
         _templates()
         .get_template("index.html")
         .render(
             title="Symphony DBCLI",
             summary=store.dashboard_summary(),
+            workflow_graph=WorkflowGraphView.from_config(cfg, store),
             runtime=runtime
             or DashboardRuntime.from_config(
-                default_config(),
+                cfg,
                 start_queued_work_automatically=store.start_queued_work_automatically(),
             ),
         )
@@ -154,6 +238,7 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                         state.runtime(
                             start_queued_work_automatically=store.start_queued_work_automatically()
                         ),
+                        state.config(),
                     )
                 )
                 return

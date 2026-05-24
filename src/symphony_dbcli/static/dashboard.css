@@ -202,6 +202,131 @@ a {
   color: var(--warn);
 }
 
+.text-link {
+  color: #135f7a;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.state-machine-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+}
+
+.state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.state-node {
+  min-width: 0;
+  min-height: 126px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #9aa4b2;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcfd;
+}
+
+.state-node.has-active {
+  border-left-color: var(--accent);
+  background: #f4fbf7;
+}
+
+.state-node.is-terminal {
+  border-left-color: #596579;
+}
+
+.state-node-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.state-node-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.state-node-title span {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.state-node p {
+  min-height: 38px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transition-list {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.transition-list h3,
+.pending-gates h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.transition-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: #fbfcfd;
+}
+
+.transition-row strong,
+.transition-row span {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.transition-row strong {
+  font-size: 13px;
+}
+
+.transition-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transition-trigger {
+  justify-self: end;
+  border: 1px solid #b9c2cf;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #3f4a5a;
+  font-weight: 650;
+}
+
+.transition-trigger.is-human {
+  border-color: #d6b36a;
+  color: #7a5a13;
+}
+
+.pending-gates {
+  margin-top: 16px;
+}
+
 .control-panel {
   display: flex;
   align-items: center;
@@ -445,5 +570,13 @@ th {
   table {
     display: block;
     overflow-x: auto;
+  }
+
+  .state-machine-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .transition-row {
+    grid-template-columns: 1fr;
   }
 }

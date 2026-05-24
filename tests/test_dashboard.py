@@ -64,6 +64,38 @@ def test_dashboard_shows_workflow_reload_status(tmp_path: Path) -> None:
     assert "WORKFLOW.md must contain one fenced toml config block." in html
 
 
+def test_dashboard_shows_workflow_state_machine_and_pending_gates(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    config = default_config()
+    _seed_issue(store)
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="review",
+    )
+    store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_diff",
+        transition_name="create_draft_pr",
+        state="review",
+        prompt="Review the generated diff.",
+    )
+
+    html = render_index(store, config=config)
+
+    assert "State Machine" in html
+    assert "todo" in html
+    assert "create_draft_pr" in html
+    assert "review_diff" in html
+    assert "1 active" in html
+    assert "Pending Human Gates" in html
+    assert "dbcli/litecli#245" in html
+
+
 def test_dashboard_shows_live_mode_when_dry_run_is_disabled(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

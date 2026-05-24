@@ -73,6 +73,75 @@
   </div>
 </section>
 
+<section class="state-machine-panel">
+  <div class="section-header">
+    <h2>State Machine</h2>
+    <a class="text-link" href="/ask?q=What%20workflow%20states%20are%20active%3F">Ask</a>
+  </div>
+  <div class="state-machine-layout">
+    <div class="state-grid">
+      {% for state in workflow_graph.states %}
+      <div class="state-node {{ 'is-terminal' if state.terminal else '' }} {{ 'has-active' if state.active_count else '' }}">
+        <div class="state-node-title">
+          <strong>{{ state.name }}</strong>
+          {% if state.active_count %}
+          <span>{{ state.active_count }} active</span>
+          {% endif %}
+        </div>
+        <p>{{ state.description or "-" }}</p>
+        {% if state.gate %}
+        <code>{{ state.gate }}</code>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="transition-list">
+      <h3>Transitions</h3>
+      {% for transition in workflow_graph.transitions %}
+      <div class="transition-row">
+        <div>
+          <strong>{{ transition.name }}</strong>
+          <span>{{ transition.from_state }} -> {{ transition.to_state }}</span>
+        </div>
+        <code>{{ transition.action }}</code>
+        <span class="transition-trigger {{ 'is-human' if transition.trigger == 'human' else '' }}">
+          {{ transition.trigger }}
+        </span>
+        {% if transition.gate %}
+        <span class="muted">{{ transition.gate }}</span>
+        {% endif %}
+        {% if transition.condition %}
+        <span class="muted">{{ transition.condition }}</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="pending-gates">
+    <h3>Pending Human Gates</h3>
+    {% if workflow_graph.pending_gates %}
+    <table>
+      <thead>
+        <tr><th>Issue</th><th>Gate</th><th>Transition</th><th>Type</th><th>Created</th></tr>
+      </thead>
+      <tbody>
+        {% for gate in workflow_graph.pending_gates %}
+        <tr>
+          <td><a href="{{ gate.repo|issue_path(gate.issue_number) }}">{{ gate.repo }}#{{ gate.issue_number }}</a></td>
+          <td>{{ gate.gate }}</td>
+          <td>{{ gate.transition_name }}</td>
+          <td>{{ gate.task_type }}</td>
+          <td>{{ gate.created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No pending human gates.</div>
+    {% endif %}
+  </div>
+</section>
+
 <section class="toolbar">
   <form action="/ask" method="get">
     <input name="q" placeholder="Ask about issue timing, turns, errors, or workers" />
