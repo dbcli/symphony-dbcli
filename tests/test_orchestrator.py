@@ -178,6 +178,51 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     assert attempt["outcome"] == "draft_pr_created"
 
 
+def test_orchestrator_runs_mark_blocked_human_gate(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    gate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="mark_blocked",
+        transition_name="mark_blocked",
+        state="review",
+        prompt="Stop this attempt.",
+    )
+    primitives = FakeWorkflowPrimitives()
+
+    result = Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_human_gate(gate_id)
+
+    instance = store.workflow_instance_by_id(instance_id)
+    attempt = store.attempt_by_id(attempt_id)
+    assert primitives.transitions == ["mark_blocked"]
+    assert result.current_state == "blocked"
+    assert instance is not None
+    assert instance["current_state"] == "blocked"
+    assert attempt is not None
+    assert attempt["status"] == "blocked"
+    assert attempt["outcome"] == "blocked"
+
+
 def test_orchestrator_cleans_worktree_after_pr_merge(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
     source = tmp_path / "source"

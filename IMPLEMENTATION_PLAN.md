@@ -421,14 +421,14 @@ those primitives are composed into automatic transitions and human-gated steps.
   current worktree implementation, and the dashboard / CLI show the workspace
   strategy, roots, branch prefix, base branch policy, and retention setting.
   Full clone support remains a future strategy implementation.
-- [ ] Implement human gate primitives for review steps, including reviewing a
+- [x] Implement human gate primitives for review steps, including reviewing a
   research answer, editing/posting an issue comment, reviewing a code diff, and
   approving draft PR creation.
   Progress: workflow gates are stored, opened after worker completion, shown on
   the dashboard, and executable through the generic human-gate dispatcher for
-  posting issue comments and creating draft PRs. Mark-blocked and richer
-  review/edit UX remain. Draft replies and draft PR title/body are editable
-  before GitHub side effects.
+  posting issue comments, creating draft PRs, and marking attempts blocked.
+  Draft replies and draft PR title/body are editable before GitHub side
+  effects.
 - [ ] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.
