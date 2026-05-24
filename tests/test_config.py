@@ -30,6 +30,9 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.workspace.root == ".symphony/worktrees"
     assert config.workspace.bare_repos_root == ".symphony/repos"
     assert config.dashboard.host == "127.0.0.1"
+    assert config.policy.dry_run is True
+    assert "post_research_answers" not in workflow
+    assert "open_pull_requests" not in workflow
     assert "Workers should be direct" in config.instructions
 
 
@@ -113,3 +116,26 @@ def test_workflow_validation_rejects_invalid_repo(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(WorkflowError, match="invalid repository"):
         validate_config(parse_workflow(workflow))
+
+
+def test_workflow_accepts_legacy_disabled_side_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        "dry_run = true",
+        "post_research_answers = false\nopen_pull_requests = false\ndry_run = true",
+    )
+
+    config = parse_workflow(workflow)
+
+    assert config.policy.dry_run is True
+
+
+def test_workflow_rejects_enabled_side_effect_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        "dry_run = true",
+        "post_research_answers = true\nopen_pull_requests = true\ndry_run = true",
+    )
+
+    with pytest.raises(WorkflowError, match="no longer configurable"):
+        parse_workflow(workflow)

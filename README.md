@@ -18,11 +18,47 @@ The project is intentionally lightweight for the first implementation:
 uv run symphony-dbcli init-workflow
 uv run symphony-dbcli init-db
 uv run symphony-dbcli status
-uv run symphony-dbcli serve
+uv run symphony-dbcli serve --dispatch
 ```
 
 The default workflow is safe for local development. GitHub writes require
-credentials before workers can comment, label issues, or open pull requests.
+credentials before workers can label issues. Workers save research answers and
+code summaries as local review drafts instead of posting comments or opening
+pull requests automatically.
+Use `serve --no-poll` for dashboard-only mode, or omit `--dispatch` to poll
+without starting workers.
+
+## Worker Lifecycle
+
+`serve --dispatch` now runs the full local orchestration loop:
+
+1. Poll GitHub Issues with the `symphony:todo` label.
+2. Claim eligible issues into durable SQLite attempts.
+3. Spawn worker subprocesses up to `workers.max_global` and `workers.max_per_repo`.
+4. Record worker ids, PIDs, heartbeats, deadlines, attempts, turns, errors, and outcomes in SQLite.
+5. Mark crashed or timed-out workers as failed and queue a retry when `workers.retry_limit` allows it.
+
+Worker lifecycle settings live in `WORKFLOW.md` under `[workers]`, including
+`poll_interval_seconds`, `heartbeat_interval_seconds`,
+`heartbeat_timeout_seconds`, `max_runtime_seconds`, `retry_limit`, and
+`shutdown_grace_seconds`.
+
+## Reviewing Results
+
+Completed worker attempts are stored in SQLite with their final markdown result,
+regardless of `policy.dry_run`. Open the dashboard, select an attempt in review,
+and read the `Worker Result` section. Draft GitHub replies are shown separately
+so they can be inspected before anything is posted manually.
+
+Research results can be promoted into code work. From a research attempt page,
+use `Create Code Follow-up` to queue a linked code attempt. The code worker
+receives the original issue plus the stored research result in its prompt, and
+the relationship is recorded in SQLite. The same operation is available from the
+CLI:
+
+```bash
+uv run symphony-dbcli attempt create-code-follow-up --attempt-id 2
+```
 
 ## Profiles
 

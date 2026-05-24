@@ -66,6 +66,18 @@ h2 {
   font-size: 14px;
 }
 
+code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  background: #fbfcfd;
+  color: var(--muted);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 a {
   color: #135f7a;
 }
@@ -115,6 +127,81 @@ a {
   border-left-color: var(--accent);
 }
 
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-header h2 {
+  margin: 0;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.status-pill.is-ok {
+  background: #e8f4ef;
+  color: #176349;
+}
+
+.status-pill.is-error {
+  background: #f8e9e8;
+  color: var(--warn);
+}
+
+.workflow-panel.has-error {
+  border-color: #e2aaa7;
+}
+
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.workflow-grid > div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.workflow-grid strong,
+.workflow-grid .label,
+.workflow-grid .muted {
+  display: block;
+}
+
+.workflow-grid strong {
+  margin-bottom: 2px;
+  font-size: 18px;
+}
+
+.workflow-grid .label {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.workflow-error {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--warn);
+}
+
 .toolbar form {
   display: flex;
   gap: 8px;
@@ -140,6 +227,18 @@ button {
   font-weight: 650;
 }
 
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 0 14px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 650;
+  text-decoration: none;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -151,6 +250,66 @@ pre {
   border-radius: 8px;
   padding: 12px;
   background: #fbfcfd;
+}
+
+.draft-list {
+  display: grid;
+  gap: 12px;
+}
+
+.draft-reply {
+  min-width: 0;
+}
+
+.draft-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.draft-meta strong {
+  color: var(--text);
+}
+
+.draft-body {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.result-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+
+.result-meta strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.result-body {
+  margin: 0;
+  max-height: 560px;
+  white-space: pre-wrap;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.result-actions form {
+  margin: 0;
 }
 
 th,

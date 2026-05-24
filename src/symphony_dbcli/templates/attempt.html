@@ -23,6 +23,99 @@
 </section>
 
 <section>
+  <div class="section-header">
+    <h2>Worker Result</h2>
+    {% if detail.result %}
+    <span class="status-pill is-ok">{{ detail.result.status }}</span>
+    {% endif %}
+  </div>
+  {% if detail.result %}
+  <div class="result-meta">
+    <strong>{{ detail.result.title }}</strong>
+    <span>{{ detail.result.result_type|replace("_", " ") }}</span>
+    <span>{{ detail.result.updated_at }}</span>
+  </div>
+  {% if detail.result.body %}
+  <pre class="result-body">{{ detail.result.body }}</pre>
+  {% else %}
+  <div class="empty">The worker completed but did not return a final message.</div>
+  {% endif %}
+  {% if detail.attempt.task_type == "research" and detail.result.body %}
+  <div class="result-actions">
+    {% if detail.code_follow_up %}
+    <a class="button-link" href="/attempts/{{ detail.code_follow_up.id }}">
+      Code follow-up attempt {{ detail.code_follow_up.id }}
+    </a>
+    <span class="muted">{{ detail.code_follow_up.status }}</span>
+    {% else %}
+    <form action="/attempts/{{ detail.attempt.id }}/follow-up-code" method="post">
+      <button type="submit">Create Code Follow-up</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty">No worker result recorded.</div>
+  {% endif %}
+</section>
+
+{% if detail.source_result %}
+<section>
+  <h2>Source Research</h2>
+  <div class="result-meta">
+    <strong><a href="/attempts/{{ detail.source_result.source_attempt_id }}">
+      Attempt {{ detail.source_result.source_attempt_id }}
+    </a></strong>
+    <span>{{ detail.source_result.result_type|replace("_", " ") }}</span>
+    <span>{{ detail.source_result.result_updated_at }}</span>
+  </div>
+  <pre class="result-body">{{ detail.source_result.body }}</pre>
+</section>
+{% endif %}
+
+{% if detail.follow_up_targets %}
+<section>
+  <h2>Follow-up Tasks</h2>
+  <table>
+    <thead><tr><th>Attempt</th><th>Relationship</th><th>Status</th><th>Type</th><th>Created</th></tr></thead>
+    <tbody>
+      {% for row in detail.follow_up_targets %}
+      <tr>
+        <td><a href="/attempts/{{ row.id }}">{{ row.id }}</a></td>
+        <td>{{ row.relationship|replace("_", " ") }}</td>
+        <td>{{ row.status }}</td>
+        <td>{{ row.task_type }}</td>
+        <td>{{ row.linked_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section>
+  <h2>Draft Replies</h2>
+  {% if detail.comments %}
+  <div class="draft-list">
+    {% for row in detail.comments %}
+    <article class="draft-reply">
+      <div class="draft-meta">
+        <strong>{{ row.status }}</strong>
+        <span>{{ row.created_at }}</span>
+        {% if row.url %}
+        <a href="{{ row.url }}">GitHub comment</a>
+        {% endif %}
+      </div>
+      <pre class="draft-body">{{ row.body }}</pre>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">No draft replies.</div>
+  {% endif %}
+</section>
+
+<section>
   <h2>Timeline</h2>
   {% if detail.timeline %}
   <table>

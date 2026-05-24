@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from .clock import elapsed_ms, monotonic_ns, utc_now
+from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 4
+FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class Store:
         with self.connect() as conn:
             for statement in SCHEMA:
                 conn.execute(statement)
+            _migrate(conn)
             conn.execute(
                 """
                 INSERT INTO settings(key, value, updated_at)
@@ -230,6 +232,12 @@ class Store:
                           SELECT 1 FROM issue_labels l
                           WHERE l.repo = i.repo AND l.issue_number = i.number AND l.label = ?
                       )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM attempts a
+                          WHERE a.repo = i.repo
+                            AND a.issue_number = i.number
+                            AND a.status IN ('queued', 'running', 'review', 'failed')
+                      )
                     ORDER BY i.first_seen_at ASC, i.repo ASC, i.number ASC
                     LIMIT ?
                     """,
@@ -248,6 +256,8 @@ class Store:
         base_repo_path: str = "",
         branch: str = "",
         status: str = "queued",
+        parent_attempt_id: int | None = None,
+        retry_count: int = 0,
     ) -> int:
         now = utc_now()
         with self.connect() as conn:
@@ -255,9 +265,10 @@ class Store:
                 """
                 INSERT INTO attempts(
                     repo, issue_number, task_type, workflow_version_id, status,
-                    base_repo_path, worktree_path, branch, queued_at, created_at, updated_at
+                    base_repo_path, worktree_path, branch, parent_attempt_id, retry_count,
+                    queued_at, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     repo,
@@ -268,6 +279,8 @@ class Store:
                     base_repo_path,
                     worktree_path,
                     branch,
+                    parent_attempt_id,
+                    retry_count,
                     now,
                     now,
                     now,
@@ -294,28 +307,67 @@ class Store:
                 (base_repo_path, worktree_path, branch, commit_sha, utc_now(), attempt_id),
             )
 
-    def start_attempt(self, attempt_id: int, worker_id: str) -> None:
+    def start_attempt(
+        self,
+        attempt_id: int,
+        worker_id: str,
+        *,
+        pid: int | None = None,
+        max_runtime_seconds: int | None = None,
+    ) -> None:
         now = utc_now()
+        deadline_at = utc_after(max_runtime_seconds) if max_runtime_seconds else None
         with self.connect() as conn:
             conn.execute(
                 """
                 UPDATE attempts
-                SET status = 'running', worker_id = ?, started_at = ?, updated_at = ?
+                SET status = 'running',
+                    worker_id = ?,
+                    started_at = COALESCE(started_at, ?),
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (worker_id, now, now, attempt_id),
             )
             conn.execute(
                 """
-                INSERT INTO workers(id, attempt_id, status, hostname, started_at, updated_at)
-                VALUES(?, ?, 'running', ?, ?, ?)
+                INSERT INTO workers(
+                    id, attempt_id, status, hostname, pid, heartbeat_at, deadline_at, started_at, updated_at
+                )
+                VALUES(?, ?, 'running', ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     attempt_id = excluded.attempt_id,
                     status = excluded.status,
                     hostname = excluded.hostname,
+                    pid = COALESCE(excluded.pid, workers.pid),
+                    heartbeat_at = excluded.heartbeat_at,
+                    deadline_at = COALESCE(excluded.deadline_at, workers.deadline_at),
                     updated_at = excluded.updated_at
                 """,
-                (worker_id, attempt_id, socket.gethostname(), now, now),
+                (worker_id, attempt_id, socket.gethostname(), pid, now, deadline_at, now, now),
+            )
+
+    def update_worker_pid(self, worker_id: str, pid: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE workers
+                SET pid = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (pid, utc_now(), worker_id),
+            )
+
+    def heartbeat_worker(self, worker_id: str) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE workers
+                SET heartbeat_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now, now, worker_id),
             )
 
     def finish_attempt(self, attempt_id: int, status: str, outcome: str = "") -> None:
@@ -481,6 +533,51 @@ class Store:
                 (attempt_id, level, message, utc_now()),
             )
 
+    def record_worker_result(
+        self,
+        *,
+        attempt_id: int,
+        repo: str,
+        issue_number: int,
+        result_type: str,
+        title: str,
+        body: str,
+        status: str = "ready_for_review",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO worker_results(
+                    attempt_id, repo, issue_number, result_type, title, body,
+                    status, metadata_json, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(attempt_id) DO UPDATE SET
+                    repo = excluded.repo,
+                    issue_number = excluded.issue_number,
+                    result_type = excluded.result_type,
+                    title = excluded.title,
+                    body = excluded.body,
+                    status = excluded.status,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    attempt_id,
+                    repo,
+                    issue_number,
+                    result_type,
+                    title,
+                    body,
+                    status,
+                    json.dumps(metadata or {}, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+
     def record_pr(self, attempt_id: int, repo: str, number: int, url: str, title: str) -> None:
         with self.connect() as conn:
             conn.execute(
@@ -513,6 +610,244 @@ class Store:
                 (attempt_id, repo, issue_number, url, body, status, utc_now()),
             )
 
+    def attempt_by_id(self, attempt_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone(),
+            )
+
+    def active_attempt_counts(self) -> dict[str, int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT repo, COUNT(*) AS count
+                FROM attempts
+                WHERE status IN ('queued', 'running')
+                GROUP BY repo
+                """
+            )
+            counts = {str(row["repo"]): int(row["count"]) for row in rows}
+            counts["*"] = sum(counts.values())
+            return counts
+
+    def running_attempt_counts(self) -> dict[str, int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT repo, COUNT(*) AS count
+                FROM attempts
+                WHERE status = 'running'
+                GROUP BY repo
+                """
+            )
+            counts = {str(row["repo"]): int(row["count"]) for row in rows}
+            counts["*"] = sum(counts.values())
+            return counts
+
+    def queued_attempts(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM attempts
+                    WHERE status = 'queued'
+                    ORDER BY queued_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            )
+
+    def running_workers(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        w.id AS worker_id,
+                        w.attempt_id,
+                        w.status AS worker_status,
+                        w.hostname,
+                        w.pid,
+                        w.heartbeat_at,
+                        w.deadline_at,
+                        w.started_at AS worker_started_at,
+                        w.updated_at AS worker_updated_at,
+                        a.repo,
+                        a.issue_number,
+                        a.task_type,
+                        a.retry_count,
+                        a.status AS attempt_status
+                    FROM workers w
+                    JOIN attempts a ON a.id = w.attempt_id
+                    WHERE w.status = 'running' AND a.status = 'running'
+                    ORDER BY w.started_at ASC
+                    """
+                )
+            )
+
+    def create_retry_attempt(self, attempt_id: int, workflow_version_id: int | None) -> int | None:
+        attempt = self.attempt_by_id(attempt_id)
+        if not attempt:
+            return None
+        return self.create_attempt(
+            repo=str(attempt["repo"]),
+            issue_number=int(attempt["issue_number"]),
+            task_type=str(attempt["task_type"]),
+            workflow_version_id=workflow_version_id,
+            parent_attempt_id=attempt_id,
+            retry_count=int(attempt["retry_count"] or 0) + 1,
+        )
+
+    def create_code_follow_up_attempt(self, source_attempt_id: int, workflow_version_id: int | None) -> int:
+        source = self.attempt_by_id(source_attempt_id)
+        if not source:
+            raise ValueError(f"Attempt {source_attempt_id} does not exist.")
+        if str(source["task_type"]) != "research":
+            raise ValueError("Only research attempts can create code follow-up attempts.")
+        result = self.worker_result_for_attempt(source_attempt_id)
+        if not result or not str(result["body"]).strip():
+            raise ValueError("Research attempt does not have a worker result to feed into a code task.")
+        existing = self.code_follow_up_attempt(source_attempt_id)
+        if existing:
+            return int(existing["id"])
+        target_attempt_id = self.create_attempt(
+            repo=str(source["repo"]),
+            issue_number=int(source["issue_number"]),
+            task_type="code",
+            workflow_version_id=workflow_version_id,
+            status="queued",
+        )
+        self.record_attempt_link(
+            source_attempt_id=source_attempt_id,
+            target_attempt_id=target_attempt_id,
+            relationship=FOLLOW_UP_CODE_RELATIONSHIP,
+            metadata={"source_result_id": int(result["id"])},
+        )
+        self.record_timeline_event(
+            target_attempt_id,
+            phase="queue",
+            event_type="created_from_research",
+            message=f"attempt {source_attempt_id}",
+            data={"source_attempt_id": source_attempt_id},
+        )
+        return target_attempt_id
+
+    def record_attempt_link(
+        self,
+        *,
+        source_attempt_id: int,
+        target_attempt_id: int,
+        relationship: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO attempt_links(
+                    source_attempt_id, target_attempt_id, relationship, metadata_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(source_attempt_id, target_attempt_id, relationship) DO UPDATE SET
+                    metadata_json = excluded.metadata_json
+                """,
+                (
+                    source_attempt_id,
+                    target_attempt_id,
+                    relationship,
+                    json.dumps(metadata or {}, sort_keys=True),
+                    utc_now(),
+                ),
+            )
+
+    def worker_result_for_attempt(self, attempt_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute("SELECT * FROM worker_results WHERE attempt_id = ?", (attempt_id,)).fetchone(),
+            )
+
+    def code_follow_up_attempt(self, source_attempt_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT target.*
+                    FROM attempt_links link
+                    JOIN attempts target ON target.id = link.target_attempt_id
+                    WHERE link.source_attempt_id = ?
+                      AND link.relationship = ?
+                      AND target.status IN ('queued', 'running', 'review', 'done')
+                    ORDER BY target.id DESC
+                    LIMIT 1
+                    """,
+                    (source_attempt_id, FOLLOW_UP_CODE_RELATIONSHIP),
+                ).fetchone(),
+            )
+
+    def follow_up_source_result(self, target_attempt_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT
+                        link.source_attempt_id,
+                        link.relationship,
+                        source.repo,
+                        source.issue_number,
+                        source.task_type,
+                        source.status AS source_status,
+                        result.id AS result_id,
+                        result.result_type,
+                        result.title,
+                        result.body,
+                        result.status AS result_status,
+                        result.updated_at AS result_updated_at
+                    FROM attempt_links link
+                    JOIN attempts source ON source.id = link.source_attempt_id
+                    JOIN worker_results result ON result.attempt_id = source.id
+                    WHERE link.target_attempt_id = ?
+                      AND link.relationship = ?
+                    ORDER BY link.id DESC
+                    LIMIT 1
+                    """,
+                    (target_attempt_id, FOLLOW_UP_CODE_RELATIONSHIP),
+                ).fetchone(),
+            )
+
+    def attempt_follow_up_targets(self, source_attempt_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        link.relationship,
+                        link.created_at AS linked_at,
+                        target.*
+                    FROM attempt_links link
+                    JOIN attempts target ON target.id = link.target_attempt_id
+                    WHERE link.source_attempt_id = ?
+                    ORDER BY link.id DESC
+                    """,
+                    (source_attempt_id,),
+                )
+            )
+
+    def mark_worker_exited(self, worker_id: str, exit_code: int | None, stop_reason: str = "") -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE workers
+                SET exit_code = ?, stop_reason = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (exit_code, stop_reason, utc_now(), worker_id),
+            )
+
     def dashboard_summary(self) -> dict[str, Any]:
         with self.connect() as conn:
             issue_count = conn.execute("SELECT COUNT(*) AS count FROM issues").fetchone()["count"]
@@ -535,6 +870,32 @@ class Store:
                     """
                 )
             )
+            latest_workflow = conn.execute(
+                """
+                SELECT id, content_hash, status, error, created_at
+                FROM workflow_versions
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            accepted_workflow = conn.execute(
+                """
+                SELECT id, content_hash, status, error, created_at
+                FROM workflow_versions
+                WHERE status = 'accepted'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            rejected_workflow = conn.execute(
+                """
+                SELECT id, content_hash, status, error, created_at
+                FROM workflow_versions
+                WHERE status = 'rejected'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
             return {
                 "issue_count": issue_count,
                 "running_attempts": running,
@@ -542,6 +903,12 @@ class Store:
                 "error_count": errors,
                 "turn_count": turns,
                 "attempts": attempts,
+                "workflow": {
+                    "latest": latest_workflow,
+                    "accepted": accepted_workflow,
+                    "rejected": rejected_workflow,
+                    "has_current_error": bool(latest_workflow and latest_workflow["status"] == "rejected"),
+                },
             }
 
     def attempt_detail(self, attempt_id: int) -> dict[str, Any] | None:
@@ -551,6 +918,13 @@ class Store:
                 return None
             return {
                 "attempt": attempt,
+                "result": conn.execute(
+                    "SELECT * FROM worker_results WHERE attempt_id = ?",
+                    (attempt_id,),
+                ).fetchone(),
+                "source_result": self.follow_up_source_result(attempt_id),
+                "follow_up_targets": self.attempt_follow_up_targets(attempt_id),
+                "code_follow_up": self.code_follow_up_attempt(attempt_id),
                 "timeline": list(
                     conn.execute(
                         "SELECT * FROM worker_timeline_events WHERE attempt_id = ? ORDER BY id ASC",
@@ -571,6 +945,12 @@ class Store:
                 "logs": list(
                     conn.execute(
                         "SELECT * FROM worker_logs WHERE attempt_id = ? ORDER BY id DESC LIMIT 50",
+                        (attempt_id,),
+                    )
+                ),
+                "comments": list(
+                    conn.execute(
+                        "SELECT * FROM comments WHERE attempt_id = ? ORDER BY id DESC",
                         (attempt_id,),
                     )
                 ),
@@ -711,6 +1091,22 @@ def _lastrowid(cursor: sqlite3.Cursor) -> int:
     return cursor.lastrowid
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    _add_column(conn, "attempts", "parent_attempt_id", "INTEGER")
+    _add_column(conn, "attempts", "retry_count", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(conn, "workers", "pid", "INTEGER")
+    _add_column(conn, "workers", "heartbeat_at", "TEXT")
+    _add_column(conn, "workers", "deadline_at", "TEXT")
+    _add_column(conn, "workers", "exit_code", "INTEGER")
+    _add_column(conn, "workers", "stop_reason", "TEXT NOT NULL DEFAULT ''")
+
+
+def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS settings(
@@ -791,6 +1187,8 @@ SCHEMA = [
         worktree_path TEXT NOT NULL DEFAULT '',
         branch TEXT NOT NULL DEFAULT '',
         commit_sha TEXT NOT NULL DEFAULT '',
+        parent_attempt_id INTEGER,
+        retry_count INTEGER NOT NULL DEFAULT 0,
         queued_at TEXT NOT NULL,
         started_at TEXT,
         completed_at TEXT,
@@ -810,6 +1208,11 @@ SCHEMA = [
         attempt_id INTEGER,
         status TEXT NOT NULL,
         hostname TEXT NOT NULL,
+        pid INTEGER,
+        heartbeat_at TEXT,
+        deadline_at TEXT,
+        exit_code INTEGER,
+        stop_reason TEXT NOT NULL DEFAULT '',
         started_at TEXT NOT NULL,
         completed_at TEXT,
         updated_at TEXT NOT NULL,
@@ -885,6 +1288,36 @@ SCHEMA = [
         message TEXT NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY(attempt_id) REFERENCES attempts(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS worker_results(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attempt_id INTEGER NOT NULL,
+        repo TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        result_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(attempt_id),
+        FOREIGN KEY(attempt_id) REFERENCES attempts(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS attempt_links(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_attempt_id INTEGER NOT NULL,
+        target_attempt_id INTEGER NOT NULL,
+        relationship TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE(source_attempt_id, target_attempt_id, relationship),
+        FOREIGN KEY(source_attempt_id) REFERENCES attempts(id) ON DELETE CASCADE,
+        FOREIGN KEY(target_attempt_id) REFERENCES attempts(id) ON DELETE CASCADE
     )
     """,
     """

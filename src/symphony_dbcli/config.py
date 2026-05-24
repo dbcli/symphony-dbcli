@@ -26,7 +26,7 @@ For coding tasks:
 For research/support tasks:
 - Read the issue discussion and relevant code/docs before answering.
 - Prefer concise answers with links or file references where useful.
-- Do not post a final answer automatically unless workflow policy allows it.
+- Save a draft answer for review; do not post a final answer automatically.
 """
 
 
@@ -81,6 +81,11 @@ class WorkerConfig:
     max_per_repo: int = 1
     default_task_type: str = "research"
     poll_interval_seconds: int = 60
+    heartbeat_interval_seconds: int = 15
+    heartbeat_timeout_seconds: int = 120
+    max_runtime_seconds: int = 3600
+    retry_limit: int = 1
+    shutdown_grace_seconds: int = 10
 
 
 @dataclass(frozen=True)
@@ -106,8 +111,6 @@ class CodexConfig:
 
 @dataclass(frozen=True)
 class PolicyConfig:
-    post_research_answers: bool = False
-    open_pull_requests: bool = False
     dry_run: bool = True
 
 
@@ -190,7 +193,7 @@ def config_from_dict(
         dashboard=DashboardConfig(**_section(merged, "dashboard")),
         database=DatabaseConfig(**_section(merged, "database")),
         codex=CodexConfig(**_section(merged, "codex")),
-        policy=PolicyConfig(**_section(merged, "policy")),
+        policy=_policy_config(merged),
         instructions=instructions.strip() or DEFAULT_INSTRUCTIONS,
     )
 
@@ -211,6 +214,18 @@ def validate_config(config: WorkflowConfig) -> None:
         errors.append("workers.max_per_repo must be at least 1.")
     if config.workers.default_task_type not in {"code", "research"}:
         errors.append("workers.default_task_type must be 'code' or 'research'.")
+    if config.workers.poll_interval_seconds < 1:
+        errors.append("workers.poll_interval_seconds must be at least 1.")
+    if config.workers.heartbeat_interval_seconds < 1:
+        errors.append("workers.heartbeat_interval_seconds must be at least 1.")
+    if config.workers.heartbeat_timeout_seconds < config.workers.heartbeat_interval_seconds:
+        errors.append("workers.heartbeat_timeout_seconds must be at least heartbeat_interval_seconds.")
+    if config.workers.max_runtime_seconds < 1:
+        errors.append("workers.max_runtime_seconds must be at least 1.")
+    if config.workers.retry_limit < 0:
+        errors.append("workers.retry_limit must be at least 0.")
+    if config.workers.shutdown_grace_seconds < 0:
+        errors.append("workers.shutdown_grace_seconds must be at least 0.")
     if config.dashboard.port < 1 or config.dashboard.port > 65535:
         errors.append("dashboard.port must be between 1 and 65535.")
     if not config.github.repos:
@@ -275,8 +290,6 @@ def prompt_for_config(
     db_path = ask("SQLite database path", defaults.database.path)
     dashboard_host = ask("Dashboard host", defaults.dashboard.host)
     dashboard_port = int(ask("Dashboard port", str(defaults.dashboard.port)))
-    post_answers = _parse_bool(ask("Post research answers automatically", "no"))
-    open_prs = _parse_bool(ask("Open pull requests automatically", "no"))
     dry_run = _parse_bool(ask("Run in dry-run mode by default", "yes"))
     print_func("Using default Symphony label mapping. Edit WORKFLOW.md to customize it.")
 
@@ -290,11 +303,7 @@ def prompt_for_config(
         dashboard=DashboardConfig(host=dashboard_host, port=dashboard_port),
         database=DatabaseConfig(path=db_path),
         codex=defaults.codex,
-        policy=PolicyConfig(
-            post_research_answers=post_answers,
-            open_pull_requests=open_prs,
-            dry_run=dry_run,
-        ),
+        policy=PolicyConfig(dry_run=dry_run),
         instructions=DEFAULT_INSTRUCTIONS,
     )
 
@@ -333,6 +342,26 @@ def _section(data: ConfigTable, name: str) -> ConfigTable:
     if not isinstance(value, dict):
         raise WorkflowError(f"[{name}] must be a TOML table.")
     return value
+
+
+def _policy_config(data: ConfigTable) -> PolicyConfig:
+    section = _section(data, "policy")
+    disabled_side_effect_keys = ("post_research_answers", "open_pull_requests")
+    enabled_keys = [key for key in disabled_side_effect_keys if section.get(key, False) is True]
+    if enabled_keys:
+        names = ", ".join(f"policy.{key}" for key in enabled_keys)
+        raise WorkflowError(
+            f"{names} are no longer configurable; remove them or set them to false. "
+            "Use policy.dry_run as the only workflow side-effect switch."
+        )
+    invalid_keys = [key for key in disabled_side_effect_keys if key in section and section[key] is not False]
+    if invalid_keys:
+        names = ", ".join(f"policy.{key}" for key in invalid_keys)
+        raise WorkflowError(f"{names} must be false when present.")
+    dry_run = section.get("dry_run", True)
+    if not isinstance(dry_run, bool):
+        raise WorkflowError("policy.dry_run must be true or false.")
+    return PolicyConfig(dry_run=dry_run)
 
 
 def _selected_profile(data: ConfigTable, requested_profile: str | None) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import sqlite3
 import urllib.parse
 from dataclasses import dataclass
 from functools import lru_cache
@@ -155,8 +156,33 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                     return
             self.send_error(404)
 
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            parts = parsed.path.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "attempts" and parts[2] == "follow-up-code":
+                try:
+                    source_attempt_id = int(parts[1])
+                except ValueError:
+                    self.send_error(404)
+                    return
+                self._create_code_follow_up(source_attempt_id)
+                return
+            self.send_error(404)
+
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             return
+
+        def _create_code_follow_up(self, source_attempt_id: int) -> None:
+            try:
+                workflow = store.latest_workflow_version()
+                workflow_version_id = int(workflow["id"]) if workflow else None
+                target_attempt_id = store.create_code_follow_up_attempt(
+                    source_attempt_id, workflow_version_id
+                )
+            except (ValueError, sqlite3.Error) as exc:
+                self.send_error(400, str(exc))
+                return
+            self._redirect(f"/attempts/{target_attempt_id}")
 
         def _send_html(self, body: str) -> None:
             encoded = body.encode("utf-8")
@@ -182,6 +208,12 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _redirect(self, location: str) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
     return DashboardHandler
 

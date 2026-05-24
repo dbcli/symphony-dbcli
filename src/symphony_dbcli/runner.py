@@ -276,6 +276,11 @@ class _AppServerClient:
             self.store.record_codex_event(
                 self.attempt_id, thread_id=thread_id, event_type=method, payload=params
             )
-        if method in {"agent/message/delta", "agent_message/delta"}:
+        if method in {
+            "agent/message/delta",
+            "agent_message/delta",
+            "item/agentMessage/delta",
+            "item/agent_message/delta",
+        }:
             delta = params.get("delta") or params.get("text") or ""
             self.final_message_parts.append(str(delta))

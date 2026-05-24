@@ -13,6 +13,41 @@
   <div class="metric"><strong>{{ summary.error_count }}</strong><span>Errors</span></div>
 </section>
 
+<section class="workflow-panel {{ 'has-error' if summary.workflow.has_current_error else '' }}">
+  <div class="section-header">
+    <h2>Workflow</h2>
+    {% if summary.workflow.latest %}
+    <span class="status-pill {{ 'is-error' if summary.workflow.has_current_error else 'is-ok' }}">
+      {{ summary.workflow.latest.status }}
+    </span>
+    {% endif %}
+  </div>
+  <div class="workflow-grid">
+    <div>
+      <span class="label">Active version</span>
+      {% if summary.workflow.accepted %}
+      <strong>#{{ summary.workflow.accepted.id }}</strong>
+      <span class="muted">{{ summary.workflow.accepted.created_at }}</span>
+      <code>{{ summary.workflow.accepted.content_hash[:12] }}</code>
+      {% else %}
+      <strong>None</strong>
+      <span class="muted">No accepted workflow has been recorded.</span>
+      {% endif %}
+    </div>
+    <div>
+      <span class="label">{{ "Current error" if summary.workflow.has_current_error else "Last rejected edit" }}</span>
+      {% if summary.workflow.rejected %}
+      <strong>#{{ summary.workflow.rejected.id }}</strong>
+      <span class="muted">{{ summary.workflow.rejected.created_at }}</span>
+      <p class="workflow-error">{{ summary.workflow.rejected.error }}</p>
+      {% else %}
+      <strong>None</strong>
+      <span class="muted">No rejected workflow edits.</span>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
 <section class="toolbar">
   <form action="/ask" method="get">
     <input name="q" placeholder="Ask about issue timing, turns, errors, or workers" />

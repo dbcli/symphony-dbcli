@@ -105,6 +105,16 @@ class WorktreeManager:
             )
             if exists.returncode == 0:
                 return candidate
+        head = self._run(["git", "--git-dir", str(base_repo_path), "symbolic-ref", "HEAD"], check=False)
+        if head.returncode == 0 and head.stdout.strip().startswith("refs/heads/"):
+            return head.stdout.strip().removeprefix("refs/heads/")
+        for candidate in ("main", "master"):
+            exists = self._run(
+                ["git", "--git-dir", str(base_repo_path), "rev-parse", "--verify", candidate],
+                check=False,
+            )
+            if exists.returncode == 0:
+                return candidate
         raise WorktreeError(f"Could not find a default branch for {base_repo_path}.")
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:

@@ -26,6 +26,7 @@ from .github import GitHubClient
 from .github_app import default_manifest, write_manifest_form
 from .orchestrator import Orchestrator, WorkflowWatcher, load_and_record_workflow
 from .store import Store
+from .supervisor import WorkerSupervisor
 from .worktree import WorktreeManager
 
 
@@ -73,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
     status = subcommands.add_parser("status", help="Show orchestrator status")
     status.set_defaults(func=cmd_status)
 
+    attempt = subcommands.add_parser("attempt", help="Attempt review and follow-up commands")
+    attempt_sub = attempt.add_subparsers(required=True)
+    follow_up = attempt_sub.add_parser(
+        "create-code-follow-up", help="Queue a code task from a research result"
+    )
+    follow_up.add_argument("--attempt-id", required=True, type=int)
+    follow_up.set_defaults(func=cmd_attempt_create_code_follow_up)
+
     ask = subcommands.add_parser("ask", help="Ask about workers, issues, timing, turns, or errors")
     ask.add_argument("question", nargs="+")
     ask.set_defaults(func=cmd_ask)
@@ -82,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = subcommands.add_parser("serve", help="Run dashboard and optional polling loop")
     serve.add_argument("--no-poll", action="store_true", help="Only run the dashboard")
-    serve.add_argument("--dispatch", action="store_true", help="Claim one eligible issue after each poll")
+    serve.add_argument("--dispatch", action="store_true", help="Claim eligible issues and start workers")
     serve.set_defaults(func=cmd_serve)
 
     worker = subcommands.add_parser("worker", help="Worker commands")
@@ -92,6 +101,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--issue", required=True, type=int)
     run.add_argument("--task-type", choices=["code", "research"])
     run.set_defaults(func=cmd_worker_run)
+    run_attempt = worker_sub.add_parser("run-attempt", help="Run an already queued attempt")
+    run_attempt.add_argument("--attempt-id", required=True, type=int)
+    run_attempt.set_defaults(func=cmd_worker_run_attempt)
 
     worktree = subcommands.add_parser("worktree", help="Worktree commands")
     worktree_sub = worktree.add_subparsers(required=True)
@@ -188,6 +200,16 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_attempt_create_code_follow_up(args: argparse.Namespace) -> int:
+    _config, version_id, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
+    attempt_id = store.create_code_follow_up_attempt(args.attempt_id, version_id)
+    print(f"Queued code follow-up attempt {attempt_id}")
+    return 0
+
+
 def cmd_poll_once(args: argparse.Namespace) -> int:
     config, version_id, store = _load_config_store_and_record(
         args.workflow,
@@ -208,6 +230,16 @@ def cmd_worker_run(args: argparse.Namespace) -> int:
         args.issue,
         task_type=args.task_type,
     )
+    print(f"Recorded attempt {attempt_id}")
+    return 0
+
+
+def cmd_worker_run_attempt(args: argparse.Namespace) -> int:
+    config, version_id, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
+    attempt_id = Orchestrator(config, store, version_id).run_attempt(args.attempt_id)
     print(f"Recorded attempt {attempt_id}")
     return 0
 
@@ -295,6 +327,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def _poll_loop(args: argparse.Namespace, store: Store, dashboard_state: DashboardState) -> None:
     watcher = WorkflowWatcher(store, args.workflow, profile=_runtime_profile(args))
+    supervisor = WorkerSupervisor(store, workflow_path=args.workflow, profile=_runtime_profile(args))
     interval = 60
     while True:
         try:
@@ -302,9 +335,11 @@ def _poll_loop(args: argparse.Namespace, store: Store, dashboard_state: Dashboar
             dashboard_state.update_config(config)
             interval = config.workers.poll_interval_seconds
             orchestrator = Orchestrator(config, store, version_id)
+            supervisor.reconcile(config, version_id)
             orchestrator.poll_once()
             if args.dispatch:
-                orchestrator.claim_next()
+                orchestrator.claim_available()
+                supervisor.start_queued(config)
         except Exception as exc:  # Keep the dashboard alive.
             print(f"poll loop error: {exc}", file=sys.stderr)
         time.sleep(interval)
