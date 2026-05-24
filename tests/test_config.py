@@ -202,6 +202,57 @@ def test_workflow_validation_rejects_action_trigger_mismatch(monkeypatch: pytest
         parse_workflow(workflow)
 
 
+def test_workflow_accepts_transition_input_output_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        "\n[workflow.transitions.run_setup]\n",
+        "\n".join(
+            [
+                "",
+                "[workflow.transitions.allocate_workspace.inputs]",
+                'attempt_id = "attempt.id"',
+                'repo = "issue.repo"',
+                "",
+                "[workflow.transitions.allocate_workspace.outputs]",
+                'worktree_path = "attempt.worktree_path"',
+                'branch = "attempt.branch"',
+                "",
+                "[workflow.transitions.run_setup]",
+                "",
+            ]
+        ),
+    )
+
+    config = parse_workflow(workflow)
+    transition = config.workflow.transitions["allocate_workspace"]
+
+    assert transition.inputs == {"attempt_id": "attempt.id", "repo": "issue.repo"}
+    assert transition.outputs == {
+        "worktree_path": "attempt.worktree_path",
+        "branch": "attempt.branch",
+    }
+
+
+def test_workflow_validation_rejects_action_mapping_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        "\n[workflow.transitions.run_setup]\n",
+        "\n".join(
+            [
+                "",
+                "[workflow.transitions.allocate_workspace.inputs]",
+                'comment_id = "comment.id"',
+                "",
+                "[workflow.transitions.run_setup]",
+                "",
+            ]
+        ),
+    )
+
+    with pytest.raises(WorkflowError, match="inputs.comment_id is not valid"):
+        parse_workflow(workflow)
+
+
 def test_workflow_accepts_setup_steps_and_preferences(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_profile_env(monkeypatch)
     workflow = (

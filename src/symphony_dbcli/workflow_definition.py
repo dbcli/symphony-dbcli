@@ -37,6 +37,8 @@ class WorkflowTransitionConfig:
     on_failure: str = "failed"
     retry_limit: int = 0
     timeout_seconds: int = 0
+    inputs: dict[str, str] = field(default_factory=dict)
+    outputs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -297,6 +299,8 @@ def _transition_from_dict(name: str, data: Any) -> WorkflowTransitionConfig:
         on_failure=_str_value(table, "on_failure", "failed"),
         retry_limit=_int_value(table, "retry_limit", 0),
         timeout_seconds=_int_value(table, "timeout_seconds", 0),
+        inputs=_str_map(table, "inputs", f"workflow.transitions.{name}"),
+        outputs=_str_map(table, "outputs", f"workflow.transitions.{name}"),
     )
 
 
@@ -342,6 +346,9 @@ def _transition_errors(
         errors.append(
             f"workflow.transitions.{name}.action '{transition.action}' cannot run behind a human gate."
         )
+    if primitive is not None:
+        errors.extend(_mapping_errors(name, "inputs", transition.inputs, primitive.input_fields))
+        errors.extend(_mapping_errors(name, "outputs", transition.outputs, primitive.output_fields))
     if transition.trigger not in TRIGGER_KINDS:
         errors.append(f"workflow.transitions.{name}.trigger must be 'automatic' or 'human'.")
     if transition.trigger == "human" and not transition.gate:
@@ -353,6 +360,19 @@ def _transition_errors(
     if transition.timeout_seconds < 0:
         errors.append(f"workflow.transitions.{name}.timeout_seconds must be at least 0.")
     return errors
+
+
+def _mapping_errors(
+    transition_name: str,
+    mapping_name: str,
+    mapping: dict[str, str],
+    allowed_fields: frozenset[str],
+) -> list[str]:
+    unknown = sorted(set(mapping) - allowed_fields)
+    return [
+        f"workflow.transitions.{transition_name}.{mapping_name}.{field} is not valid for this primitive."
+        for field in unknown
+    ]
 
 
 def _unreachable_state_errors(workflow: WorkflowDefinitionConfig) -> list[str]:
@@ -416,6 +436,15 @@ def _str_list(data: ConfigTable, key: str, default: list[str]) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ValueError(f"{key} must be a list of strings.")
     return list(value)
+
+
+def _str_map(data: ConfigTable, key: str, path: str) -> dict[str, str]:
+    value = data.get(key, {})
+    if not isinstance(value, dict) or any(
+        not isinstance(field, str) or not isinstance(target, str) for field, target in value.items()
+    ):
+        raise ValueError(f"{path}.{key} must be a table of string keys and values.")
+    return dict(value)
 
 
 def _required_str_list(data: ConfigTable, key: str, path: str) -> list[str]:

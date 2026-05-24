@@ -27,8 +27,12 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert draft_pr.idempotency_strategy == "pull_request"
     assert draft_pr.automatic_allowed is True
     assert draft_pr.human_gate_allowed is True
+    assert "attempt_id" in draft_pr.input_fields
+    assert "pull_request_url" in draft_pr.output_fields
 
     assert fetch_issues is not None
     assert fetch_issues.side_effect == "github_read"
     assert fetch_issues.automatic_allowed is True
     assert fetch_issues.human_gate_allowed is False
+    assert "repos" in fetch_issues.input_fields
+    assert "issues" in fetch_issues.output_fields

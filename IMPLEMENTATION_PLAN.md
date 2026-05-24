@@ -357,8 +357,8 @@ those primitives are composed into automatic transitions and human-gated steps.
   transition conditions, action inputs, action outputs, retry policy, timeout
   policy, and artifact handoff between steps.
   Progress: states, terminal states, automatic/human transitions, conditions,
-  retry limits, and timeouts are now represented. Explicit action input/output
-  mappings and artifact handoff still need to be modeled.
+  retry limits, timeouts, and explicit action input/output mappings are now
+  represented. Artifact handoff semantics still need to be executed at runtime.
 - [x] Extend `WORKFLOW.md` to capture worker preferences outside the state
   machine. These preferences should include review expectations, preferred test
   strategy, project-specific coding style, when to run `/review`, and any
@@ -367,7 +367,7 @@ those primitives are composed into automatic transitions and human-gated steps.
   commands needed to prepare a repo or worktree before worker execution, such as
   installing test dependencies, running database migrations, generating local
   fixtures, or validating that required tools are available.
-- [ ] Add typed parser and validation models for the workflow DSL. Validation
+- [x] Add typed parser and validation models for the workflow DSL. Validation
   should reject unknown actions, invalid state references, unreachable states,
   missing gate labels, invalid retry settings, and action input/output
   mismatches before a workflow version is accepted. It should also validate
@@ -375,7 +375,8 @@ those primitives are composed into automatic transitions and human-gated steps.
   Progress: typed parsing and validation now cover workflow states,
   transitions, unknown actions, invalid state references, unreachable states,
   human-gate labels, retry settings, timeout settings, preferences, and setup
-  steps. Action input/output mismatch validation remains.
+  steps. Action input/output mappings are validated against primitive
+  contracts.
 - [x] Add durable workflow runtime tables to SQLite. Track workflow instances,
   current state, pending gates, action runs, action outputs, transition events,
   retries, errors, and the workflow version that produced every runtime row.
