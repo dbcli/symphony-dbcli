@@ -13,7 +13,7 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 
@@ -145,6 +145,235 @@ class Store:
                     """,
                     (limit,),
                 )
+            )
+
+    def create_workflow_instance(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        task_type: str,
+        workflow_version_id: int | None,
+        initial_state: str,
+        attempt_id: int | None = None,
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO workflow_instances(
+                    workflow_version_id, repo, issue_number, attempt_id, task_type,
+                    current_state, status, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (workflow_version_id, repo, issue_number, attempt_id, task_type, initial_state, now, now),
+            )
+            return _lastrowid(cursor)
+
+    def workflow_instance_by_id(self, instance_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute("SELECT * FROM workflow_instances WHERE id = ?", (instance_id,)).fetchone(),
+            )
+
+    def active_workflow_instance_for_issue(self, repo: str, issue_number: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM workflow_instances
+                    WHERE repo = ? AND issue_number = ? AND status = 'active'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (repo, issue_number),
+                ).fetchone(),
+            )
+
+    def start_workflow_action_run(
+        self,
+        *,
+        instance_id: int,
+        workflow_version_id: int | None,
+        transition_name: str,
+        action_name: str,
+        input_data: dict[str, Any] | None = None,
+        idempotency_key: str = "",
+        attempt_id: int | None = None,
+        retry_count: int = 0,
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO workflow_action_runs(
+                    workflow_instance_id, workflow_version_id, attempt_id, transition_name,
+                    action_name, status, input_json, output_json, error, idempotency_key,
+                    retry_count, started_at, completed_at, started_monotonic_ns,
+                    ended_monotonic_ns, duration_ms
+                )
+                VALUES(?, ?, ?, ?, ?, 'running', ?, '{}', '', ?, ?, ?, NULL, ?, NULL, NULL)
+                """,
+                (
+                    instance_id,
+                    workflow_version_id,
+                    attempt_id,
+                    transition_name,
+                    action_name,
+                    json.dumps(input_data or {}, sort_keys=True),
+                    idempotency_key,
+                    retry_count,
+                    now,
+                    monotonic_ns(),
+                ),
+            )
+            return _lastrowid(cursor)
+
+    def finish_workflow_action_run(
+        self,
+        action_run_id: int,
+        *,
+        status: str,
+        output_data: dict[str, Any] | None = None,
+        error: str = "",
+    ) -> None:
+        ended_ns = monotonic_ns()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT started_monotonic_ns FROM workflow_action_runs WHERE id = ?",
+                (action_run_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Workflow action run {action_run_id} does not exist.")
+            duration = elapsed_ms(int(row["started_monotonic_ns"]), ended_ns)
+            conn.execute(
+                """
+                UPDATE workflow_action_runs
+                SET status = ?, output_json = ?, error = ?, completed_at = ?,
+                    ended_monotonic_ns = ?, duration_ms = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(output_data or {}, sort_keys=True),
+                    error,
+                    utc_now(),
+                    ended_ns,
+                    duration,
+                    action_run_id,
+                ),
+            )
+
+    def transition_workflow_instance(
+        self,
+        instance_id: int,
+        *,
+        workflow_version_id: int | None,
+        transition_name: str,
+        action_name: str,
+        trigger: str,
+        from_state: str,
+        to_state: str,
+        status: str = "active",
+        data: dict[str, Any] | None = None,
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            current = conn.execute(
+                "SELECT current_state FROM workflow_instances WHERE id = ?",
+                (instance_id,),
+            ).fetchone()
+            if not current:
+                raise ValueError(f"Workflow instance {instance_id} does not exist.")
+            if str(current["current_state"]) != from_state:
+                raise ValueError(
+                    f"Workflow instance {instance_id} is in state '{current['current_state']}', not '{from_state}'."
+                )
+            completed_at = now if status in {"done", "failed", "blocked"} else None
+            conn.execute(
+                """
+                UPDATE workflow_instances
+                SET current_state = ?, status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+                WHERE id = ?
+                """,
+                (to_state, status, completed_at, now, instance_id),
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO workflow_transition_events(
+                    workflow_instance_id, workflow_version_id, transition_name, action_name,
+                    trigger, from_state, to_state, data_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    instance_id,
+                    workflow_version_id,
+                    transition_name,
+                    action_name,
+                    trigger,
+                    from_state,
+                    to_state,
+                    json.dumps(data or {}, sort_keys=True),
+                    now,
+                ),
+            )
+            return _lastrowid(cursor)
+
+    def open_workflow_gate(
+        self,
+        *,
+        instance_id: int,
+        workflow_version_id: int | None,
+        gate: str,
+        transition_name: str,
+        state: str,
+        prompt: str = "",
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO workflow_gates(
+                    workflow_instance_id, workflow_version_id, gate, transition_name, state,
+                    status, prompt, decision, decided_by, decided_at, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, 'pending', ?, '', '', NULL, ?, ?)
+                """,
+                (instance_id, workflow_version_id, gate, transition_name, state, prompt, now, now),
+            )
+            return _lastrowid(cursor)
+
+    def pending_workflow_gates(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT g.*, i.repo, i.issue_number, i.task_type
+                    FROM workflow_gates g
+                    JOIN workflow_instances i ON i.id = g.workflow_instance_id
+                    WHERE g.status = 'pending'
+                    ORDER BY g.created_at ASC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            )
+
+    def resolve_workflow_gate(self, gate_id: int, *, decision: str, decided_by: str) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE workflow_gates
+                SET status = 'resolved', decision = ?, decided_by = ?, decided_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (decision, decided_by, now, now, gate_id),
             )
 
     def start_queued_work_automatically(self) -> bool:
@@ -1336,6 +1565,83 @@ SCHEMA = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(repo, issue_number) REFERENCES issues(repo, number),
+        FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_instances(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_version_id INTEGER,
+        repo TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        attempt_id INTEGER,
+        task_type TEXT NOT NULL,
+        current_state TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id),
+        FOREIGN KEY(repo, issue_number) REFERENCES issues(repo, number),
+        FOREIGN KEY(attempt_id) REFERENCES attempts(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_action_runs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_instance_id INTEGER NOT NULL,
+        workflow_version_id INTEGER,
+        attempt_id INTEGER,
+        transition_name TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_json TEXT NOT NULL DEFAULT '{}',
+        output_json TEXT NOT NULL DEFAULT '{}',
+        error TEXT NOT NULL DEFAULT '',
+        idempotency_key TEXT NOT NULL DEFAULT '',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        started_monotonic_ns INTEGER NOT NULL,
+        ended_monotonic_ns INTEGER,
+        duration_ms INTEGER,
+        FOREIGN KEY(workflow_instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
+        FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id),
+        FOREIGN KEY(attempt_id) REFERENCES attempts(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_transition_events(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_instance_id INTEGER NOT NULL,
+        workflow_version_id INTEGER,
+        transition_name TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        trigger TEXT NOT NULL,
+        from_state TEXT NOT NULL,
+        to_state TEXT NOT NULL,
+        data_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(workflow_instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
+        FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_gates(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_instance_id INTEGER NOT NULL,
+        workflow_version_id INTEGER,
+        gate TEXT NOT NULL,
+        transition_name TEXT NOT NULL,
+        state TEXT NOT NULL,
+        status TEXT NOT NULL,
+        prompt TEXT NOT NULL DEFAULT '',
+        decision TEXT NOT NULL DEFAULT '',
+        decided_by TEXT NOT NULL DEFAULT '',
+        decided_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(workflow_instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
         FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id)
     )
     """,

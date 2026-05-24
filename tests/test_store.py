@@ -135,6 +135,98 @@ def test_start_queued_work_automatically_setting_defaults_on(tmp_path: Path) -> 
     assert store.start_queued_work_automatically() is True
 
 
+def test_store_records_workflow_runtime_state(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    config = default_config()
+    version_id = store.record_workflow_version("WORKFLOW.md", render_workflow(config), config)
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=9,
+            title="Fix completions",
+            url="https://github.com/dbcli/litecli/issues/9",
+            state="open",
+            labels=["symphony:todo", "symphony:type:code"],
+            task_type="code",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=version_id,
+    )
+
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=version_id,
+        initial_state="todo",
+        attempt_id=attempt_id,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=version_id,
+        attempt_id=attempt_id,
+        transition_name="claim_issue",
+        action_name="github.apply_labels",
+        input_data={"labels": ["symphony:working"]},
+        idempotency_key="dbcli/litecli#9:claim_issue",
+    )
+    store.finish_workflow_action_run(
+        action_run_id,
+        status="succeeded",
+        output_data={"applied": ["symphony:working"]},
+    )
+    event_id = store.transition_workflow_instance(
+        instance_id,
+        workflow_version_id=version_id,
+        transition_name="claim_issue",
+        action_name="github.apply_labels",
+        trigger="automatic",
+        from_state="todo",
+        to_state="claimed",
+        data={"action_run_id": action_run_id},
+    )
+    gate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=version_id,
+        gate="review_diff",
+        transition_name="create_draft_pr",
+        state="review",
+        prompt="Review the generated diff.",
+    )
+
+    instance = store.workflow_instance_by_id(instance_id)
+    active = store.active_workflow_instance_for_issue("dbcli/litecli", 9)
+    pending_gates = store.pending_workflow_gates()
+    assert instance is not None
+    assert active is not None
+    assert instance["current_state"] == "claimed"
+    assert active["id"] == instance_id
+    assert pending_gates[0]["id"] == gate_id
+    assert pending_gates[0]["repo"] == "dbcli/litecli"
+
+    store.resolve_workflow_gate(gate_id, decision="approved", decided_by="amjith")
+
+    with store.connect() as conn:
+        action_run = conn.execute(
+            "SELECT * FROM workflow_action_runs WHERE id = ?", (action_run_id,)
+        ).fetchone()
+        event = conn.execute("SELECT * FROM workflow_transition_events WHERE id = ?", (event_id,)).fetchone()
+        gate = conn.execute("SELECT * FROM workflow_gates WHERE id = ?", (gate_id,)).fetchone()
+    assert action_run is not None
+    assert action_run["status"] == "succeeded"
+    assert action_run["duration_ms"] is not None
+    assert event is not None
+    assert event["to_state"] == "claimed"
+    assert gate is not None
+    assert gate["status"] == "resolved"
+    assert gate["decision"] == "approved"
+
+
 def test_store_creates_code_follow_up_from_research_result(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()
