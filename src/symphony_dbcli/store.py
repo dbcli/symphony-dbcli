@@ -13,7 +13,7 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 
@@ -283,6 +283,90 @@ class Store:
                     action_run_id,
                 ),
             )
+
+    def record_workflow_artifacts(
+        self,
+        instance_id: int,
+        artifacts: dict[str, Any],
+        *,
+        workflow_version_id: int | None,
+        action_run_id: int | None = None,
+    ) -> None:
+        if not artifacts:
+            return
+        now = utc_now()
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO workflow_artifacts(
+                    workflow_instance_id, workflow_version_id, workflow_action_run_id,
+                    name, value_json, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workflow_instance_id, name) DO UPDATE SET
+                    workflow_version_id = excluded.workflow_version_id,
+                    workflow_action_run_id = excluded.workflow_action_run_id,
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                [
+                    (
+                        instance_id,
+                        workflow_version_id,
+                        action_run_id,
+                        name,
+                        json.dumps(value, sort_keys=True),
+                        now,
+                        now,
+                    )
+                    for name, value in artifacts.items()
+                ],
+            )
+
+    def workflow_artifact(self, instance_id: int, name: str) -> Any:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT value_json
+                FROM workflow_artifacts
+                WHERE workflow_instance_id = ? AND name = ?
+                """,
+                (instance_id, name),
+            ).fetchone()
+        if not row:
+            return None
+        return json.loads(str(row["value_json"]))
+
+    def workflow_artifacts(self, instance_id: int) -> dict[str, Any]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT name, value_json
+                FROM workflow_artifacts
+                WHERE workflow_instance_id = ?
+                ORDER BY name ASC
+                """,
+                (instance_id,),
+            )
+            return {str(row["name"]): json.loads(str(row["value_json"])) for row in rows}
+
+    def latest_workflow_action_output(self, instance_id: int, transition_name: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT output_json
+                FROM workflow_action_runs
+                WHERE workflow_instance_id = ?
+                  AND transition_name = ?
+                  AND status = 'succeeded'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (instance_id, transition_name),
+            ).fetchone()
+        if not row:
+            return {}
+        return cast(dict[str, Any], json.loads(str(row["output_json"])))
 
     def transition_workflow_instance(
         self,
@@ -1731,6 +1815,22 @@ SCHEMA = [
         FOREIGN KEY(workflow_instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
         FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id),
         FOREIGN KEY(attempt_id) REFERENCES attempts(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_artifacts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_instance_id INTEGER NOT NULL,
+        workflow_version_id INTEGER,
+        workflow_action_run_id INTEGER,
+        name TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workflow_instance_id, name),
+        FOREIGN KEY(workflow_instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE,
+        FOREIGN KEY(workflow_version_id) REFERENCES workflow_versions(id),
+        FOREIGN KEY(workflow_action_run_id) REFERENCES workflow_action_runs(id)
     )
     """,
     """

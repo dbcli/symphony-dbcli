@@ -344,7 +344,11 @@ class Orchestrator:
                 f"Workflow instance {instance['id']} is in state {instance['current_state']!r}, "
                 f"not {transition.from_state!r}."
             )
-        action_input = self._workflow_action_input(instance) | {"gate_id": gate_id} | (input_data or {})
+        action_input = self._workflow_action_input(
+            instance,
+            transition=transition,
+            extra={"gate_id": gate_id} | (input_data or {}),
+        )
         action = self._start_workflow_action(
             int(instance["id"]),
             attempt_id=_optional_int(instance["attempt_id"]),
@@ -372,6 +376,7 @@ class Orchestrator:
             status=self._workflow_status_for_state(transition.to_state),
             data=outcome.output,
         )
+        self._record_workflow_artifacts(action, transition, outcome.output)
         self.store.resolve_workflow_gate(gate_id, decision="approved", decided_by=decided_by)
         attempt_id = _optional_int(instance["attempt_id"])
         if attempt_id is not None and transition.to_state in self.config.workflow.terminal_states:
@@ -419,15 +424,21 @@ class Orchestrator:
                 raise OrchestratorError(f"Unknown primitive: {match.transition.action}")
             if allowed_side_effects is not None and primitive.side_effect not in allowed_side_effects:
                 return WorkflowAdvanceResult(current_state, ran_actions, "side_effect_not_allowed")
+            action_input = self._workflow_action_input(instance, transition=match.transition)
             action = self._start_workflow_action(
                 instance_id,
                 attempt_id=_optional_int(instance["attempt_id"]),
                 transition_name=match.name,
-                input_data=self._workflow_action_input(instance),
+                input_data=action_input,
             )
             try:
                 outcome = self.primitives.execute(
-                    self._primitive_context(instance, match.name, match.transition)
+                    self._primitive_context(
+                        instance,
+                        match.name,
+                        match.transition,
+                        input_data=action_input,
+                    )
                 )
             except PrimitiveExecutionError as exc:
                 self._finish_workflow_action(action, "failed", output_data=exc.output, error=str(exc))
@@ -441,6 +452,7 @@ class Orchestrator:
                 status=self._workflow_status_for_state(match.transition.to_state),
                 data=outcome.output,
             )
+            self._record_workflow_artifacts(action, match.transition, outcome.output)
             ran_actions += 1
 
     def _workflow_context(self, instance: sqlite3.Row) -> WorkflowExecutionContext:
@@ -449,7 +461,13 @@ class Orchestrator:
             pull_request_is_merged=self._pull_request_is_merged(_optional_int(instance["attempt_id"])),
         )
 
-    def _workflow_action_input(self, instance: sqlite3.Row) -> dict[str, Any]:
+    def _workflow_action_input(
+        self,
+        instance: sqlite3.Row,
+        *,
+        transition: WorkflowTransitionConfig | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         data: dict[str, Any] = {
             "repo": str(instance["repo"]),
             "issue_number": int(instance["issue_number"]),
@@ -458,7 +476,62 @@ class Orchestrator:
         attempt_id = _optional_int(instance["attempt_id"])
         if attempt_id is not None:
             data["attempt_id"] = attempt_id
+            attempt = self.store.attempt_by_id(attempt_id)
+            if attempt:
+                data.update(
+                    {
+                        "base_repo_path": str(attempt["base_repo_path"] or ""),
+                        "worktree_path": str(attempt["worktree_path"] or ""),
+                        "branch": str(attempt["branch"] or ""),
+                        "commit_sha": str(attempt["commit_sha"] or ""),
+                    }
+                )
+        if transition:
+            for field, source in transition.inputs.items():
+                data[field] = self._resolve_workflow_input(instance, source, data)
+        data.update(extra or {})
         return data
+
+    def _resolve_workflow_input(
+        self,
+        instance: sqlite3.Row,
+        source: str,
+        current_input: dict[str, Any],
+    ) -> Any:
+        context_values = self._workflow_context_values(instance)
+        if source in current_input:
+            return current_input[source]
+        if source in context_values:
+            return context_values[source]
+        if source.startswith("artifact."):
+            return self.store.workflow_artifact(int(instance["id"]), source.removeprefix("artifact."))
+        if source.startswith("outputs."):
+            transition_name, field = _split_transition_output(source.removeprefix("outputs."))
+            return self.store.latest_workflow_action_output(int(instance["id"]), transition_name).get(field)
+        raise OrchestratorError(f"Unsupported workflow input source: {source}")
+
+    def _workflow_context_values(self, instance: sqlite3.Row) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "issue.repo": str(instance["repo"]),
+            "issue.number": int(instance["issue_number"]),
+            "task.type": str(instance["task_type"]),
+        }
+        attempt_id = _optional_int(instance["attempt_id"])
+        if attempt_id is None:
+            return values
+        values["attempt.id"] = attempt_id
+        attempt = self.store.attempt_by_id(attempt_id)
+        if not attempt:
+            return values
+        values.update(
+            {
+                "attempt.base_repo_path": str(attempt["base_repo_path"] or ""),
+                "attempt.worktree_path": str(attempt["worktree_path"] or ""),
+                "attempt.branch": str(attempt["branch"] or ""),
+                "attempt.commit_sha": str(attempt["commit_sha"] or ""),
+            }
+        )
+        return values
 
     def _primitive_context(
         self,
@@ -498,6 +571,22 @@ class Orchestrator:
         if attempt_id is None:
             return False
         return any(bool(row["merged_at"]) for row in self.store.pull_requests_for_attempt(attempt_id))
+
+    def _record_workflow_artifacts(
+        self,
+        action: WorkflowActionRuntime | None,
+        transition: WorkflowTransitionConfig,
+        output: dict[str, Any],
+    ) -> None:
+        if not action:
+            return
+        artifacts = _workflow_artifacts_from_output(action.transition_name, transition, output)
+        self.store.record_workflow_artifacts(
+            action.instance_id,
+            artifacts,
+            workflow_version_id=self.workflow_version_id,
+            action_run_id=action.action_run_id,
+        )
 
     def _workflow_instance_id_for_attempt(self, attempt: sqlite3.Row, *, initial_state: str) -> int:
         attempt_id = int(attempt["id"])
@@ -674,6 +763,27 @@ def _cleanup_summary_with(
 
 def _workflow_action_idempotency_key(instance_id: int, transition_name: str) -> str:
     return f"workflow:{instance_id}:{transition_name}"
+
+
+def _workflow_artifacts_from_output(
+    transition_name: str,
+    transition: WorkflowTransitionConfig,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    artifacts = {f"{transition_name}.{field}": value for field, value in output.items()}
+    for field, target in transition.outputs.items():
+        if field not in output:
+            continue
+        artifact_name = target.removeprefix("artifact.") if target.startswith("artifact.") else target
+        artifacts[artifact_name] = output[field]
+    return artifacts
+
+
+def _split_transition_output(source: str) -> tuple[str, str]:
+    if "." not in source:
+        raise OrchestratorError(f"Workflow output source must be outputs.<transition>.<field>: {source}")
+    transition_name, field = source.split(".", 1)
+    return transition_name, field
 
 
 def _optional_int(value: object) -> int | None:

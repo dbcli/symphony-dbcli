@@ -227,6 +227,54 @@ def test_store_records_workflow_runtime_state(tmp_path: Path) -> None:
     assert gate["decision"] == "approved"
 
 
+def test_store_records_workflow_artifacts(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=9,
+            title="Fix completions",
+            url="https://github.com/dbcli/litecli/issues/9",
+            state="open",
+            labels=["symphony:todo"],
+            task_type="code",
+        )
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="todo",
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        attempt_id=None,
+        transition_name="allocate_workspace",
+        action_name="workspace.allocate",
+    )
+    store.finish_workflow_action_run(
+        action_run_id,
+        status="succeeded",
+        output_data={"worktree_path": "/tmp/litecli"},
+    )
+
+    store.record_workflow_artifacts(
+        instance_id,
+        {"workspace": "/tmp/litecli"},
+        workflow_version_id=None,
+        action_run_id=action_run_id,
+    )
+
+    assert store.workflow_artifact(instance_id, "workspace") == "/tmp/litecli"
+    assert store.workflow_artifacts(instance_id) == {"workspace": "/tmp/litecli"}
+    assert store.latest_workflow_action_output(instance_id, "allocate_workspace") == {
+        "worktree_path": "/tmp/litecli"
+    }
+
+
 def test_store_creates_code_follow_up_from_research_result(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

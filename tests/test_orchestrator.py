@@ -4,7 +4,7 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
-from symphony_dbcli.config import WorkspaceConfig, default_config
+from symphony_dbcli.config import WorkflowConfig, WorkspaceConfig, default_config
 from symphony_dbcli.github import GitHubIssue, PullRequest
 from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveOutcome
@@ -99,6 +99,34 @@ def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> 
     assert detail["attempt"]["status"] == "review"
     assert [row["transition_name"] for row in action_runs] == primitives.transitions
     assert {row["transition_name"] for row in gates} == {"create_draft_pr", "mark_blocked"}
+
+
+def test_orchestrator_hands_off_artifacts_between_transitions(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+    )
+    config = _config_with_artifact_handoff()
+    primitives = FakeWorkflowPrimitives()
+
+    Orchestrator(
+        config,
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_attempt(attempt_id)
+
+    instance = store.workflow_instance_for_attempt(attempt_id)
+    assert instance is not None
+    artifacts = store.workflow_artifacts(int(instance["id"]))
+    assert artifacts["workspace"] == "/tmp/worktree"
+    assert artifacts["allocate_workspace.worktree_path"] == "/tmp/worktree"
+    assert primitives.inputs[1]["worktree_path"] == "/tmp/worktree"
+    assert primitives.inputs[2]["worktree_path"] == "/tmp/worktree"
 
 
 def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -> None:
@@ -271,13 +299,43 @@ class FakeCleanupGitHub:
 class FakeWorkflowPrimitives:
     def __init__(self) -> None:
         self.transitions: list[str] = []
+        self.inputs: list[dict[str, object]] = []
 
     def fetch_issues(self) -> PrimitiveOutcome:
         return PrimitiveOutcome({"synced": 0})
 
     def execute(self, context: PrimitiveContext) -> PrimitiveOutcome:
         self.transitions.append(context.transition_name)
+        self.inputs.append(dict(context.input_data))
+        if context.transition_name == "allocate_workspace":
+            return PrimitiveOutcome(
+                {
+                    "worktree_path": "/tmp/worktree",
+                    "branch": "symphony/test",
+                    "base_repo_path": "/tmp/repo.git",
+                    "commit_sha": "abc123",
+                }
+            )
         return PrimitiveOutcome({"transition": context.transition_name})
+
+
+def _config_with_artifact_handoff() -> WorkflowConfig:
+    config = default_config()
+    transitions = dict(config.workflow.transitions)
+    transitions["allocate_workspace"] = replace(
+        transitions["allocate_workspace"],
+        outputs={"worktree_path": "artifact.workspace"},
+    )
+    transitions["run_setup"] = replace(
+        transitions["run_setup"],
+        inputs={"worktree_path": "artifact.workspace"},
+    )
+    transitions["fix_issue"] = replace(
+        transitions["fix_issue"],
+        inputs={"worktree_path": "outputs.allocate_workspace.worktree_path"},
+    )
+    workflow = replace(config.workflow, transitions=transitions)
+    return replace(config, workflow=workflow)
 
 
 def _seed_store(tmp_path: Path) -> Store:
