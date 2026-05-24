@@ -96,6 +96,25 @@ a {
   color: var(--muted);
 }
 
+.metric small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metric-state {
+  border-left: 4px solid var(--line);
+}
+
+.metric-state.is-cautious {
+  border-left-color: #d99a2b;
+}
+
+.metric-state.is-live {
+  border-left-color: var(--accent);
+}
+
 .toolbar form {
   display: flex;
   gap: 8px;

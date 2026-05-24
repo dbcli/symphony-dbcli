@@ -20,7 +20,7 @@ from .config import (
     validate_config,
     write_workflow,
 )
-from .dashboard import serve_dashboard
+from .dashboard import DashboardState, serve_dashboard
 from .env import load_local_env, parse_env_file
 from .github import GitHubClient
 from .github_app import default_manifest, write_manifest_form
@@ -285,19 +285,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
         args.workflow,
         profile=_runtime_profile(args),
     )
+    dashboard_state = DashboardState(config)
     if not args.no_poll:
-        thread = threading.Thread(target=_poll_loop, args=(args, store), daemon=True)
+        thread = threading.Thread(target=_poll_loop, args=(args, store, dashboard_state), daemon=True)
         thread.start()
-    serve_dashboard(store, config.dashboard.host, config.dashboard.port)
+    serve_dashboard(store, config.dashboard.host, config.dashboard.port, state=dashboard_state)
     return 0
 
 
-def _poll_loop(args: argparse.Namespace, store: Store) -> None:
+def _poll_loop(args: argparse.Namespace, store: Store, dashboard_state: DashboardState) -> None:
     watcher = WorkflowWatcher(store, args.workflow, profile=_runtime_profile(args))
     interval = 60
     while True:
         try:
             config, version_id, _changed = watcher.reload_if_changed()
+            dashboard_state.update_config(config)
             interval = config.workers.poll_interval_seconds
             orchestrator = Orchestrator(config, store, version_id)
             orchestrator.poll_once()

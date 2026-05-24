@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
 <section class="metrics">
+  <div class="metric metric-state {{ 'is-cautious' if runtime.dry_run else 'is-live' }}">
+    <strong>{{ "On" if runtime.dry_run else "Off" }}</strong>
+    <span>Dry Run</span>
+    <small>{{ runtime.profile }} profile</small>
+  </div>
   <div class="metric"><strong>{{ summary.issue_count }}</strong><span>Issues</span></div>
   <div class="metric"><strong>{{ summary.running_attempts }}</strong><span>Running</span></div>
   <div class="metric"><strong>{{ summary.queued_attempts }}</strong><span>Queued</span></div>

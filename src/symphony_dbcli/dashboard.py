@@ -2,31 +2,64 @@ from __future__ import annotations
 
 import mimetypes
 import urllib.parse
+from dataclasses import dataclass
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from threading import Lock
 from typing import Any
 
 from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescape
 
 from .ask import answer_question
+from .config import WorkflowConfig, default_config
 from .store import Store
 
 
-def serve_dashboard(store: Store, host: str, port: int) -> None:
-    handler = _handler_factory(store)
+@dataclass(frozen=True)
+class DashboardRuntime:
+    profile: str
+    dry_run: bool
+    database_path: str
+
+    @classmethod
+    def from_config(cls, config: WorkflowConfig) -> DashboardRuntime:
+        return cls(
+            profile=config.profile.active,
+            dry_run=config.policy.dry_run,
+            database_path=config.database.path,
+        )
+
+
+class DashboardState:
+    def __init__(self, config: WorkflowConfig):
+        self._config = config
+        self._lock = Lock()
+
+    def update_config(self, config: WorkflowConfig) -> None:
+        with self._lock:
+            self._config = config
+
+    def runtime(self) -> DashboardRuntime:
+        with self._lock:
+            return DashboardRuntime.from_config(self._config)
+
+
+def serve_dashboard(store: Store, host: str, port: int, state: DashboardState | None = None) -> None:
+    handler = _handler_factory(store, state or DashboardState(default_config()))
     server = ThreadingHTTPServer((host, port), handler)
     print(f"Dashboard listening on http://{host}:{port}")
     server.serve_forever()
 
 
-def render_index(store: Store) -> str:
+def render_index(store: Store, runtime: DashboardRuntime | None = None) -> str:
     return (
         _templates()
         .get_template("index.html")
         .render(
             title="Symphony DBCLI",
             summary=store.dashboard_summary(),
+            runtime=runtime or DashboardRuntime.from_config(default_config()),
         )
     )
 
@@ -87,7 +120,7 @@ def render_github_app_callback(code: str, state: str) -> str:
     )
 
 
-def _handler_factory(store: Store) -> type[BaseHTTPRequestHandler]:
+def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
@@ -95,7 +128,7 @@ def _handler_factory(store: Store) -> type[BaseHTTPRequestHandler]:
                 self._send_static(parsed.path.removeprefix("/static/"))
                 return
             if parsed.path == "/":
-                self._send_html(render_index(store))
+                self._send_html(render_index(store, state.runtime()))
                 return
             if parsed.path == "/ask":
                 params = urllib.parse.parse_qs(parsed.query)
