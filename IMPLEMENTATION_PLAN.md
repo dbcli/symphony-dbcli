@@ -443,12 +443,16 @@ those primitives are composed into automatic transitions and human-gated steps.
   Progress: attempt pages now render pending workflow gates directly, hide
   review controls unless the matching gate exists, and submit editable draft
   replies / draft PR content through the workflow-gate route.
-- [ ] Add conversational workflow editing to the dashboard. The user should be
+- [x] Add conversational workflow editing to the dashboard. The user should be
   able to describe any intended workflow change in plain language, including
   state-machine changes, worker preferences, testing policy, `/review`
   behavior, setup commands, and repo-specific instructions. The dashboard
   should show the proposed `WORKFLOW.md` diff, validate it, and apply it
   without leaving the dashboard.
+  Progress: the dashboard now has a workflow edit page that accepts a
+  plain-language change note, produces a validated `WORKFLOW.md` proposal and
+  diff, allows direct editing of the proposed file, and records applied edits in
+  SQLite.
 - [ ] Upgrade Ask Symphony into a hybrid query system. Keep the current
   deterministic SQLite fast paths for common questions about issue timing,
   turns, errors, worker status, workflow versions, and pending gates; add an

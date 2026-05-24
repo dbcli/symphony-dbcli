@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block body %}
+<section>
+  <div class="section-header">
+    <h2>Workflow Edit</h2>
+    {% if applied %}
+    <span class="status-pill is-ok">applied</span>
+    {% elif proposal.valid %}
+    <span class="status-pill is-ok">valid</span>
+    {% else %}
+    <span class="status-pill is-error">invalid</span>
+    {% endif %}
+  </div>
+  <form action="/workflow/edit" method="post" class="workflow-edit-form">
+    <label>
+      <span class="label">Change request</span>
+      <textarea name="request" rows="4">{{ proposal.request }}</textarea>
+    </label>
+    {% if proposal.diff %}
+    <div>
+      <span class="label">Proposed diff</span>
+      <pre class="result-body">{{ proposal.diff }}</pre>
+    </div>
+    {% endif %}
+    {% if proposal.error %}
+    <p class="workflow-error">{{ proposal.error }}</p>
+    {% endif %}
+    <label>
+      <span class="label">WORKFLOW.md proposal</span>
+      <textarea name="proposed_content" rows="28">{{ proposal.proposed_content }}</textarea>
+    </label>
+    <div class="form-actions">
+      <button type="submit" name="action" value="preview">Preview</button>
+      <button type="submit" name="action" value="apply" {% if not proposal.valid %}disabled{% endif %}>Apply</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

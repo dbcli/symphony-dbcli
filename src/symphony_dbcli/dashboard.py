@@ -8,16 +8,18 @@ from dataclasses import dataclass
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescape
 
 from .ask import AskAnswer, answer_with_links
-from .config import WorkflowConfig, default_config
+from .config import WorkflowConfig, WorkflowError, default_config, render_workflow
 from .orchestrator import Orchestrator, OrchestratorError
 from .review_actions import DraftPullRequestContent, build_draft_pr_content
 from .store import Store
+from .workflow_edit import WorkflowEditProposal, parsed_config, propose_workflow_edit, validate_workflow_edit
 
 
 @dataclass(frozen=True)
@@ -133,8 +135,9 @@ class WorkflowGraphView:
 
 
 class DashboardState:
-    def __init__(self, config: WorkflowConfig):
+    def __init__(self, config: WorkflowConfig, *, workflow_path: str = "WORKFLOW.md"):
         self._config = config
+        self._workflow_path = workflow_path
         self._lock = Lock()
 
     def update_config(self, config: WorkflowConfig) -> None:
@@ -144,6 +147,10 @@ class DashboardState:
     def config(self) -> WorkflowConfig:
         with self._lock:
             return self._config
+
+    def workflow_path(self) -> str:
+        with self._lock:
+            return self._workflow_path
 
     def runtime(self, *, start_queued_work_automatically: bool = True) -> DashboardRuntime:
         with self._lock:
@@ -241,6 +248,22 @@ def render_attempt(store: Store, attempt_id: int) -> str:
     )
 
 
+def render_workflow_edit(
+    *,
+    proposal: WorkflowEditProposal,
+    applied: bool = False,
+) -> str:
+    return (
+        _templates()
+        .get_template("workflow_edit.html")
+        .render(
+            title="Edit Workflow",
+            proposal=proposal,
+            applied=applied,
+        )
+    )
+
+
 def render_github_app_callback(code: str, state: str) -> str:
     return (
         _templates()
@@ -300,6 +323,14 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
             if parsed.path == "/ask":
                 params = urllib.parse.parse_qs(parsed.query)
                 self._send_html(render_ask(store, params.get("q", [""])[0]))
+                return
+            if parsed.path == "/workflow/edit":
+                current = _workflow_content(state)
+                self._send_html(
+                    render_workflow_edit(
+                        proposal=validate_workflow_edit(current, current, ""),
+                    )
+                )
                 return
             if parsed.path == "/github-app/callback":
                 params = urllib.parse.parse_qs(parsed.query)
@@ -363,6 +394,9 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 store.set_start_queued_work_automatically(enabled)
                 self._redirect("/")
                 return
+            if parsed.path == "/workflow/edit":
+                self._workflow_edit()
+                return
             self.send_error(404)
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
@@ -396,6 +430,31 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 self.send_error(502, str(exc))
                 return
             self._redirect(_safe_return_to(params, gate))
+
+        def _workflow_edit(self) -> None:
+            params = self._read_form()
+            current = _workflow_content(state)
+            action = params.get("action", ["preview"])[0]
+            request = params.get("request", [""])[0]
+            proposed_content = params.get("proposed_content", [""])[0]
+            proposal = (
+                validate_workflow_edit(current, proposed_content, request)
+                if proposed_content
+                else propose_workflow_edit(current, request)
+            )
+            if action == "apply" and proposal.valid:
+                try:
+                    config = parsed_config(proposal.proposed_content)
+                except WorkflowError as exc:
+                    proposal = validate_workflow_edit(current, proposal.proposed_content, f"{request}\n{exc}")
+                    self._send_html(render_workflow_edit(proposal=proposal))
+                    return
+                Path(state.workflow_path()).write_text(proposal.proposed_content, encoding="utf-8")
+                store.record_workflow_version(state.workflow_path(), proposal.proposed_content, config)
+                state.update_config(config)
+                self._send_html(render_workflow_edit(proposal=proposal, applied=True))
+                return
+            self._send_html(render_workflow_edit(proposal=proposal))
 
         def _create_draft_pr(self, attempt_id: int) -> None:
             params = self._read_form()
@@ -537,3 +596,10 @@ def _safe_return_to(params: dict[str, list[str]], gate: sqlite3.Row) -> str:
     if attempt_id is not None:
         return f"/attempts/{int(attempt_id)}"
     return _issue_path(str(gate["repo"]), int(gate["issue_number"]))
+
+
+def _workflow_content(state: DashboardState) -> str:
+    path = Path(state.workflow_path())
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return render_workflow(state.config())

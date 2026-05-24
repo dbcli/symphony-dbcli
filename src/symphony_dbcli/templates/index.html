@@ -63,6 +63,7 @@
 <section class="workflow-panel {{ 'has-error' if summary.workflow.has_current_error else '' }}">
   <div class="section-header">
     <h2>Workflow</h2>
+    <a class="text-link" href="/workflow/edit">Edit</a>
     {% if summary.workflow.latest %}
     <span class="status-pill {{ 'is-error' if summary.workflow.has_current_error else 'is-ok' }}">
       {{ summary.workflow.latest.status }}

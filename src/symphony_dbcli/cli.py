@@ -399,7 +399,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         args.workflow,
         profile=_runtime_profile(args),
     )
-    dashboard_state = DashboardState(config)
+    dashboard_state = DashboardState(config, workflow_path=args.workflow)
     if not args.no_poll:
         thread = threading.Thread(target=_poll_loop, args=(args, store, dashboard_state), daemon=True)
         thread.start()
