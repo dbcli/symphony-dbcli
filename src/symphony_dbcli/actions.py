@@ -170,7 +170,9 @@ def default_action_registry() -> ActionRegistry:
             human_gate_allowed=True,
             description="Ask Codex to research an issue and draft an answer.",
             input_fields=frozenset({"attempt_id", "repo", "issue_number", "task_type", "worktree_path"}),
-            output_fields=frozenset({"thread_id", "turn_count", "duration_ms", "message_chars"}),
+            output_fields=frozenset(
+                {"thread_id", "turn_count", "duration_ms", "message_chars", "result_type"}
+            ),
         ),
         PrimitiveSpec(
             name="codex.fix_issue",
@@ -182,7 +184,9 @@ def default_action_registry() -> ActionRegistry:
             human_gate_allowed=True,
             description="Ask Codex to implement a fix for a coding issue.",
             input_fields=frozenset({"attempt_id", "repo", "issue_number", "task_type", "worktree_path"}),
-            output_fields=frozenset({"thread_id", "turn_count", "duration_ms", "message_chars"}),
+            output_fields=frozenset(
+                {"thread_id", "turn_count", "duration_ms", "message_chars", "result_type"}
+            ),
         ),
         PrimitiveSpec(
             name="codex.address_pr_comments",
@@ -193,8 +197,12 @@ def default_action_registry() -> ActionRegistry:
             automatic_allowed=True,
             human_gate_allowed=True,
             description="Ask Codex to address pull request review comments.",
-            input_fields=frozenset({"attempt_id", "repo", "issue_number", "pull_request_number"}),
-            output_fields=frozenset({"thread_id", "turn_count", "duration_ms", "message_chars"}),
+            input_fields=frozenset(
+                {"attempt_id", "repo", "issue_number", "worktree_path", "pull_request_number", "comments"}
+            ),
+            output_fields=frozenset(
+                {"thread_id", "turn_count", "duration_ms", "message_chars", "result_type"}
+            ),
         ),
         PrimitiveSpec(
             name="codex.fix_ci_failures",
@@ -205,8 +213,20 @@ def default_action_registry() -> ActionRegistry:
             automatic_allowed=True,
             human_gate_allowed=True,
             description="Ask Codex to inspect failing CI and apply a fix.",
-            input_fields=frozenset({"attempt_id", "repo", "issue_number", "pull_request_number"}),
-            output_fields=frozenset({"thread_id", "turn_count", "duration_ms", "message_chars"}),
+            input_fields=frozenset(
+                {
+                    "attempt_id",
+                    "repo",
+                    "issue_number",
+                    "worktree_path",
+                    "pull_request_number",
+                    "failed_checks",
+                    "checks",
+                }
+            ),
+            output_fields=frozenset(
+                {"thread_id", "turn_count", "duration_ms", "message_chars", "result_type"}
+            ),
         ),
         PrimitiveSpec(
             name="workspace.allocate",

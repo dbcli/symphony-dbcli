@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from symphony_dbcli.config import default_config
+from symphony_dbcli.config import CodexConfig, WorkflowConfig, default_config
 from symphony_dbcli.github import GitHubCheckRun, GitHubCiStatus, GitHubComment, GitHubIssue, PullRequest
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
 from symphony_dbcli.store import Store
@@ -89,6 +90,72 @@ def test_fetch_ci_status_returns_failed_checks(tmp_path: Path) -> None:
     ]
 
 
+def test_address_pr_comments_runs_codex_with_review_context(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    attempt_id, worktree = _seed_attempt(store, tmp_path)
+    prompt_path = tmp_path / "prompt.txt"
+    config = _config_with_fake_codex(tmp_path, prompt_path, "Addressed review comments.")
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+
+    output = executor.execute(
+        _context(
+            "codex.address_pr_comments",
+            attempt_id=attempt_id,
+            worktree_path=str(worktree),
+            input_data={
+                "pull_request_number": 12,
+                "comments": [
+                    {
+                        "author": "reviewer",
+                        "body": "Please add a regression test.",
+                        "url": "https://github.com/dbcli/litecli/pull/12#discussion_r1",
+                    }
+                ],
+            },
+        )
+    ).output
+
+    detail = store.attempt_detail(attempt_id)
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "Pull request: https://github.com/dbcli/litecli/pull/12" in prompt
+    assert "Please add a regression test." in prompt
+    assert output["result_type"] == "pr_review_update"
+    assert detail is not None
+    assert detail["result"]["result_type"] == "pr_review_update"
+    assert detail["result"]["body"] == "Addressed review comments."
+
+
+def test_fix_ci_failures_runs_codex_with_failed_check_context(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    attempt_id, worktree = _seed_attempt(store, tmp_path)
+    prompt_path = tmp_path / "prompt.txt"
+    config = _config_with_fake_codex(tmp_path, prompt_path, "Fixed failing CI.")
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+
+    output = executor.execute(
+        _context(
+            "codex.fix_ci_failures",
+            attempt_id=attempt_id,
+            worktree_path=str(worktree),
+            input_data={
+                "pull_request_number": 12,
+                "failed_checks": [{"name": "tests", "conclusion": "failure", "url": "https://ci/1"}],
+                "checks": [{"name": "lint", "conclusion": "success"}],
+            },
+        )
+    ).output
+
+    detail = store.attempt_detail(attempt_id)
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "Failed checks:" in prompt
+    assert "name=tests" in prompt
+    assert "All checks:" in prompt
+    assert output["result_type"] == "ci_fix_summary"
+    assert detail is not None
+    assert detail["result"]["result_type"] == "ci_fix_summary"
+    assert detail["result"]["body"] == "Fixed failing CI."
+
+
 class FakePrimitiveGitHub:
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
         return [self.issue(repo, 245)]
@@ -153,6 +220,7 @@ def _context(
     action: str,
     *,
     attempt_id: int | None = None,
+    worktree_path: str = "",
     input_data: dict[str, Any] | None = None,
 ) -> PrimitiveContext:
     return PrimitiveContext(
@@ -168,6 +236,7 @@ def _context(
         task_type="code",
         issue_title="Logging path support",
         attempt_id=attempt_id,
+        worktree_path=worktree_path,
         input_data=input_data or {},
     )
 
@@ -176,3 +245,40 @@ def _store(tmp_path: Path) -> Store:
     store = Store(tmp_path / "symphony.db")
     store.init()
     return store
+
+
+def _seed_attempt(store: Store, tmp_path: Path) -> tuple[int, Path]:
+    github = FakePrimitiveGitHub()
+    store.upsert_issue(github.issue("dbcli/litecli", 245).snapshot(default_config().labels, "research"))
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        worktree_path=str(worktree),
+        status="running",
+    )
+    return attempt_id, worktree
+
+
+def _config_with_fake_codex(tmp_path: Path, prompt_path: Path, message: str) -> WorkflowConfig:
+    command = tmp_path / "fake_codex.py"
+    command.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "from pathlib import Path",
+                "import sys",
+                f"Path({str(prompt_path)!r}).write_text(sys.argv[-1], encoding='utf-8')",
+                f"print({message!r})",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    command.chmod(0o755)
+    return replace(
+        default_config(),
+        codex=CodexConfig(command=str(command), transport="exec"),
+    )

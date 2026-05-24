@@ -398,14 +398,13 @@ those primitives are composed into automatic transitions and human-gated steps.
   layer. Read primitives return typed snapshots that are persisted through
   workflow action outputs/artifacts; write primitives remain guarded by
   `policy.dry_run`.
-- [ ] Implement the first Codex primitives: `codex.research_issue`,
+- [x] Implement the first Codex primitives: `codex.research_issue`,
   `codex.fix_issue`, `codex.address_pr_comments`, and
   `codex.fix_ci_failures`. These should store worker results in SQLite
   regardless of dry-run mode.
-  Progress: primitive specs exist, and `codex.research_issue` /
-  `codex.fix_issue` now execute through dedicated primitives that store worker
-  results in SQLite regardless of dry-run mode. PR-comment and CI variants
-  remain.
+  Progress: all listed Codex primitives now execute through the primitive
+  layer and store worker results in SQLite regardless of dry-run mode. The PR
+  review and CI variants include fetched workflow context in the Codex prompt.
 - [ ] Implement workspace primitives: `workspace.allocate`,
   `workspace.run_setup`, `workspace.record_changes`, and
   `workspace.cleanup_after_merge`. The first implementation should support the

@@ -12,9 +12,11 @@ def build_worker_prompt(
     task_type: str,
     title: str,
     follow_up_context: str = "",
+    task_context: str = "",
     primitive_guidance: list[str] | None = None,
 ) -> str:
     follow_up_section = f"\nFollow-up context:\n{follow_up_context}\n" if follow_up_context else ""
+    task_context_section = f"\nTask context:\n{task_context}\n" if task_context else ""
     guidance_section = _guidance_section(primitive_guidance or [])
     return f"""\
 You are a Symphony worker for {repo}.
@@ -23,6 +25,7 @@ Task type: {task_type}
 GitHub issue: https://github.com/{repo}/issues/{issue_number}
 Issue title: {title}
 {follow_up_section}
+{task_context_section}
 {guidance_section}
 
 Follow this workflow:

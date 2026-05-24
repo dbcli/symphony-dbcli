@@ -113,7 +113,12 @@ class PrimitiveExecutor:
             return self._allocate_workspace(context)
         if context.transition.action == "workspace.run_setup":
             return self._run_setup(context)
-        if context.transition.action in {"codex.research_issue", "codex.fix_issue"}:
+        if context.transition.action in {
+            "codex.research_issue",
+            "codex.fix_issue",
+            "codex.address_pr_comments",
+            "codex.fix_ci_failures",
+        }:
             return self._run_codex(context)
         if context.transition.action == "github.create_draft_pr":
             return self._create_draft_pr(context)
@@ -235,6 +240,7 @@ class PrimitiveExecutor:
         attempt_id = _required_attempt_id(context)
         if not context.worktree_path:
             raise PrimitiveExecutionError("Attempt does not have an allocated workspace.")
+        task_context = _codex_task_context(context)
         prompt = build_worker_prompt(
             self.config,
             context.repo,
@@ -242,6 +248,7 @@ class PrimitiveExecutor:
             context.task_type,
             context.issue_title,
             follow_up_context=format_follow_up_context(self.store.follow_up_source_result(attempt_id)),
+            task_context=task_context,
             primitive_guidance=context.transition.guidance,
         )
         result = CodexRunner(self.config.codex).run(
@@ -255,14 +262,16 @@ class PrimitiveExecutor:
             attempt_id=attempt_id,
             repo=context.repo,
             issue_number=context.issue_number,
-            result_type=result_type(context.task_type),
-            title=result_title(context.task_type),
+            result_type=_codex_result_type(context),
+            title=_codex_result_title(context),
             body=body,
             metadata={
                 "dry_run": self.config.policy.dry_run,
                 "task_type": context.task_type,
+                "primitive": context.transition.action,
                 "worktree_path": context.worktree_path,
                 "branch": context.branch,
+                "pull_request_number": context.input_data.get("pull_request_number"),
             },
         )
         self.store.record_worker_log(attempt_id, "info", body)
@@ -281,6 +290,7 @@ class PrimitiveExecutor:
                 "turn_count": result.turn_count,
                 "duration_ms": result.duration_ms,
                 "message_chars": len(result.final_message),
+                "result_type": _codex_result_type(context),
             }
         )
 
@@ -358,3 +368,63 @@ def _required_str(data: dict[str, Any], key: str) -> str:
     if not value:
         raise PrimitiveExecutionError(f"Primitive input '{key}' is required.")
     return value
+
+
+def _codex_task_context(context: PrimitiveContext) -> str:
+    if context.transition.action == "codex.address_pr_comments":
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        comments = _input_dicts(context.input_data, "comments")
+        return "\n".join(
+            [
+                f"Pull request: https://github.com/{context.repo}/pull/{pull_request_number}",
+                "Address the unresolved review comments below and keep the existing issue fix focused.",
+                _format_records("Review comments", comments),
+            ]
+        ).strip()
+    if context.transition.action == "codex.fix_ci_failures":
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        failed_checks = _input_dicts(context.input_data, "failed_checks")
+        checks = _input_dicts(context.input_data, "checks")
+        return "\n".join(
+            [
+                f"Pull request: https://github.com/{context.repo}/pull/{pull_request_number}",
+                "Inspect the failing CI checks below, fix the issue, and rerun the narrowest relevant tests.",
+                _format_records("Failed checks", failed_checks),
+                _format_records("All checks", checks),
+            ]
+        ).strip()
+    return ""
+
+
+def _codex_result_type(context: PrimitiveContext) -> str:
+    if context.transition.action == "codex.address_pr_comments":
+        return "pr_review_update"
+    if context.transition.action == "codex.fix_ci_failures":
+        return "ci_fix_summary"
+    return result_type(context.task_type)
+
+
+def _codex_result_title(context: PrimitiveContext) -> str:
+    if context.transition.action == "codex.address_pr_comments":
+        return "PR Review Update"
+    if context.transition.action == "codex.fix_ci_failures":
+        return "CI Fix Summary"
+    return result_title(context.task_type)
+
+
+def _input_dicts(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    return cast(list[dict[str, Any]], data.get(key) or [])
+
+
+def _format_records(title: str, records: list[dict[str, Any]]) -> str:
+    if not records:
+        return f"{title}: none provided."
+    lines = [f"{title}:"]
+    for index, record in enumerate(records, start=1):
+        fields = [
+            f"{name}={value}"
+            for name, value in record.items()
+            if value not in ("", None) and value != [] and value != {}
+        ]
+        lines.append(f"{index}. " + "; ".join(fields))
+    return "\n".join(lines)
