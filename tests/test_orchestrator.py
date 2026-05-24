@@ -7,6 +7,7 @@ from pathlib import Path
 from symphony_dbcli.config import WorkspaceConfig, default_config
 from symphony_dbcli.github import GitHubIssue, PullRequest
 from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
+from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveOutcome
 from symphony_dbcli.store import IssueSnapshot, Store
 
 
@@ -47,6 +48,42 @@ def test_orchestrator_claim_records_workflow_runtime_state(tmp_path: Path) -> No
     assert transition is not None
     assert transition["from_state"] == "todo"
     assert transition["to_state"] == "claimed"
+
+
+def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+    )
+    primitives = FakeWorkflowPrimitives()
+
+    Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_attempt(attempt_id)
+
+    instance = store.workflow_instance_for_attempt(attempt_id)
+    detail = store.attempt_detail(attempt_id)
+    gates = store.pending_workflow_gates()
+    with store.connect() as conn:
+        action_runs = list(
+            conn.execute(
+                "SELECT transition_name, action_name, status FROM workflow_action_runs ORDER BY id ASC"
+            )
+        )
+    assert primitives.transitions == ["allocate_workspace", "run_setup", "fix_issue", "request_review"]
+    assert instance is not None
+    assert instance["current_state"] == "review"
+    assert detail is not None
+    assert detail["attempt"]["status"] == "review"
+    assert [row["transition_name"] for row in action_runs] == primitives.transitions
+    assert {row["transition_name"] for row in gates} == {"create_draft_pr", "mark_blocked"}
 
 
 def test_orchestrator_cleans_worktree_after_pr_merge(tmp_path: Path) -> None:
@@ -165,6 +202,18 @@ class FakeCleanupGitHub:
             state="closed",
             merged_at="2026-05-24T14:00:00Z",
         )
+
+
+class FakeWorkflowPrimitives:
+    def __init__(self) -> None:
+        self.transitions: list[str] = []
+
+    def fetch_issues(self) -> PrimitiveOutcome:
+        return PrimitiveOutcome({"synced": 0})
+
+    def execute(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        self.transitions.append(context.transition_name)
+        return PrimitiveOutcome({"transition": context.transition_name})
 
 
 def _seed_store(tmp_path: Path) -> Store:

@@ -395,6 +395,20 @@ class Store:
     ) -> int:
         now = utc_now()
         with self.connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM workflow_gates
+                WHERE workflow_instance_id = ?
+                  AND transition_name = ?
+                  AND status = 'pending'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (instance_id, transition_name),
+            ).fetchone()
+            if existing:
+                return int(existing["id"])
             cursor = conn.execute(
                 """
                 INSERT INTO workflow_gates(

@@ -387,25 +387,29 @@ those primitives are composed into automatic transitions and human-gated steps.
   `github.fetch_issue`, `github.fetch_comments`, `github.apply_labels`,
   `github.create_draft_pr`, `github.post_issue_comment`,
   `github.fetch_pull_request`, and `github.fetch_ci_status`.
-  Progress: primitive specs exist and current orchestration records
-  `github.apply_labels` action runs. The full primitive execution layer is not
-  implemented yet.
+  Progress: primitive specs exist, `github.fetch_issues` and
+  `github.apply_labels` now execute through the primitive layer, and workflow
+  action runs are recorded by the generic dispatcher. The remaining GitHub
+  primitives still need dedicated implementations.
 - [ ] Implement the first Codex primitives: `codex.research_issue`,
   `codex.fix_issue`, `codex.address_pr_comments`, and
   `codex.fix_ci_failures`. These should store worker results in SQLite
   regardless of dry-run mode.
-  Progress: primitive specs exist and current orchestration records
-  `codex.research_issue` / `codex.fix_issue` action runs. Dedicated primitive
-  implementations and PR-comment/CI variants remain.
+  Progress: primitive specs exist, and `codex.research_issue` /
+  `codex.fix_issue` now execute through dedicated primitives that store worker
+  results in SQLite regardless of dry-run mode. PR-comment and CI variants
+  remain.
 - [ ] Implement workspace primitives: `workspace.allocate`,
   `workspace.run_setup`, `workspace.record_changes`, and
   `workspace.cleanup_after_merge`. The first implementation should support the
   existing worktree strategy; a clone strategy should share the same primitive
   contract once added. Setup execution should capture command, duration, exit
   status, stdout/stderr excerpts, and whether failure blocks the worker.
-  Progress: `workspace.run_setup` is implemented and current orchestration
-  records `workspace.allocate`, `workspace.run_setup`, and cleanup action runs.
-  `workspace.record_changes` and strategy-neutral primitive dispatch remain.
+  Progress: `workspace.allocate` and `workspace.run_setup` now execute through
+  dedicated primitives and record workflow action runs. Setup output captures
+  command, duration, exit status, stdout/stderr excerpts, and blocking
+  failures. `workspace.record_changes`, cleanup-as-primitive, and clone support
+  remain.
 - [ ] Add workspace strategy configuration and validation. The dashboard and
   CLI should clearly show whether new tasks start from git worktrees or full
   clones, which branch policy is active, and where cleanup will happen.
@@ -421,9 +425,11 @@ those primitives are composed into automatic transitions and human-gated steps.
 - [ ] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.
-  Progress: orchestration now records workflow runtime rows and uses the
-  workflow engine for task-type transition selection and review gate selection.
-  The main poll/claim/run loop is still mostly hardcoded.
+  Progress: claim and worker execution now advance workflow instances by
+  evaluating automatic transitions from `WORKFLOW.md` and executing primitives
+  through a generic dispatcher. The poll loop still creates candidates from the
+  configured GitHub repos directly, and manual review actions are still
+  route-specific rather than fully gate-driven.
 - [ ] Move dashboard review actions to workflow gates. The dashboard should
   render available actions from pending gate rows rather than from hardcoded
   route-specific assumptions.
