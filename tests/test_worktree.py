@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 from symphony_dbcli.config import WorkspaceConfig
+from symphony_dbcli.workflow_definition import SetupConfig, SetupStepConfig
 from symphony_dbcli.worktree import WorktreeManager, safe_key
 
 
@@ -47,6 +49,57 @@ def test_remove_worktree_removes_clean_managed_worktree(tmp_path: Path) -> None:
     assert removal.removed is True
     assert removal.reason == "removed"
     assert not worktree.exists()
+
+
+def test_run_setup_records_command_results(tmp_path: Path) -> None:
+    manager = WorktreeManager(WorkspaceConfig(root="/worktrees", bare_repos_root="/repos"))
+    setup = SetupConfig(
+        steps={
+            "install": SetupStepConfig(
+                command=[sys.executable, "-c", "print('ready')"],
+                timeout_seconds=10,
+            ),
+            "manual_seed": SetupStepConfig(
+                command=[sys.executable, "-c", "raise SystemExit(1)"],
+                run="manual",
+            ),
+        }
+    )
+
+    results = manager.run_setup(str(tmp_path), setup)
+
+    assert len(results) == 2
+    assert results[0].name == "install"
+    assert results[0].status == "succeeded"
+    assert results[0].exit_code == 0
+    assert results[0].stdout_excerpt.strip() == "ready"
+    assert results[1].name == "manual_seed"
+    assert results[1].status == "skipped"
+    assert results[1].stderr_excerpt == "manual setup step"
+
+
+def test_run_setup_records_blocking_failures(tmp_path: Path) -> None:
+    manager = WorktreeManager(WorkspaceConfig(root="/worktrees", bare_repos_root="/repos"))
+    setup = SetupConfig(
+        steps={
+            "fail": SetupStepConfig(
+                command=[
+                    sys.executable,
+                    "-c",
+                    "import sys; print('bad', file=sys.stderr); raise SystemExit(3)",
+                ],
+                timeout_seconds=10,
+                blocks_worker=True,
+            )
+        }
+    )
+
+    results = manager.run_setup(str(tmp_path), setup)
+
+    assert results[0].status == "failed"
+    assert results[0].exit_code == 3
+    assert results[0].stderr_excerpt.strip() == "bad"
+    assert results[0].blocks_worker is True
 
 
 def _git(path: Path, *args: str) -> None:

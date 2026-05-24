@@ -4,8 +4,11 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+from .clock import elapsed_ms, monotonic_ns
 from .config import WorkspaceConfig
+from .workflow_definition import SetupConfig
 
 
 class WorktreeError(RuntimeError):
@@ -29,7 +32,20 @@ class WorktreeRemoval:
     reason: str
 
 
+@dataclass(frozen=True)
+class SetupStepResult:
+    name: str
+    command: list[str]
+    status: Literal["succeeded", "failed", "skipped"]
+    exit_code: int | None
+    stdout_excerpt: str
+    stderr_excerpt: str
+    duration_ms: int
+    blocks_worker: bool
+
+
 SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+OUTPUT_EXCERPT_LIMIT = 4000
 
 
 class WorktreeManager:
@@ -108,6 +124,67 @@ class WorktreeManager:
         self._run(["git", "--git-dir", str(base), "worktree", "prune"], check=False)
         return WorktreeRemoval(worktree_path=worktree_path, removed=True, reason="removed")
 
+    def run_setup(self, worktree_path: str, setup: SetupConfig) -> list[SetupStepResult]:
+        if not setup.enabled:
+            return []
+        cwd = Path(worktree_path)
+        if not cwd.exists():
+            raise WorktreeError(f"Workspace does not exist: {worktree_path}")
+        results: list[SetupStepResult] = []
+        for name, step in setup.steps.items():
+            if step.run == "manual":
+                results.append(
+                    SetupStepResult(
+                        name=name,
+                        command=step.command,
+                        status="skipped",
+                        exit_code=None,
+                        stdout_excerpt="",
+                        stderr_excerpt="manual setup step",
+                        duration_ms=0,
+                        blocks_worker=step.blocks_worker,
+                    )
+                )
+                continue
+            started = monotonic_ns()
+            try:
+                result = subprocess.run(
+                    step.command,
+                    cwd=str(cwd),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=step.timeout_seconds,
+                )
+                ended = monotonic_ns()
+                results.append(
+                    SetupStepResult(
+                        name=name,
+                        command=step.command,
+                        status="succeeded" if result.returncode == 0 else "failed",
+                        exit_code=result.returncode,
+                        stdout_excerpt=_excerpt(result.stdout),
+                        stderr_excerpt=_excerpt(result.stderr),
+                        duration_ms=elapsed_ms(started, ended),
+                        blocks_worker=step.blocks_worker,
+                    )
+                )
+            except subprocess.TimeoutExpired as exc:
+                ended = monotonic_ns()
+                results.append(
+                    SetupStepResult(
+                        name=name,
+                        command=step.command,
+                        status="failed",
+                        exit_code=None,
+                        stdout_excerpt=_excerpt(_timeout_output(exc.stdout)),
+                        stderr_excerpt=_excerpt(_timeout_output(exc.stderr) or "setup step timed out"),
+                        duration_ms=elapsed_ms(started, ended),
+                        blocks_worker=step.blocks_worker,
+                    )
+                )
+        return results
+
     def _ensure_base_repo(self, path: Path, clone_url: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
@@ -161,3 +238,17 @@ class WorktreeManager:
 def safe_key(value: str) -> str:
     cleaned = SAFE_RE.sub("_", value.strip()).strip("_")
     return cleaned or "repo"
+
+
+def _excerpt(value: str) -> str:
+    if len(value) <= OUTPUT_EXCERPT_LIMIT:
+        return value
+    return value[-OUTPUT_EXCERPT_LIMIT:]
+
+
+def _timeout_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
