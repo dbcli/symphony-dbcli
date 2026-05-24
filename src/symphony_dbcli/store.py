@@ -13,8 +13,9 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
+START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,27 @@ class Store:
                     """,
                     (limit,),
                 )
+            )
+
+    def start_queued_work_automatically(self) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (START_QUEUED_WORK_AUTOMATICALLY_KEY,),
+            ).fetchone()
+            if not row:
+                return True
+            return str(row["value"]) == "true"
+
+    def set_start_queued_work_automatically(self, enabled: bool) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings(key, value, updated_at)
+                VALUES(?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (START_QUEUED_WORK_AUTOMATICALLY_KEY, "true" if enabled else "false", utc_now()),
             )
 
     def upsert_repo(self, full_name: str) -> None:
@@ -578,18 +600,103 @@ class Store:
                 ),
             )
 
-    def record_pr(self, attempt_id: int, repo: str, number: int, url: str, title: str) -> None:
+    def record_pr(
+        self,
+        attempt_id: int,
+        repo: str,
+        number: int,
+        url: str,
+        title: str,
+        *,
+        state: str = "",
+        merged_at: str = "",
+    ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO pull_requests(attempt_id, repo, number, url, title, created_at)
-                VALUES(?, ?, ?, ?, ?, ?)
+                INSERT INTO pull_requests(
+                    attempt_id, repo, number, url, title, state, merged_at, cleanup_error, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, '', ?)
                 ON CONFLICT(repo, number) DO UPDATE SET
                     attempt_id = excluded.attempt_id,
                     url = excluded.url,
-                    title = excluded.title
+                    title = excluded.title,
+                    state = excluded.state,
+                    merged_at = excluded.merged_at,
+                    cleanup_error = ''
                 """,
-                (attempt_id, repo, number, url, title, utc_now()),
+                (attempt_id, repo, number, url, title, state, merged_at, utc_now()),
+            )
+
+    def pull_requests_for_attempt(self, attempt_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    "SELECT * FROM pull_requests WHERE attempt_id = ? ORDER BY id DESC",
+                    (attempt_id,),
+                )
+            )
+
+    def pending_pull_request_cleanups(self, *, retry_errors: bool = False) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        pr.*,
+                        a.worktree_path,
+                        a.base_repo_path,
+                        a.branch
+                    FROM pull_requests pr
+                    JOIN attempts a ON a.id = pr.attempt_id
+                    WHERE pr.worktree_cleaned_at IS NULL
+                      AND a.worktree_path != ''
+                      AND a.base_repo_path != ''
+                      AND (? OR pr.cleanup_error = '')
+                    ORDER BY pr.created_at ASC, pr.id ASC
+                    """,
+                    (1 if retry_errors else 0,),
+                )
+            )
+
+    def update_pull_request_status(
+        self,
+        pull_request_id: int,
+        *,
+        state: str,
+        merged_at: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pull_requests
+                SET state = ?, merged_at = ?
+                WHERE id = ?
+                """,
+                (state, merged_at, pull_request_id),
+            )
+
+    def mark_pull_request_worktree_cleaned(self, pull_request_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pull_requests
+                SET worktree_cleaned_at = ?, cleanup_error = ''
+                WHERE id = ?
+                """,
+                (utc_now(), pull_request_id),
+            )
+
+    def mark_pull_request_worktree_cleanup_failed(self, pull_request_id: int, error: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE pull_requests
+                SET cleanup_error = ?
+                WHERE id = ?
+                """,
+                (error, pull_request_id),
             )
 
     def record_comment(
@@ -608,6 +715,31 @@ class Store:
                 VALUES(?, ?, ?, ?, ?, ?, ?)
                 """,
                 (attempt_id, repo, issue_number, url, body, status, utc_now()),
+            )
+
+    def comment_by_id(self, comment_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone(),
+            )
+
+    def mark_comment_posted(self, comment_id: int, *, body: str, url: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE comments
+                SET body = ?, url = ?, status = 'posted'
+                WHERE id = ?
+                """,
+                (body, url, comment_id),
+            )
+
+    def update_attempt_outcome(self, attempt_id: int, outcome: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE attempts SET outcome = ?, updated_at = ? WHERE id = ?",
+                (outcome, utc_now(), attempt_id),
             )
 
     def attempt_by_id(self, attempt_id: int) -> sqlite3.Row | None:
@@ -922,6 +1054,7 @@ class Store:
                     "SELECT * FROM worker_results WHERE attempt_id = ?",
                     (attempt_id,),
                 ).fetchone(),
+                "pull_requests": self.pull_requests_for_attempt(attempt_id),
                 "source_result": self.follow_up_source_result(attempt_id),
                 "follow_up_targets": self.attempt_follow_up_targets(attempt_id),
                 "code_follow_up": self.code_follow_up_attempt(attempt_id),
@@ -1099,6 +1232,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _add_column(conn, "workers", "deadline_at", "TEXT")
     _add_column(conn, "workers", "exit_code", "INTEGER")
     _add_column(conn, "workers", "stop_reason", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "pull_requests", "state", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "pull_requests", "merged_at", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "pull_requests", "worktree_cleaned_at", "TEXT")
+    _add_column(conn, "pull_requests", "cleanup_error", "TEXT NOT NULL DEFAULT ''")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -1328,6 +1465,10 @@ SCHEMA = [
         number INTEGER NOT NULL,
         url TEXT NOT NULL,
         title TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT '',
+        merged_at TEXT NOT NULL DEFAULT '',
+        worktree_cleaned_at TEXT,
+        cleanup_error TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         UNIQUE(repo, number),
         FOREIGN KEY(attempt_id) REFERENCES attempts(id) ON DELETE CASCADE

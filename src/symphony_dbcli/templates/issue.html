@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_draft_replies.html" import draft_replies %}
 {% block body %}
 {% if not detail %}
 <section class="empty">Issue not found.</section>
@@ -33,5 +34,7 @@
   <div class="empty">No attempts.</div>
   {% endif %}
 </section>
+
+{{ draft_replies(detail.comments, show_attempt_link=True) }}
 {% endif %}
 {% endblock %}

@@ -6,17 +6,38 @@ import sqlite3
 import threading
 import traceback
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from .config import WorkflowConfig, WorkflowError, parse_workflow
-from .github import GitHubClient, GitHubError
+from .github import GitHubClient, GitHubError, GitHubIssue, PullRequest
 from .runner import CodexRunner
 from .store import IssueSnapshot, Store
-from .worktree import WorktreeManager
+from .worktree import WorktreeError, WorktreeManager
 
 
 class OrchestratorError(RuntimeError):
     """Raised when orchestration cannot continue."""
+
+
+class OrchestratorGitHubClient(Protocol):
+    def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]: ...
+
+    def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
+
+    def remove_label(self, repo: str, issue_number: int, label: str) -> None: ...
+
+    def pull_request(self, repo: str, number: int) -> PullRequest: ...
+
+
+@dataclass(frozen=True)
+class WorktreeCleanupSummary:
+    scanned: int = 0
+    merged: int = 0
+    cleaned: int = 0
+    skipped: int = 0
+    errors: int = 0
 
 
 def load_and_record_workflow(
@@ -61,11 +82,18 @@ class WorkflowWatcher:
 
 
 class Orchestrator:
-    def __init__(self, config: WorkflowConfig, store: Store, workflow_version_id: int | None = None):
+    def __init__(
+        self,
+        config: WorkflowConfig,
+        store: Store,
+        workflow_version_id: int | None = None,
+        *,
+        github: OrchestratorGitHubClient | None = None,
+    ):
         self.config = config
         self.store = store
         self.workflow_version_id = workflow_version_id
-        self.github = GitHubClient(config.github)
+        self.github = github or GitHubClient(config.github)
 
     def poll_once(self) -> int:
         synced = 0
@@ -105,6 +133,59 @@ class Orchestrator:
             counts["*"] = counts.get("*", 0) + 1
             claimed += 1
         return claimed
+
+    def cleanup_merged_pull_request_worktrees(
+        self,
+        *,
+        retry_errors: bool = False,
+    ) -> WorktreeCleanupSummary:
+        manager = WorktreeManager(self.config.workspace)
+        summary = WorktreeCleanupSummary()
+        for row in self.store.pending_pull_request_cleanups(retry_errors=retry_errors):
+            summary = _cleanup_summary_with(summary, scanned=1)
+            pull_request_id = int(row["id"])
+            attempt_id = int(row["attempt_id"])
+            pr = self.github.pull_request(str(row["repo"]), int(row["number"]))
+            self.store.update_pull_request_status(
+                pull_request_id,
+                state=pr.state,
+                merged_at=pr.merged_at,
+            )
+            if not pr.is_merged:
+                summary = _cleanup_summary_with(summary, skipped=1)
+                continue
+            summary = _cleanup_summary_with(summary, merged=1)
+            try:
+                removal = manager.remove_worktree(
+                    base_repo_path=str(row["base_repo_path"]),
+                    worktree_path=str(row["worktree_path"]),
+                )
+            except WorktreeError as exc:
+                self.store.mark_pull_request_worktree_cleanup_failed(pull_request_id, str(exc))
+                self.store.record_error(
+                    attempt_id,
+                    phase="worktree",
+                    error_type="WorktreeCleanupError",
+                    message=str(exc),
+                    recoverable=True,
+                )
+                summary = _cleanup_summary_with(summary, errors=1)
+                continue
+            self.store.mark_pull_request_worktree_cleaned(pull_request_id)
+            self.store.record_timeline_event(
+                attempt_id,
+                phase="worktree",
+                event_type="cleaned_after_pr_merge",
+                message=removal.worktree_path,
+                data={
+                    "pull_request": pr.number,
+                    "merged_at": pr.merged_at,
+                    "removed": removal.removed,
+                    "reason": removal.reason,
+                },
+            )
+            summary = _cleanup_summary_with(summary, cleaned=1)
+        return summary
 
     def _claim_issue(self, issue: sqlite3.Row) -> int:
         repo = str(issue["repo"])
@@ -346,3 +427,21 @@ def _result_title(task_type: str) -> str:
     if task_type == "code":
         return "Code Worker Summary"
     return "Research Answer"
+
+
+def _cleanup_summary_with(
+    summary: WorktreeCleanupSummary,
+    *,
+    scanned: int = 0,
+    merged: int = 0,
+    cleaned: int = 0,
+    skipped: int = 0,
+    errors: int = 0,
+) -> WorktreeCleanupSummary:
+    return WorktreeCleanupSummary(
+        scanned=summary.scanned + scanned,
+        merged=summary.merged + merged,
+        cleaned=summary.cleaned + cleaned,
+        skipped=summary.skipped + skipped,
+        errors=summary.errors + errors,
+    )

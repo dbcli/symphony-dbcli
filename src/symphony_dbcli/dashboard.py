@@ -14,6 +14,7 @@ from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescap
 
 from .ask import answer_question
 from .config import WorkflowConfig, default_config
+from .review_actions import ReviewActionError, ReviewActions
 from .store import Store
 
 
@@ -22,13 +23,20 @@ class DashboardRuntime:
     profile: str
     dry_run: bool
     database_path: str
+    start_queued_work_automatically: bool
 
     @classmethod
-    def from_config(cls, config: WorkflowConfig) -> DashboardRuntime:
+    def from_config(
+        cls,
+        config: WorkflowConfig,
+        *,
+        start_queued_work_automatically: bool = True,
+    ) -> DashboardRuntime:
         return cls(
             profile=config.profile.active,
             dry_run=config.policy.dry_run,
             database_path=config.database.path,
+            start_queued_work_automatically=start_queued_work_automatically,
         )
 
 
@@ -41,9 +49,16 @@ class DashboardState:
         with self._lock:
             self._config = config
 
-    def runtime(self) -> DashboardRuntime:
+    def config(self) -> WorkflowConfig:
         with self._lock:
-            return DashboardRuntime.from_config(self._config)
+            return self._config
+
+    def runtime(self, *, start_queued_work_automatically: bool = True) -> DashboardRuntime:
+        with self._lock:
+            return DashboardRuntime.from_config(
+                self._config,
+                start_queued_work_automatically=start_queued_work_automatically,
+            )
 
 
 def serve_dashboard(store: Store, host: str, port: int, state: DashboardState | None = None) -> None:
@@ -60,7 +75,11 @@ def render_index(store: Store, runtime: DashboardRuntime | None = None) -> str:
         .render(
             title="Symphony DBCLI",
             summary=store.dashboard_summary(),
-            runtime=runtime or DashboardRuntime.from_config(default_config()),
+            runtime=runtime
+            or DashboardRuntime.from_config(
+                default_config(),
+                start_queued_work_automatically=store.start_queued_work_automatically(),
+            ),
         )
     )
 
@@ -129,7 +148,14 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 self._send_static(parsed.path.removeprefix("/static/"))
                 return
             if parsed.path == "/":
-                self._send_html(render_index(store, state.runtime()))
+                self._send_html(
+                    render_index(
+                        store,
+                        state.runtime(
+                            start_queued_work_automatically=store.start_queued_work_automatically()
+                        ),
+                    )
+                )
                 return
             if parsed.path == "/ask":
                 params = urllib.parse.parse_qs(parsed.query)
@@ -167,6 +193,28 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                     return
                 self._create_code_follow_up(source_attempt_id)
                 return
+            if len(parts) == 3 and parts[0] == "attempts" and parts[2] == "draft-pr":
+                try:
+                    attempt_id = int(parts[1])
+                except ValueError:
+                    self.send_error(404)
+                    return
+                self._create_draft_pr(attempt_id)
+                return
+            if len(parts) == 3 and parts[0] == "comments" and parts[2] == "post":
+                try:
+                    comment_id = int(parts[1])
+                except ValueError:
+                    self.send_error(404)
+                    return
+                self._post_comment(comment_id)
+                return
+            if parsed.path == "/settings/start-queued-work-automatically":
+                params = self._read_form()
+                enabled = params.get("enabled", ["false"])[0] == "true"
+                store.set_start_queued_work_automatically(enabled)
+                self._redirect("/")
+                return
             self.send_error(404)
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
@@ -183,6 +231,35 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 self.send_error(400, str(exc))
                 return
             self._redirect(f"/attempts/{target_attempt_id}")
+
+        def _create_draft_pr(self, attempt_id: int) -> None:
+            try:
+                ReviewActions(state.config(), store).create_draft_pr(attempt_id)
+            except ReviewActionError as exc:
+                self.send_error(400, str(exc))
+                return
+            except RuntimeError as exc:
+                self.send_error(502, str(exc))
+                return
+            self._redirect(f"/attempts/{attempt_id}")
+
+        def _post_comment(self, comment_id: int) -> None:
+            params = self._read_form()
+            try:
+                posted = ReviewActions(state.config(), store).post_comment(
+                    comment_id,
+                    params.get("body", [""])[0],
+                )
+            except ReviewActionError as exc:
+                self.send_error(400, str(exc))
+                return
+            except RuntimeError as exc:
+                self.send_error(502, str(exc))
+                return
+            if posted.attempt_id is not None:
+                self._redirect(f"/attempts/{posted.attempt_id}")
+                return
+            self._redirect(_issue_path(posted.repo, posted.issue_number))
 
         def _send_html(self, body: str) -> None:
             encoded = body.encode("utf-8")
@@ -208,6 +285,12 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _read_form(self) -> dict[str, list[str]]:
+            raw_length = self.headers.get("Content-Length", "0")
+            length = int(raw_length) if raw_length.isdecimal() else 0
+            body = self.rfile.read(length).decode("utf-8") if length else ""
+            return urllib.parse.parse_qs(body)
 
         def _redirect(self, location: str) -> None:
             self.send_response(303)

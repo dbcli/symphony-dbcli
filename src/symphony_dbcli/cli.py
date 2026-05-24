@@ -89,9 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
     poll_once = subcommands.add_parser("poll-once", help="Sync dispatchable GitHub issues into SQLite")
     poll_once.set_defaults(func=cmd_poll_once)
 
-    serve = subcommands.add_parser("serve", help="Run dashboard and optional polling loop")
+    serve = subcommands.add_parser("serve", help="Run dashboard and polling loop")
     serve.add_argument("--no-poll", action="store_true", help="Only run the dashboard")
-    serve.add_argument("--dispatch", action="store_true", help="Claim eligible issues and start workers")
     serve.set_defaults(func=cmd_serve)
 
     worker = subcommands.add_parser("worker", help="Worker commands")
@@ -109,6 +108,16 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_sub = worktree.add_subparsers(required=True)
     cleanup = worktree_sub.add_parser("cleanup", help="Prune stale git worktree metadata")
     cleanup.set_defaults(func=cmd_worktree_cleanup)
+    cleanup_merged_prs = worktree_sub.add_parser(
+        "cleanup-merged-prs",
+        help="Remove attempt worktrees after their recorded pull request is merged",
+    )
+    cleanup_merged_prs.add_argument(
+        "--retry-errors",
+        action="store_true",
+        help="Retry pull request worktree cleanups that previously failed",
+    )
+    cleanup_merged_prs.set_defaults(func=cmd_worktree_cleanup_merged_prs)
 
     github_app = subcommands.add_parser("github-app", help="GitHub App setup commands")
     github_app_sub = github_app.add_subparsers(required=True)
@@ -179,6 +188,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     store.init()
     summary = store.dashboard_summary()
     print(f"profile={config.profile.active} database={config.database.path}")
+    print(f"start_queued_work_automatically={store.start_queued_work_automatically()}")
     print(
         f"issues={summary['issue_count']} running={summary['running_attempts']} queued={summary['queued_attempts']}"
     )
@@ -247,6 +257,28 @@ def cmd_worker_run_attempt(args: argparse.Namespace) -> int:
 def cmd_worktree_cleanup(args: argparse.Namespace) -> int:
     config = load_workflow(args.workflow, profile=_runtime_profile(args))
     print(WorktreeManager(config.workspace).cleanup_prunable())
+    return 0
+
+
+def cmd_worktree_cleanup_merged_prs(args: argparse.Namespace) -> int:
+    config, version_id, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
+    summary = Orchestrator(config, store, version_id).cleanup_merged_pull_request_worktrees(
+        retry_errors=bool(args.retry_errors)
+    )
+    print(
+        " ".join(
+            [
+                f"scanned={summary.scanned}",
+                f"merged={summary.merged}",
+                f"cleaned={summary.cleaned}",
+                f"skipped={summary.skipped}",
+                f"errors={summary.errors}",
+            ]
+        )
+    )
     return 0
 
 
@@ -337,7 +369,11 @@ def _poll_loop(args: argparse.Namespace, store: Store, dashboard_state: Dashboar
             orchestrator = Orchestrator(config, store, version_id)
             supervisor.reconcile(config, version_id)
             orchestrator.poll_once()
-            if args.dispatch:
+            try:
+                orchestrator.cleanup_merged_pull_request_worktrees()
+            except Exception as exc:
+                print(f"worktree cleanup error: {exc}", file=sys.stderr)
+            if store.start_queued_work_automatically():
                 orchestrator.claim_available()
                 supervisor.start_queued(config)
         except Exception as exc:  # Keep the dashboard alive.

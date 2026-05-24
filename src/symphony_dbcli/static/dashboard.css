@@ -202,6 +202,74 @@ a {
   color: var(--warn);
 }
 
+.control-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.control-panel h2 {
+  margin-bottom: 4px;
+}
+
+.control-panel form {
+  flex: 0 0 auto;
+}
+
+.toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 12px 0 6px;
+  background: #f2f4f7;
+  color: var(--muted);
+}
+
+.toggle-switch.is-on {
+  border-color: #b8dbc9;
+  background: #e8f4ef;
+  color: #176349;
+}
+
+.toggle-track {
+  position: relative;
+  display: inline-flex;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: #cfd6e1;
+  transition: background 120ms ease-out;
+}
+
+.toggle-switch.is-on .toggle-track {
+  background: var(--accent);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgb(32 36 42 / 20%);
+  transition: transform 120ms ease-out;
+}
+
+.toggle-switch.is-on .toggle-knob {
+  transform: translateX(20px);
+}
+
+.toggle-state {
+  min-width: 22px;
+  font-weight: 700;
+}
+
 .toolbar form {
   display: flex;
   gap: 8px;
@@ -215,6 +283,18 @@ input {
   border-radius: 6px;
   padding: 0 10px;
   font: inherit;
+}
+
+textarea {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+  color: var(--text);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 button {
@@ -278,6 +358,16 @@ pre {
 .draft-body {
   margin: 0;
   white-space: pre-wrap;
+}
+
+.draft-form {
+  display: grid;
+  gap: 10px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .result-meta {

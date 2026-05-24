@@ -18,23 +18,23 @@ The project is intentionally lightweight for the first implementation:
 uv run symphony-dbcli init-workflow
 uv run symphony-dbcli init-db
 uv run symphony-dbcli status
-uv run symphony-dbcli serve --dispatch
+uv run symphony-dbcli serve
 ```
 
 The default workflow is safe for local development. GitHub writes require
 credentials before workers can label issues. Workers save research answers and
 code summaries as local review drafts instead of posting comments or opening
 pull requests automatically.
-Use `serve --no-poll` for dashboard-only mode, or omit `--dispatch` to poll
-without starting workers.
+Use the dashboard toggle named `Start queued work automatically` to control
+whether queued attempts are started by worker subprocesses.
 
 ## Worker Lifecycle
 
-`serve --dispatch` now runs the full local orchestration loop:
+`serve` runs the full local orchestration loop:
 
 1. Poll GitHub Issues with the `symphony:todo` label.
 2. Claim eligible issues into durable SQLite attempts.
-3. Spawn worker subprocesses up to `workers.max_global` and `workers.max_per_repo`.
+3. Spawn worker subprocesses when `Start queued work automatically` is on.
 4. Record worker ids, PIDs, heartbeats, deadlines, attempts, turns, errors, and outcomes in SQLite.
 5. Mark crashed or timed-out workers as failed and queue a retry when `workers.retry_limit` allows it.
 
@@ -48,7 +48,15 @@ Worker lifecycle settings live in `WORKFLOW.md` under `[workers]`, including
 Completed worker attempts are stored in SQLite with their final markdown result,
 regardless of `policy.dry_run`. Open the dashboard, select an attempt in review,
 and read the `Worker Result` section. Draft GitHub replies are shown separately
-so they can be inspected before anything is posted manually.
+so they can be edited before posting to GitHub.
+
+Code attempts in review can open a draft pull request from the dashboard. The PR
+is created from the attempt worktree, records the PR URL in SQLite, links back to
+the GitHub issue, and includes a concise summary plus verification notes from
+the worker result. Once a recorded PR is merged, the orchestration loop checks
+the PR state and removes the associated clean worktree to avoid filling the
+disk. Dirty worktrees are left in place and the cleanup error is recorded for
+review.
 
 Research results can be promoted into code work. From a research attempt page,
 use `Create Code Follow-up` to queue a linked code attempt. The code worker
@@ -58,6 +66,12 @@ CLI:
 
 ```bash
 uv run symphony-dbcli attempt create-code-follow-up --attempt-id 2
+```
+
+Merged-PR worktree cleanup also has a manual command:
+
+```bash
+uv run symphony-dbcli worktree cleanup-merged-prs
 ```
 
 ## Profiles

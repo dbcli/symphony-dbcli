@@ -22,6 +22,13 @@ class WorktreeAllocation:
     commit_sha: str
 
 
+@dataclass(frozen=True)
+class WorktreeRemoval:
+    worktree_path: str
+    removed: bool
+    reason: str
+
+
 SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -82,6 +89,24 @@ class WorktreeManager:
             outputs.append(result.stdout.strip() or f"Pruned {base}")
         return "\n".join(outputs)
 
+    def remove_worktree(self, *, base_repo_path: str, worktree_path: str) -> WorktreeRemoval:
+        path = Path(worktree_path)
+        if not worktree_path:
+            raise WorktreeError("Attempt does not have a worktree path.")
+        self._ensure_managed_worktree(path)
+        base = Path(base_repo_path)
+        if not base_repo_path or not base.exists():
+            raise WorktreeError("Attempt does not have an existing shared repository path.")
+        if not path.exists():
+            self._run(["git", "--git-dir", str(base), "worktree", "prune"], check=False)
+            return WorktreeRemoval(worktree_path=worktree_path, removed=False, reason="already_missing")
+        status = self._run(["git", "-C", str(path), "status", "--porcelain"]).stdout.strip()
+        if status:
+            raise WorktreeError("Worktree has uncommitted changes; skipping cleanup.")
+        self._run(["git", "--git-dir", str(base), "worktree", "remove", str(path)])
+        self._run(["git", "--git-dir", str(base), "worktree", "prune"], check=False)
+        return WorktreeRemoval(worktree_path=worktree_path, removed=True, reason="removed")
+
     def _ensure_base_repo(self, path: Path, clone_url: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
@@ -116,6 +141,14 @@ class WorktreeManager:
             if exists.returncode == 0:
                 return candidate
         raise WorktreeError(f"Could not find a default branch for {base_repo_path}.")
+
+    def _ensure_managed_worktree(self, path: Path) -> None:
+        root = Path(self.config.root).resolve()
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise WorktreeError(f"Refusing to clean unmanaged worktree path: {path}") from exc
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(args, text=True, capture_output=True, check=False)

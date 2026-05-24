@@ -4,7 +4,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from symphony_dbcli.config import PolicyConfig, ProfileConfig, default_config, render_workflow
-from symphony_dbcli.dashboard import DashboardRuntime, DashboardState, render_attempt, render_index
+from symphony_dbcli.dashboard import (
+    DashboardRuntime,
+    DashboardState,
+    render_attempt,
+    render_index,
+    render_issue,
+)
 from symphony_dbcli.store import IssueSnapshot, Store
 
 
@@ -19,6 +25,21 @@ def test_dashboard_uses_static_css(tmp_path: Path) -> None:
     assert "Recent Attempts" in html
     assert "Dry Run" in html
     assert "On" in html
+    assert "Start queued work automatically" in html
+    assert 'role="switch"' in html
+    assert 'aria-checked="true"' in html
+
+
+def test_dashboard_shows_worker_auto_start_off(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    store.set_start_queued_work_automatically(False)
+
+    html = render_index(store)
+
+    assert "Queued work will wait until this is turned on." in html
+    assert 'aria-checked="false"' in html
+    assert 'value="true"' in html
 
 
 def test_dashboard_shows_workflow_reload_status(tmp_path: Path) -> None:
@@ -65,7 +86,8 @@ def test_dashboard_state_updates_runtime_config() -> None:
 
     state.update_config(live_config)
 
-    assert state.runtime().dry_run is False
+    assert state.runtime(start_queued_work_automatically=False).dry_run is False
+    assert state.runtime(start_queued_work_automatically=False).start_queued_work_automatically is False
 
 
 def test_attempt_page_shows_draft_reply(tmp_path: Path) -> None:
@@ -112,6 +134,8 @@ def test_attempt_page_shows_draft_reply(tmp_path: Path) -> None:
     assert "Draft Replies" in html
     assert "Suggested reply body" in html
     assert "drafted" in html
+    assert "<textarea" in html
+    assert "Post to GitHub" in html
 
 
 def test_attempt_page_shows_code_follow_up_action_and_source_research(tmp_path: Path) -> None:
@@ -142,6 +166,73 @@ def test_attempt_page_shows_code_follow_up_action_and_source_research(tmp_path: 
     assert f"Code follow-up attempt {code_attempt_id}" in linked_research_html
     assert "Source Research" in code_html
     assert "Expand log_file" in code_html
+
+
+def test_code_attempt_page_can_create_and_show_draft_pr(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    _seed_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        worktree_path="/tmp/litecli",
+        branch="symphony/dbcli-litecli-245-attempt-1",
+        status="review",
+    )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        result_type="code_changes",
+        title="Code Changes",
+        body="Summary:\n- Expanded configured `log_file` paths.",
+    )
+
+    html = render_attempt(store, attempt_id)
+
+    assert "Create Draft PR" in html
+    assert f'action="/attempts/{attempt_id}/draft-pr"' in html
+
+    store.record_pr(
+        attempt_id,
+        repo="dbcli/litecli",
+        number=12,
+        url="https://github.com/dbcli/litecli/pull/12",
+        title="Fix #245",
+    )
+    pr_html = render_attempt(store, attempt_id)
+
+    assert "Create Draft PR" not in pr_html
+    assert "https://github.com/dbcli/litecli/pull/12" in pr_html
+
+
+def test_issue_page_shows_editable_draft_replies(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    _seed_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+    )
+    store.record_comment(
+        attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        url="",
+        body="Edited before posting",
+        status="drafted",
+    )
+
+    html = render_issue(store, "dbcli/litecli", 245)
+
+    assert "Draft Replies" in html
+    assert "Edited before posting" in html
+    assert "Post to GitHub" in html
+    assert f"Attempt {attempt_id}" in html
 
 
 def _seed_issue(store: Store) -> None:

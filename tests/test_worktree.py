@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from symphony_dbcli.config import WorkspaceConfig
@@ -20,3 +21,33 @@ def test_default_remote_ref_accepts_bare_clone_head(tmp_path: Path) -> None:
     manager._run(["git", "init", "--bare", "--initial-branch=main", str(base_repo)])
 
     assert manager._default_remote_ref(base_repo) == "main"
+
+
+def test_remove_worktree_removes_clean_managed_worktree(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    bare = tmp_path / "repos" / "repo.git"
+    worktree = tmp_path / "worktrees" / "repo"
+    source.mkdir()
+    bare.parent.mkdir()
+    worktree.parent.mkdir()
+    _git(source, "init", "--initial-branch=main")
+    (source / "README.md").write_text("start\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    subprocess.run(["git", "clone", "--bare", str(source), str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "worktree", "add", str(worktree), "main"],
+        check=True,
+        capture_output=True,
+    )
+    manager = WorktreeManager(WorkspaceConfig(root=str(worktree.parent), bare_repos_root=str(bare.parent)))
+
+    removal = manager.remove_worktree(base_repo_path=str(bare), worktree_path=str(worktree))
+
+    assert removal.removed is True
+    assert removal.reason == "removed"
+    assert not worktree.exists()
+
+
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True)

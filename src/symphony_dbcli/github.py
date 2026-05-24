@@ -26,6 +26,12 @@ class PullRequest:
     number: int
     url: str
     title: str
+    state: str = ""
+    merged_at: str = ""
+
+    @property
+    def is_merged(self) -> bool:
+        return bool(self.merged_at)
 
 
 @dataclass(frozen=True)
@@ -148,7 +154,11 @@ class GitHubClient:
                 "maintainer_can_modify": True,
             },
         )
-        return PullRequest(number=int(data["number"]), url=str(data["html_url"]), title=str(data["title"]))
+        return _pull_request_from_json(data)
+
+    def pull_request(self, repo: str, number: int) -> PullRequest:
+        data = self._request_json("GET", f"/repos/{repo}/pulls/{number}")
+        return _pull_request_from_json(data)
 
     def push_branch(self, *, repo: str, worktree_path: str, branch: str) -> None:
         token = self._require_token()
@@ -256,6 +266,16 @@ def request_json(
     if expect_empty or not data:
         return None
     return cast(Any, json.loads(data.decode("utf-8")))
+
+
+def _pull_request_from_json(data: dict[str, Any]) -> PullRequest:
+    return PullRequest(
+        number=int(data["number"]),
+        url=str(data["html_url"]),
+        title=str(data["title"]),
+        state=str(data.get("state") or ""),
+        merged_at=str(data.get("merged_at") or ""),
+    )
 
 
 def _redact_token(value: str, token: str) -> str:

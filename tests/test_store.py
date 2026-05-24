@@ -122,6 +122,19 @@ def test_eligible_issues_use_labels(tmp_path: Path) -> None:
     assert store.eligible_issues("symphony:todo", "symphony:blocked") == []
 
 
+def test_start_queued_work_automatically_setting_defaults_on(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+
+    assert store.start_queued_work_automatically() is True
+
+    store.set_start_queued_work_automatically(False)
+    assert store.start_queued_work_automatically() is False
+
+    store.set_start_queued_work_automatically(True)
+    assert store.start_queued_work_automatically() is True
+
+
 def test_store_creates_code_follow_up_from_research_result(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

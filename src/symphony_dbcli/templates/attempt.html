@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_draft_replies.html" import draft_replies %}
 {% block body %}
 {% if not detail %}
 <section class="empty">Attempt not found.</section>
@@ -59,6 +60,43 @@
   {% endif %}
 </section>
 
+<section>
+  <h2>Pull Request</h2>
+  {% if detail.pull_requests %}
+  <table>
+    <thead><tr><th>PR</th><th>Title</th><th>State</th><th>Worktree</th><th>Created</th></tr></thead>
+    <tbody>
+      {% for row in detail.pull_requests %}
+      <tr>
+        <td><a href="{{ row.url }}">#{{ row.number }}</a></td>
+        <td>{{ row.title }}</td>
+        <td>
+          {{ row.state or "unknown" }}
+          {% if row.merged_at %}<div class="muted">merged {{ row.merged_at }}</div>{% endif %}
+        </td>
+        <td>
+          {% if row.worktree_cleaned_at %}
+          cleaned {{ row.worktree_cleaned_at }}
+          {% elif row.cleanup_error %}
+          <span class="error">{{ row.cleanup_error }}</span>
+          {% else %}
+          pending merge
+          {% endif %}
+        </td>
+        <td>{{ row.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif detail.attempt.task_type == "code" and detail.attempt.status == "review" and detail.result and detail.attempt.worktree_path and detail.attempt.branch %}
+  <form action="/attempts/{{ detail.attempt.id }}/draft-pr" method="post" class="result-actions">
+    <button type="submit">Create Draft PR</button>
+  </form>
+  {% else %}
+  <div class="empty">No pull request.</div>
+  {% endif %}
+</section>
+
 {% if detail.source_result %}
 <section>
   <h2>Source Research</h2>
@@ -93,27 +131,7 @@
 </section>
 {% endif %}
 
-<section>
-  <h2>Draft Replies</h2>
-  {% if detail.comments %}
-  <div class="draft-list">
-    {% for row in detail.comments %}
-    <article class="draft-reply">
-      <div class="draft-meta">
-        <strong>{{ row.status }}</strong>
-        <span>{{ row.created_at }}</span>
-        {% if row.url %}
-        <a href="{{ row.url }}">GitHub comment</a>
-        {% endif %}
-      </div>
-      <pre class="draft-body">{{ row.body }}</pre>
-    </article>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="empty">No draft replies.</div>
-  {% endif %}
-</section>
+{{ draft_replies(detail.comments) }}
 
 <section>
   <h2>Timeline</h2>

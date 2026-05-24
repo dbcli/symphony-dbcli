@@ -13,6 +13,31 @@
   <div class="metric"><strong>{{ summary.error_count }}</strong><span>Errors</span></div>
 </section>
 
+<section class="control-panel">
+  <div>
+    <h2>Start queued work automatically</h2>
+    <span class="muted">
+      {{ "Workers will start when capacity is available." if runtime.start_queued_work_automatically else "Queued work will wait until this is turned on." }}
+    </span>
+  </div>
+  <form action="/settings/start-queued-work-automatically" method="post">
+    <input
+      type="hidden"
+      name="enabled"
+      value="{{ 'false' if runtime.start_queued_work_automatically else 'true' }}"
+    />
+    <button
+      class="toggle-switch {{ 'is-on' if runtime.start_queued_work_automatically else '' }}"
+      type="submit"
+      role="switch"
+      aria-checked="{{ 'true' if runtime.start_queued_work_automatically else 'false' }}"
+    >
+      <span class="toggle-track" aria-hidden="true"><span class="toggle-knob"></span></span>
+      <span class="toggle-state">{{ "On" if runtime.start_queued_work_automatically else "Off" }}</span>
+    </button>
+  </form>
+</section>
+
 <section class="workflow-panel {{ 'has-error' if summary.workflow.has_current_error else '' }}">
   <div class="section-header">
     <h2>Workflow</h2>
