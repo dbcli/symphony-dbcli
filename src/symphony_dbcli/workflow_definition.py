@@ -4,32 +4,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from .actions import DEFAULT_ACTION_REGISTRY
+
 type TriggerKind = Literal["automatic", "human"]
 type SetupRunPolicy = Literal["per_attempt", "per_repo", "manual"]
 type SetupWorkingDirectory = Literal["workspace", "repo"]
 type ConfigTable = dict[str, Any]
 
 
-KNOWN_ACTIONS = frozenset(
-    {
-        "github.fetch_issues",
-        "github.fetch_issue",
-        "github.fetch_comments",
-        "github.apply_labels",
-        "github.create_draft_pr",
-        "github.post_issue_comment",
-        "github.fetch_pull_request",
-        "github.fetch_ci_status",
-        "codex.research_issue",
-        "codex.fix_issue",
-        "codex.address_pr_comments",
-        "codex.fix_ci_failures",
-        "workspace.allocate",
-        "workspace.run_setup",
-        "workspace.record_changes",
-        "workspace.cleanup_after_merge",
-    }
-)
 TRIGGER_KINDS = frozenset({"automatic", "human"})
 SETUP_RUN_POLICIES = frozenset({"per_attempt", "per_repo", "manual"})
 SETUP_WORKING_DIRECTORIES = frozenset({"workspace", "repo"})
@@ -351,8 +333,15 @@ def _transition_errors(
         errors.append(
             f"workflow.transitions.{name}.on_failure references undefined state '{transition.on_failure}'."
         )
-    if transition.action not in KNOWN_ACTIONS:
+    primitive = DEFAULT_ACTION_REGISTRY.get(transition.action)
+    if primitive is None:
         errors.append(f"workflow.transitions.{name}.action '{transition.action}' is not a known primitive.")
+    elif transition.trigger == "automatic" and not primitive.automatic_allowed:
+        errors.append(f"workflow.transitions.{name}.action '{transition.action}' cannot run automatically.")
+    elif transition.trigger == "human" and not primitive.human_gate_allowed:
+        errors.append(
+            f"workflow.transitions.{name}.action '{transition.action}' cannot run behind a human gate."
+        )
     if transition.trigger not in TRIGGER_KINDS:
         errors.append(f"workflow.transitions.{name}.trigger must be 'automatic' or 'human'.")
     if transition.trigger == "human" and not transition.gate:

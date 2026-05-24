@@ -174,6 +174,34 @@ def test_workflow_validation_rejects_human_transition_without_gate(monkeypatch: 
         parse_workflow(workflow)
 
 
+def test_workflow_validation_rejects_action_trigger_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        "[workflow.transitions.claim_issue]\n",
+        "\n".join(
+            [
+                "[workflow.transitions.refresh_issue]",
+                'from_state = "todo"',
+                'to_state = "claimed"',
+                'action = "github.fetch_issues"',
+                'trigger = "human"',
+                'description = "Invalid human-gated read action."',
+                'condition = ""',
+                'gate = "manual_refresh"',
+                'on_failure = "failed"',
+                "retry_limit = 0",
+                "timeout_seconds = 0",
+                "",
+                "[workflow.transitions.claim_issue]",
+                "",
+            ]
+        ),
+    )
+
+    with pytest.raises(WorkflowError, match="cannot run behind a human gate"):
+        parse_workflow(workflow)
+
+
 def test_workflow_accepts_setup_steps_and_preferences(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_profile_env(monkeypatch)
     workflow = (
