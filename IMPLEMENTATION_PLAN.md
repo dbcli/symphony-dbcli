@@ -357,12 +357,17 @@ those primitives are composed into automatic transitions and human-gated steps.
   transition conditions, action inputs, action outputs, retry policy, timeout
   policy, and artifact handoff between steps.
   Progress: states, terminal states, automatic/human transitions, conditions,
-  retry limits, timeouts, and explicit action input/output mappings are now
-  represented. Artifact handoff semantics still need to be executed at runtime.
+  retry limits, timeouts, explicit action input/output mappings, and
+  per-primitive guidance are now represented. Artifact handoff semantics still
+  need to be executed at runtime.
 - [x] Extend `WORKFLOW.md` to capture worker preferences outside the state
   machine. These preferences should include review expectations, preferred test
   strategy, project-specific coding style, when to run `/review`, and any
   repo-specific instructions that should shape Codex prompts.
+- [x] Add per-primitive guidance in `WORKFLOW.md`. Every exposed workflow
+  primitive can carry user-editable taste instructions, such as concise reply
+  style or PR description expectations, and Codex worker primitives receive
+  those instructions in their prompt.
 - [x] Add first-class workflow setup steps. The user should be able to define
   commands needed to prepare a repo or worktree before worker execution, such as
   installing test dependencies, running database migrations, generating local
@@ -424,7 +429,8 @@ those primitives are composed into automatic transitions and human-gated steps.
   Progress: workflow gates are stored, opened after worker completion, shown on
   the dashboard, and executable through the generic human-gate dispatcher for
   posting issue comments and creating draft PRs. Mark-blocked and richer
-  review/edit UX remain.
+  review/edit UX remain. Draft replies and draft PR title/body are editable
+  before GitHub side effects.
 - [ ] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.
@@ -438,8 +444,9 @@ those primitives are composed into automatic transitions and human-gated steps.
   route-specific assumptions.
   Progress: existing dashboard post-answer and create-draft-PR routes now find
   and resolve the matching pending workflow gate before running the primitive.
-  The page still needs to render actions directly from gate rows instead of
-  using route-specific forms.
+  Draft reply text and draft PR title/body can be edited before execution. The
+  page still needs to render actions directly from gate rows instead of using
+  route-specific forms.
 - [ ] Add conversational workflow editing to the dashboard. The user should be
   able to describe any intended workflow change in plain language, including
   state-machine changes, worker preferences, testing policy, `/review`

@@ -39,6 +39,7 @@ class WorkflowTransitionConfig:
     timeout_seconds: int = 0
     inputs: dict[str, str] = field(default_factory=dict)
     outputs: dict[str, str] = field(default_factory=dict)
+    guidance: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -104,18 +105,30 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="claimed",
                 action="github.apply_labels",
                 description="Move a dispatchable issue into the working state.",
+                guidance=[
+                    "Keep label changes minimal and explainable.",
+                    "Do not alter labels unrelated to Symphony state.",
+                ],
             ),
             "allocate_workspace": WorkflowTransitionConfig(
                 from_state="claimed",
                 to_state="workspace_ready",
                 action="workspace.allocate",
                 description="Create the per-attempt workspace.",
+                guidance=[
+                    "Prefer isolated worktrees so concurrent workers do not share a checkout.",
+                    "Use deterministic paths and branch names that are easy to inspect.",
+                ],
             ),
             "run_setup": WorkflowTransitionConfig(
                 from_state="workspace_ready",
                 to_state="setup_complete",
                 action="workspace.run_setup",
                 description="Run configured setup commands before Codex starts.",
+                guidance=[
+                    "Run only setup commands declared in this workflow.",
+                    "Treat blocking setup failures as worker-blocking failures.",
+                ],
             ),
             "research_issue": WorkflowTransitionConfig(
                 from_state="setup_complete",
@@ -123,6 +136,11 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 action="codex.research_issue",
                 description="Use Codex to draft a research or support answer.",
                 condition='task.type == "research"',
+                guidance=[
+                    "Draft a concise support answer in the user's voice.",
+                    "Keep the reply under two sentences unless the issue requires concrete steps.",
+                    "Cite specific files, commands, or issue facts when they matter.",
+                ],
             ),
             "fix_issue": WorkflowTransitionConfig(
                 from_state="setup_complete",
@@ -130,12 +148,21 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 action="codex.fix_issue",
                 description="Use Codex to implement a code change.",
                 condition='task.type == "code"',
+                guidance=[
+                    "Keep the code change focused on the issue.",
+                    "Prefer narrow unit tests before broader integration tests.",
+                    "Run a review pass after implementation when the workflow asks for it.",
+                ],
             ),
             "request_review": WorkflowTransitionConfig(
                 from_state="worker_complete",
                 to_state="review",
                 action="github.apply_labels",
                 description="Move completed worker output into human review.",
+                guidance=[
+                    "Preserve worker output for human review before external side effects.",
+                    "Avoid posting comments or opening PRs in this step.",
+                ],
             ),
             "post_answer": WorkflowTransitionConfig(
                 from_state="review",
@@ -145,6 +172,10 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 gate="review_answer",
                 description="Post an edited research answer to GitHub.",
                 condition='task.type == "research"',
+                guidance=[
+                    "Let the human edit the final reply before posting.",
+                    "Keep the posted response succinct and avoid unnecessary caveats.",
+                ],
             ),
             "create_draft_pr": WorkflowTransitionConfig(
                 from_state="review",
@@ -154,6 +185,10 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 gate="review_diff",
                 description="Create a draft pull request after human diff review.",
                 condition='task.type == "code"',
+                guidance=[
+                    "Let the human edit the PR title and description before creation.",
+                    "Keep the PR description clear, succinct, and linked to the GitHub issue.",
+                ],
             ),
             "cleanup_after_merge": WorkflowTransitionConfig(
                 from_state="pr_ready",
@@ -161,6 +196,10 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 action="workspace.cleanup_after_merge",
                 description="Clean up the workspace after the pull request is merged.",
                 condition="pull_request.is_merged",
+                guidance=[
+                    "Clean only workspaces owned by Symphony.",
+                    "Do not remove worktrees with uncommitted changes.",
+                ],
             ),
             "mark_blocked": WorkflowTransitionConfig(
                 from_state="review",
@@ -169,6 +208,10 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 trigger="human",
                 gate="mark_blocked",
                 description="Let a human stop progress when review cannot continue.",
+                guidance=[
+                    "Use this only when human review cannot continue safely.",
+                    "Leave enough context in the dashboard for a future retry.",
+                ],
             ),
         },
     )
@@ -301,6 +344,7 @@ def _transition_from_dict(name: str, data: Any) -> WorkflowTransitionConfig:
         timeout_seconds=_int_value(table, "timeout_seconds", 0),
         inputs=_str_map(table, "inputs", f"workflow.transitions.{name}"),
         outputs=_str_map(table, "outputs", f"workflow.transitions.{name}"),
+        guidance=_str_list(table, "guidance", []),
     )
 
 
@@ -359,6 +403,8 @@ def _transition_errors(
         errors.append(f"workflow.transitions.{name}.retry_limit must be at least 0.")
     if transition.timeout_seconds < 0:
         errors.append(f"workflow.transitions.{name}.timeout_seconds must be at least 0.")
+    if any(not item.strip() for item in transition.guidance):
+        errors.append(f"workflow.transitions.{name}.guidance entries must not be empty.")
     return errors
 
 

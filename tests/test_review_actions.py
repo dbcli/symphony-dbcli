@@ -111,6 +111,45 @@ def test_review_actions_create_draft_pr_from_code_attempt(tmp_path: Path) -> Non
     assert "Worker Notes" not in github.pull_request_body
 
 
+def test_review_actions_create_draft_pr_uses_edited_content(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    repo = tmp_path / "litecli"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "README.md").write_text("start\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    _git(repo, "checkout", "-b", "symphony/dbcli-litecli-245-attempt-1")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(repo),
+        worktree_path=str(repo),
+        branch="symphony/dbcli-litecli-245-attempt-1",
+        commit_sha=base_sha,
+    )
+    (repo / "README.md").write_text("changed\n", encoding="utf-8")
+    github = FakeGitHub()
+
+    ReviewActions(default_config(), store, github=github).create_draft_pr(
+        attempt_id,
+        title="Fix logging path expansion",
+        body="Fixes https://github.com/dbcli/litecli/issues/245\n\nEdited description.",
+    )
+
+    assert github.pull_request_title == "Fix logging path expansion"
+    assert github.pull_request_body == (
+        "Fixes https://github.com/dbcli/litecli/issues/245\n\nEdited description."
+    )
+
+
 def test_review_actions_post_edited_github_comment(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
     attempt_id = store.create_attempt(

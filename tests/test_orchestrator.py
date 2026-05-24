@@ -26,6 +26,21 @@ def test_code_follow_up_prompt_includes_research_context() -> None:
     assert "Expand log_file" in prompt
 
 
+def test_worker_prompt_includes_primitive_guidance() -> None:
+    prompt = build_worker_prompt(
+        default_config(),
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        title="Logging support question",
+        primitive_guidance=["Keep the reply under two sentences.", "Stay succinct."],
+    )
+
+    assert "Primitive guidance:" in prompt
+    assert "Keep the reply under two sentences." in prompt
+    assert "Stay succinct." in prompt
+
+
 def test_orchestrator_claim_records_workflow_runtime_state(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
 

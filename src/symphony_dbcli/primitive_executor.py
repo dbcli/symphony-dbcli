@@ -189,6 +189,7 @@ class PrimitiveExecutor:
             context.task_type,
             context.issue_title,
             follow_up_context=format_follow_up_context(self.store.follow_up_source_result(attempt_id)),
+            primitive_guidance=context.transition.guidance,
         )
         result = CodexRunner(self.config.codex).run(
             prompt=prompt,
@@ -235,7 +236,11 @@ class PrimitiveExecutor:
             raise PrimitiveExecutionError("policy.dry_run is true; refusing to create a GitHub pull request.")
         attempt_id = _required_attempt_id(context)
         try:
-            pull_request = self.review_actions.create_draft_pr(attempt_id)
+            pull_request = self.review_actions.create_draft_pr(
+                attempt_id,
+                title=str(context.input_data.get("title", "")),
+                body=str(context.input_data.get("body", "")),
+            )
         except ReviewActionError as exc:
             raise PrimitiveExecutionError(str(exc)) from exc
         return PrimitiveOutcome(

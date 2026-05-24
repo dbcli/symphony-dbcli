@@ -101,7 +101,9 @@ def default_action_registry() -> ActionRegistry:
             automatic_allowed=True,
             human_gate_allowed=True,
             description="Push an attempt branch and create a draft pull request.",
-            input_fields=frozenset({"attempt_id", "repo", "issue_number", "worktree_path", "branch"}),
+            input_fields=frozenset(
+                {"attempt_id", "repo", "issue_number", "worktree_path", "branch", "title", "body"}
+            ),
             output_fields=frozenset(
                 {
                     "pull_request_number",

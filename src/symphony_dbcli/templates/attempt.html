@@ -88,9 +88,13 @@
       {% endfor %}
     </tbody>
   </table>
-  {% elif detail.attempt.task_type == "code" and detail.attempt.status == "review" and detail.result and detail.attempt.worktree_path and detail.attempt.branch %}
-  <form action="/attempts/{{ detail.attempt.id }}/draft-pr" method="post" class="result-actions">
-    <button type="submit">Create Draft PR</button>
+  {% elif detail.attempt.task_type == "code" and detail.attempt.status == "review" and draft_pr_content and detail.attempt.worktree_path and detail.attempt.branch %}
+  <form action="/attempts/{{ detail.attempt.id }}/draft-pr" method="post" class="draft-form">
+    <input name="title" value="{{ draft_pr_content.title }}" aria-label="Pull request title" />
+    <textarea name="body" rows="12" aria-label="Pull request description">{{ draft_pr_content.body }}</textarea>
+    <div class="form-actions">
+      <button type="submit">Create Draft PR</button>
+    </div>
   </form>
   {% else %}
   <div class="empty">No pull request.</div>

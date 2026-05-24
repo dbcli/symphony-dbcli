@@ -12,8 +12,10 @@ def build_worker_prompt(
     task_type: str,
     title: str,
     follow_up_context: str = "",
+    primitive_guidance: list[str] | None = None,
 ) -> str:
     follow_up_section = f"\nFollow-up context:\n{follow_up_context}\n" if follow_up_context else ""
+    guidance_section = _guidance_section(primitive_guidance or [])
     return f"""\
 You are a Symphony worker for {repo}.
 
@@ -21,6 +23,7 @@ Task type: {task_type}
 GitHub issue: https://github.com/{repo}/issues/{issue_number}
 Issue title: {title}
 {follow_up_section}
+{guidance_section}
 
 Follow this workflow:
 {config.instructions}
@@ -29,6 +32,17 @@ Before finishing, provide:
 - a concise summary of what you did
 - tests or checks run, if any
 - remaining risks or blockers
+"""
+
+
+def _guidance_section(items: list[str]) -> str:
+    cleaned = [item.strip() for item in items if item.strip()]
+    if not cleaned:
+        return ""
+    lines = "\n".join(f"- {item}" for item in cleaned)
+    return f"""\
+Primitive guidance:
+{lines}
 """
 
 

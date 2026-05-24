@@ -248,6 +248,10 @@ def test_code_attempt_page_can_create_and_show_draft_pr(tmp_path: Path) -> None:
 
     assert "Create Draft PR" in html
     assert f'action="/attempts/{attempt_id}/draft-pr"' in html
+    assert 'name="title"' in html
+    assert 'name="body"' in html
+    assert "Fix #245: Expanded configured log_file paths" in html
+    assert "Fixes https://github.com/dbcli/litecli/issues/245" in html
 
     store.record_pr(
         attempt_id,

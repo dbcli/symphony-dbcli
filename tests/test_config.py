@@ -35,6 +35,7 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.workflow.initial_state == "todo"
     assert config.workflow.transitions["fix_issue"].action == "codex.fix_issue"
     assert config.workflow.transitions["create_draft_pr"].trigger == "human"
+    assert config.workflow.transitions["research_issue"].guidance
     assert config.preferences.preferred_test_strategy == "unit"
     assert config.preferences.run_review_after_code_change is True
     assert config.setup.enabled is True
@@ -50,6 +51,7 @@ def test_rendered_workflow_includes_local_and_prod_profiles() -> None:
     assert "[workflow]" in workflow
     assert "[workflow.transitions.fix_issue]" in workflow
     assert 'action = "codex.fix_issue"' in workflow
+    assert "guidance =" in workflow
     assert "[preferences]" in workflow
     assert "[profiles.local.database]" in workflow
     assert 'path = ".symphony/symphony.db"' in workflow
@@ -250,6 +252,17 @@ def test_workflow_validation_rejects_action_mapping_mismatch(monkeypatch: pytest
     )
 
     with pytest.raises(WorkflowError, match="inputs.comment_id is not valid"):
+        parse_workflow(workflow)
+
+
+def test_workflow_validation_rejects_empty_transition_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        'guidance = ["Keep the code change focused on the issue.", "Prefer narrow unit tests before broader integration tests.", "Run a review pass after implementation when the workflow asks for it."]',
+        'guidance = [""]',
+    )
+
+    with pytest.raises(WorkflowError, match="guidance entries must not be empty"):
         parse_workflow(workflow)
 
 

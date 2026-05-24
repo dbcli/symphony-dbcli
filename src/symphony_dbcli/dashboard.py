@@ -16,6 +16,7 @@ from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescap
 from .ask import AskAnswer, answer_with_links
 from .config import WorkflowConfig, default_config
 from .orchestrator import Orchestrator, OrchestratorError
+from .review_actions import DraftPullRequestContent, build_draft_pr_content
 from .store import Store
 
 
@@ -217,6 +218,7 @@ def render_attempt(store: Store, attempt_id: int) -> str:
             title=f"Attempt {attempt_id}",
             attempt_id=attempt_id,
             detail=detail,
+            draft_pr_content=_draft_pr_content(detail),
         )
     )
 
@@ -230,6 +232,19 @@ def render_github_app_callback(code: str, state: str) -> str:
             code=code,
             state=state,
         )
+    )
+
+
+def _draft_pr_content(detail: dict[str, Any] | None) -> DraftPullRequestContent | None:
+    if not detail or detail["attempt"]["task_type"] != "code" or detail["pull_requests"]:
+        return None
+    result = detail["result"]
+    if not result:
+        return None
+    return build_draft_pr_content(
+        str(detail["attempt"]["repo"]),
+        int(detail["attempt"]["issue_number"]),
+        str(result["body"] or ""),
     )
 
 
@@ -340,12 +355,19 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
             self._redirect(f"/attempts/{target_attempt_id}")
 
         def _create_draft_pr(self, attempt_id: int) -> None:
+            params = self._read_form()
             gate = store.pending_workflow_gate_for_attempt(attempt_id, "create_draft_pr")
             if not gate:
                 self.send_error(400, "No pending create_draft_pr workflow gate for this attempt.")
                 return
             try:
-                Orchestrator(state.config(), store).run_human_gate(int(gate["id"]))
+                Orchestrator(state.config(), store).run_human_gate(
+                    int(gate["id"]),
+                    input_data={
+                        "title": params.get("title", [""])[0],
+                        "body": params.get("body", [""])[0],
+                    },
+                )
             except OrchestratorError as exc:
                 self.send_error(400, str(exc))
                 return

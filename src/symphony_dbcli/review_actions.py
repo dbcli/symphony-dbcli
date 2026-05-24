@@ -59,7 +59,7 @@ class ReviewActions:
         self.store = store
         self.github = github or GitHubClient(config.github)
 
-    def create_draft_pr(self, attempt_id: int) -> PullRequest:
+    def create_draft_pr(self, attempt_id: int, *, title: str = "", body: str = "") -> PullRequest:
         attempt = self.store.attempt_by_id(attempt_id)
         if not attempt:
             raise ReviewActionError(f"Attempt {attempt_id} does not exist.")
@@ -100,12 +100,14 @@ class ReviewActions:
         result = self.store.worker_result_for_attempt(attempt_id)
         result_body = str(result["body"]) if result else ""
         content = build_draft_pr_content(repo, issue_number, result_body)
+        pr_title = title.strip() or content.title
+        pr_body = body.strip() or content.body
         pr = self.github.create_pull_request(
             repo=repo,
-            title=content.title,
+            title=pr_title,
             head=branch,
             base=self.github.default_branch(repo),
-            body=content.body,
+            body=pr_body,
             draft=True,
         )
         self.store.record_pr(

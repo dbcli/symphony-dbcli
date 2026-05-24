@@ -137,6 +137,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Keep label changes minimal and explainable.", "Do not alter labels unrelated to Symphony state."]
 
 [workflow.transitions.allocate_workspace]
 from_state = "claimed"
@@ -149,6 +150,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Prefer isolated worktrees so concurrent workers do not share a checkout.", "Use deterministic paths and branch names that are easy to inspect."]
 
 [workflow.transitions.run_setup]
 from_state = "workspace_ready"
@@ -161,6 +163,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Run only setup commands declared in this workflow.", "Treat blocking setup failures as worker-blocking failures."]
 
 [workflow.transitions.research_issue]
 from_state = "setup_complete"
@@ -173,6 +176,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Draft a concise support answer in the user's voice.", "Keep the reply under two sentences unless the issue requires concrete steps.", "Cite specific files, commands, or issue facts when they matter."]
 
 [workflow.transitions.fix_issue]
 from_state = "setup_complete"
@@ -185,6 +189,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Keep the code change focused on the issue.", "Prefer narrow unit tests before broader integration tests.", "Run a review pass after implementation when the workflow asks for it."]
 
 [workflow.transitions.request_review]
 from_state = "worker_complete"
@@ -197,6 +202,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Preserve worker output for human review before external side effects.", "Avoid posting comments or opening PRs in this step."]
 
 [workflow.transitions.post_answer]
 from_state = "review"
@@ -209,6 +215,7 @@ gate = "review_answer"
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Let the human edit the final reply before posting.", "Keep the posted response succinct and avoid unnecessary caveats."]
 
 [workflow.transitions.create_draft_pr]
 from_state = "review"
@@ -221,6 +228,7 @@ gate = "review_diff"
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Let the human edit the PR title and description before creation.", "Keep the PR description clear, succinct, and linked to the GitHub issue."]
 
 [workflow.transitions.cleanup_after_merge]
 from_state = "pr_ready"
@@ -233,6 +241,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Clean only workspaces owned by Symphony.", "Do not remove worktrees with uncommitted changes."]
 
 [workflow.transitions.mark_blocked]
 from_state = "review"
@@ -245,6 +254,7 @@ gate = "mark_blocked"
 on_failure = "failed"
 retry_limit = 0
 timeout_seconds = 0
+guidance = ["Use this only when human review cannot continue safely.", "Leave enough context in the dashboard for a future retry."]
 
 [preferences]
 run_review_after_code_change = true
