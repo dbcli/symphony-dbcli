@@ -559,6 +559,22 @@ class Store:
                 ).fetchone(),
             )
 
+    def pending_workflow_gates_for_attempt(self, attempt_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT g.*, i.repo, i.issue_number, i.task_type, i.attempt_id
+                    FROM workflow_gates g
+                    JOIN workflow_instances i ON i.id = g.workflow_instance_id
+                    WHERE i.attempt_id = ?
+                      AND g.status = 'pending'
+                    ORDER BY g.created_at ASC, g.id ASC
+                    """,
+                    (attempt_id,),
+                )
+            )
+
     def workflow_state_counts(self) -> dict[str, int]:
         with self.connect() as conn:
             rows = conn.execute(

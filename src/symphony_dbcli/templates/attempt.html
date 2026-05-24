@@ -11,6 +11,43 @@
   <div class="metric"><strong>{{ detail.attempt.codex_duration_ms|ms }}</strong><span>Codex</span></div>
 </section>
 
+{% if pending_gates %}
+<section>
+  <h2>Pending Workflow Gates</h2>
+  <div class="gate-list">
+    {% for gate in pending_gates %}
+    <article class="gate-card">
+      <div class="draft-meta">
+        <strong>{{ gate.transition_name }}</strong>
+        <span>{{ gate.gate }}</span>
+        <span>{{ gate.created_at }}</span>
+      </div>
+      {% if gate.prompt %}
+      <p>{{ gate.prompt }}</p>
+      {% endif %}
+      {% if gate.transition_name == "mark_blocked" %}
+      <form action="/workflow-gates/{{ gate.id }}/run" method="post">
+        <input type="hidden" name="return_to" value="{{ return_to }}" />
+        <div class="form-actions">
+          <button type="submit">Mark Blocked</button>
+        </div>
+      </form>
+      {% elif gate.transition_name in ["create_draft_pr", "post_answer"] %}
+      <p class="muted">Review the editable output below before continuing.</p>
+      {% else %}
+      <form action="/workflow-gates/{{ gate.id }}/run" method="post">
+        <input type="hidden" name="return_to" value="{{ return_to }}" />
+        <div class="form-actions">
+          <button type="submit">Run Gate</button>
+        </div>
+      </form>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <section>
   <h2>Workspace</h2>
   <table>
@@ -88,8 +125,9 @@
       {% endfor %}
     </tbody>
   </table>
-  {% elif detail.attempt.task_type == "code" and detail.attempt.status == "review" and draft_pr_content and detail.attempt.worktree_path and detail.attempt.branch %}
-  <form action="/attempts/{{ detail.attempt.id }}/draft-pr" method="post" class="draft-form">
+  {% elif detail.attempt.task_type == "code" and create_draft_pr_gate and draft_pr_content and detail.attempt.worktree_path and detail.attempt.branch %}
+  <form action="/workflow-gates/{{ create_draft_pr_gate.id }}/run" method="post" class="draft-form">
+    <input type="hidden" name="return_to" value="{{ return_to }}" />
     <input name="title" value="{{ draft_pr_content.title }}" aria-label="Pull request title" />
     <textarea name="body" rows="12" aria-label="Pull request description">{{ draft_pr_content.body }}</textarea>
     <div class="form-actions">
@@ -135,7 +173,12 @@
 </section>
 {% endif %}
 
-{{ draft_replies(detail.comments) }}
+{{ draft_replies(
+  detail.comments,
+  post_gate_id=post_answer_gate.id if post_answer_gate else none,
+  return_to=return_to,
+  legacy_post=False
+) }}
 
 <section>
   <h2>Timeline</h2>

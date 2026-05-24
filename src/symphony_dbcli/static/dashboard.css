@@ -327,6 +327,24 @@ a {
   margin-top: 16px;
 }
 
+.gate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.gate-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.gate-card p {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+
 .control-panel {
   display: flex;
   align-items: center;

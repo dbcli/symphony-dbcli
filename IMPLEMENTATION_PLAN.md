@@ -436,14 +436,12 @@ those primitives are composed into automatic transitions and human-gated steps.
   through a generic dispatcher. The poll loop still creates candidates from the
   configured GitHub repos directly, and manual review actions are still
   route-specific rather than fully gate-driven.
-- [ ] Move dashboard review actions to workflow gates. The dashboard should
+- [x] Move dashboard review actions to workflow gates. The dashboard should
   render available actions from pending gate rows rather than from hardcoded
   route-specific assumptions.
-  Progress: existing dashboard post-answer and create-draft-PR routes now find
-  and resolve the matching pending workflow gate before running the primitive.
-  Draft reply text and draft PR title/body can be edited before execution. The
-  page still needs to render actions directly from gate rows instead of using
-  route-specific forms.
+  Progress: attempt pages now render pending workflow gates directly, hide
+  review controls unless the matching gate exists, and submit editable draft
+  replies / draft PR content through the workflow-gate route.
 - [ ] Add conversational workflow editing to the dashboard. The user should be
   able to describe any intended workflow change in plain language, including
   state-machine changes, worker preferences, testing policy, `/review`

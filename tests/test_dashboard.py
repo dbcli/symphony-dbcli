@@ -180,16 +180,20 @@ def test_attempt_page_shows_draft_reply(tmp_path: Path) -> None:
         body="Suggested reply body",
         status="drafted",
     )
+    gate_id = _open_attempt_gate(store, attempt_id, transition_name="post_answer", gate="review_answer")
 
     html = render_attempt(store, attempt_id)
 
     assert "Worker Result" in html
+    assert "Pending Workflow Gates" in html
+    assert "post_answer" in html
     assert "Worker result body" in html
     assert "Draft Replies" in html
     assert "Suggested reply body" in html
     assert "drafted" in html
     assert "<textarea" in html
     assert "Post to GitHub" in html
+    assert f'action="/workflow-gates/{gate_id}/run"' in html
 
 
 def test_attempt_page_shows_code_follow_up_action_and_source_research(tmp_path: Path) -> None:
@@ -243,11 +247,12 @@ def test_code_attempt_page_can_create_and_show_draft_pr(tmp_path: Path) -> None:
         title="Code Changes",
         body="Summary:\n- Expanded configured `log_file` paths.",
     )
+    gate_id = _open_attempt_gate(store, attempt_id, transition_name="create_draft_pr", gate="review_diff")
 
     html = render_attempt(store, attempt_id)
 
     assert "Create Draft PR" in html
-    assert f'action="/attempts/{attempt_id}/draft-pr"' in html
+    assert f'action="/workflow-gates/{gate_id}/run"' in html
     assert 'name="title"' in html
     assert 'name="body"' in html
     assert "Fix #245: Expanded configured log_file paths" in html
@@ -264,6 +269,34 @@ def test_code_attempt_page_can_create_and_show_draft_pr(tmp_path: Path) -> None:
 
     assert "Create Draft PR" not in pr_html
     assert "https://github.com/dbcli/litecli/pull/12" in pr_html
+
+
+def test_attempt_page_hides_review_actions_without_pending_gates(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    _seed_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        worktree_path="/tmp/litecli",
+        branch="symphony/dbcli-litecli-245-attempt-1",
+        status="review",
+    )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        result_type="code_changes",
+        title="Code Changes",
+        body="Summary:\n- Expanded configured `log_file` paths.",
+    )
+
+    html = render_attempt(store, attempt_id)
+
+    assert "Pending Workflow Gates" not in html
+    assert "Create Draft PR" not in html
 
 
 def test_issue_page_shows_editable_draft_replies(tmp_path: Path) -> None:
@@ -304,4 +337,25 @@ def _seed_issue(store: Store) -> None:
             labels=["symphony:todo"],
             task_type="research",
         )
+    )
+
+
+def _open_attempt_gate(store: Store, attempt_id: int, *, transition_name: str, gate: str) -> int:
+    attempt = store.attempt_by_id(attempt_id)
+    assert attempt is not None
+    instance_id = store.create_workflow_instance(
+        repo=str(attempt["repo"]),
+        issue_number=int(attempt["issue_number"]),
+        task_type=str(attempt["task_type"]),
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    return store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate=gate,
+        transition_name=transition_name,
+        state="review",
+        prompt="Review the generated output.",
     )

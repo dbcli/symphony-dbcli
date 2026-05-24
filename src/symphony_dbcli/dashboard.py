@@ -211,6 +211,8 @@ def render_issue(store: Store, repo: str, number: int) -> str:
 
 def render_attempt(store: Store, attempt_id: int) -> str:
     detail = store.attempt_detail(attempt_id)
+    pending_gates = store.pending_workflow_gates_for_attempt(attempt_id) if detail else []
+    gate_transitions = {str(row["transition_name"]): row for row in pending_gates}
     return (
         _templates()
         .get_template("attempt.html")
@@ -218,6 +220,10 @@ def render_attempt(store: Store, attempt_id: int) -> str:
             title=f"Attempt {attempt_id}",
             attempt_id=attempt_id,
             detail=detail,
+            pending_gates=pending_gates,
+            create_draft_pr_gate=gate_transitions.get("create_draft_pr"),
+            post_answer_gate=gate_transitions.get("post_answer"),
+            return_to=f"/attempts/{attempt_id}",
             draft_pr_content=_draft_pr_content(detail),
         )
     )
@@ -307,6 +313,14 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             parts = parsed.path.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "workflow-gates" and parts[2] == "run":
+                try:
+                    gate_id = int(parts[1])
+                except ValueError:
+                    self.send_error(404)
+                    return
+                self._run_workflow_gate(gate_id)
+                return
             if len(parts) == 3 and parts[0] == "attempts" and parts[2] == "follow-up-code":
                 try:
                     source_attempt_id = int(parts[1])
@@ -353,6 +367,23 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 self.send_error(400, str(exc))
                 return
             self._redirect(f"/attempts/{target_attempt_id}")
+
+        def _run_workflow_gate(self, gate_id: int) -> None:
+            gate = store.workflow_gate_by_id(gate_id)
+            if not gate or str(gate["status"]) != "pending":
+                self.send_error(404)
+                return
+            params = self._read_form()
+            input_data = _gate_input_data(params)
+            try:
+                Orchestrator(state.config(), store).run_human_gate(gate_id, input_data=input_data)
+            except OrchestratorError as exc:
+                self.send_error(400, str(exc))
+                return
+            except RuntimeError as exc:
+                self.send_error(502, str(exc))
+                return
+            self._redirect(_safe_return_to(params, gate))
 
         def _create_draft_pr(self, attempt_id: int) -> None:
             params = self._read_form()
@@ -480,3 +511,17 @@ def _format_ms(value: Any) -> str:
 
 def _issue_path(repo: str, number: int) -> str:
     return f"/issues/{repo}/{number}"
+
+
+def _gate_input_data(params: dict[str, list[str]]) -> dict[str, Any]:
+    return {key: values[0] for key, values in params.items() if key != "return_to" and values}
+
+
+def _safe_return_to(params: dict[str, list[str]], gate: sqlite3.Row) -> str:
+    requested = params.get("return_to", [""])[0]
+    if requested.startswith("/") and not requested.startswith("//"):
+        return requested
+    attempt_id = gate["attempt_id"]
+    if attempt_id is not None:
+        return f"/attempts/{int(attempt_id)}"
+    return _issue_path(str(gate["repo"]), int(gate["issue_number"]))

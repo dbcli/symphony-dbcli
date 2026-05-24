@@ -1,4 +1,4 @@
-{% macro draft_replies(comments, show_attempt_link=False) %}
+{% macro draft_replies(comments, show_attempt_link=False, post_gate_id=None, return_to="", legacy_post=True) %}
 <section>
   <h2>Draft Replies</h2>
   {% if comments %}
@@ -15,7 +15,16 @@
         <a href="{{ row.url }}">GitHub comment</a>
         {% endif %}
       </div>
-      {% if row.status == "drafted" %}
+      {% if row.status == "drafted" and post_gate_id %}
+      <form action="/workflow-gates/{{ post_gate_id }}/run" method="post" class="draft-form">
+        <input type="hidden" name="comment_id" value="{{ row.id }}" />
+        {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}" />{% endif %}
+        <textarea name="body" rows="12">{{ row.body }}</textarea>
+        <div class="form-actions">
+          <button type="submit">Post to GitHub</button>
+        </div>
+      </form>
+      {% elif row.status == "drafted" and legacy_post %}
       <form action="/comments/{{ row.id }}/post" method="post" class="draft-form">
         <textarea name="body" rows="12">{{ row.body }}</textarea>
         <div class="form-actions">
