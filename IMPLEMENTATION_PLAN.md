@@ -453,12 +453,15 @@ those primitives are composed into automatic transitions and human-gated steps.
   plain-language change note, produces a validated `WORKFLOW.md` proposal and
   diff, allows direct editing of the proposed file, and records applied edits in
   SQLite.
-- [ ] Upgrade Ask Symphony into a hybrid query system. Keep the current
+- [x] Upgrade Ask Symphony into a hybrid query system. Keep the current
   deterministic SQLite fast paths for common questions about issue timing,
   turns, errors, worker status, workflow versions, and pending gates; add an
   LLM-backed fallback over structured SQLite context for richer questions such
   as why a worker is stuck, what changed between attempts, or how to interpret
   recent failures.
+  Progress: Ask now keeps the fast deterministic paths and adds a structured
+  SQLite context fallback for pending gates, stuck/blocked work, and recent
+  failures, with a typed fallback provider seam for an LLM-backed answerer.
 - [x] Add workflow state-machine visualization to the dashboard. Render states,
   automatic transitions, human gates, terminal states, and the current runtime
   position of active issues so users can verify the workflow intention before

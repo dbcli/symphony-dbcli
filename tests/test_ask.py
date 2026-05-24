@@ -51,3 +51,50 @@ def test_ask_summarizes_issue_metrics(tmp_path: Path) -> None:
     assert rich_answer.links[0].url == "/issues/dbcli/mycli/99"
     assert rich_answer.links[1].label == f"Attempt {attempt_id}"
     assert rich_answer.links[1].url == f"/attempts/{attempt_id}"
+
+
+def test_ask_summarizes_pending_gates(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    _seed_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/mycli",
+        issue_number=99,
+        task_type="research",
+        workflow_version_id=None,
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/mycli",
+        issue_number=99,
+        task_type="research",
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_answer",
+        transition_name="post_answer",
+        state="review",
+    )
+
+    answer = answer_with_links(store, "What is waiting for review?")
+
+    assert "1 human gate(s) are pending" in answer.text
+    assert "dbcli/mycli#99:post_answer" in answer.text
+    assert answer.links[0].url == "/issues/dbcli/mycli/99"
+
+
+def _seed_issue(store: Store) -> None:
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/mycli",
+            number=99,
+            title="Question",
+            url="https://github.com/dbcli/mycli/issues/99",
+            state="open",
+            labels=["symphony:todo"],
+            task_type="research",
+        )
+    )
