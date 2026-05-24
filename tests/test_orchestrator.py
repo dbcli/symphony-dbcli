@@ -86,6 +86,55 @@ def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> 
     assert {row["transition_name"] for row in gates} == {"create_draft_pr", "mark_blocked"}
 
 
+def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    gate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_diff",
+        transition_name="create_draft_pr",
+        state="review",
+        prompt="Review the generated diff.",
+    )
+    primitives = FakeWorkflowPrimitives()
+
+    result = Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_human_gate(gate_id)
+
+    instance = store.workflow_instance_by_id(instance_id)
+    gate = store.workflow_gate_by_id(gate_id)
+    attempt = store.attempt_by_id(attempt_id)
+    assert primitives.transitions == ["create_draft_pr"]
+    assert result.current_state == "pr_ready"
+    assert result.stop_reason == "no_transition"
+    assert instance is not None
+    assert instance["current_state"] == "pr_ready"
+    assert gate is not None
+    assert gate["status"] == "resolved"
+    assert gate["decision"] == "approved"
+    assert attempt is not None
+    assert attempt["outcome"] == "draft_pr_created"
+
+
 def test_orchestrator_cleans_worktree_after_pr_merge(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
     source = tmp_path / "source"

@@ -388,9 +388,10 @@ those primitives are composed into automatic transitions and human-gated steps.
   `github.create_draft_pr`, `github.post_issue_comment`,
   `github.fetch_pull_request`, and `github.fetch_ci_status`.
   Progress: primitive specs exist, `github.fetch_issues` and
-  `github.apply_labels` now execute through the primitive layer, and workflow
-  action runs are recorded by the generic dispatcher. The remaining GitHub
-  primitives still need dedicated implementations.
+  `github.apply_labels`, `github.create_draft_pr`, and
+  `github.post_issue_comment` now execute through the primitive layer, and
+  workflow action runs are recorded by the generic dispatcher. The remaining
+  GitHub read primitives still need dedicated implementations.
 - [ ] Implement the first Codex primitives: `codex.research_issue`,
   `codex.fix_issue`, `codex.address_pr_comments`, and
   `codex.fix_ci_failures`. These should store worker results in SQLite
@@ -419,9 +420,10 @@ those primitives are composed into automatic transitions and human-gated steps.
 - [ ] Implement human gate primitives for review steps, including reviewing a
   research answer, editing/posting an issue comment, reviewing a code diff, and
   approving draft PR creation.
-  Progress: workflow gates are stored, opened after worker completion, and
-  shown on the dashboard. Existing review actions are still route-specific
-  rather than gate-driven.
+  Progress: workflow gates are stored, opened after worker completion, shown on
+  the dashboard, and executable through the generic human-gate dispatcher for
+  posting issue comments and creating draft PRs. Mark-blocked and richer
+  review/edit UX remain.
 - [ ] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.
@@ -433,6 +435,10 @@ those primitives are composed into automatic transitions and human-gated steps.
 - [ ] Move dashboard review actions to workflow gates. The dashboard should
   render available actions from pending gate rows rather than from hardcoded
   route-specific assumptions.
+  Progress: existing dashboard post-answer and create-draft-PR routes now find
+  and resolve the matching pending workflow gate before running the primitive.
+  The page still needs to render actions directly from gate rows instead of
+  using route-specific forms.
 - [ ] Add conversational workflow editing to the dashboard. The user should be
   able to describe any intended workflow change in plain language, including
   state-machine changes, worker preferences, testing policy, `/review`

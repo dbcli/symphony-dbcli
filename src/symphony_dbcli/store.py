@@ -437,6 +437,44 @@ class Store:
                 )
             )
 
+    def workflow_gate_by_id(self, gate_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT g.*, i.repo, i.issue_number, i.task_type, i.attempt_id
+                    FROM workflow_gates g
+                    JOIN workflow_instances i ON i.id = g.workflow_instance_id
+                    WHERE g.id = ?
+                    """,
+                    (gate_id,),
+                ).fetchone(),
+            )
+
+    def pending_workflow_gate_for_attempt(
+        self,
+        attempt_id: int,
+        transition_name: str,
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT g.*, i.repo, i.issue_number, i.task_type, i.attempt_id
+                    FROM workflow_gates g
+                    JOIN workflow_instances i ON i.id = g.workflow_instance_id
+                    WHERE i.attempt_id = ?
+                      AND g.transition_name = ?
+                      AND g.status = 'pending'
+                    ORDER BY g.id DESC
+                    LIMIT 1
+                    """,
+                    (attempt_id, transition_name),
+                ).fetchone(),
+            )
+
     def workflow_state_counts(self) -> dict[str, int]:
         with self.connect() as conn:
             rows = conn.execute(

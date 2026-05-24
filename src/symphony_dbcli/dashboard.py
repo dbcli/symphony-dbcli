@@ -15,7 +15,7 @@ from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescap
 
 from .ask import AskAnswer, answer_with_links
 from .config import WorkflowConfig, default_config
-from .review_actions import ReviewActionError, ReviewActions
+from .orchestrator import Orchestrator, OrchestratorError
 from .store import Store
 
 
@@ -340,9 +340,13 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
             self._redirect(f"/attempts/{target_attempt_id}")
 
         def _create_draft_pr(self, attempt_id: int) -> None:
+            gate = store.pending_workflow_gate_for_attempt(attempt_id, "create_draft_pr")
+            if not gate:
+                self.send_error(400, "No pending create_draft_pr workflow gate for this attempt.")
+                return
             try:
-                ReviewActions(state.config(), store).create_draft_pr(attempt_id)
-            except ReviewActionError as exc:
+                Orchestrator(state.config(), store).run_human_gate(int(gate["id"]))
+            except OrchestratorError as exc:
                 self.send_error(400, str(exc))
                 return
             except RuntimeError as exc:
@@ -352,21 +356,33 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
 
         def _post_comment(self, comment_id: int) -> None:
             params = self._read_form()
+            comment = store.comment_by_id(comment_id)
+            if not comment:
+                self.send_error(404)
+                return
+            attempt_id = comment["attempt_id"]
+            if attempt_id is None:
+                self.send_error(400, "Comment is not associated with a workflow attempt.")
+                return
+            gate = store.pending_workflow_gate_for_attempt(int(attempt_id), "post_answer")
+            if not gate:
+                self.send_error(400, "No pending post_answer workflow gate for this attempt.")
+                return
             try:
-                posted = ReviewActions(state.config(), store).post_comment(
-                    comment_id,
-                    params.get("body", [""])[0],
+                Orchestrator(state.config(), store).run_human_gate(
+                    int(gate["id"]),
+                    input_data={
+                        "comment_id": comment_id,
+                        "body": params.get("body", [""])[0],
+                    },
                 )
-            except ReviewActionError as exc:
+            except OrchestratorError as exc:
                 self.send_error(400, str(exc))
                 return
             except RuntimeError as exc:
                 self.send_error(502, str(exc))
                 return
-            if posted.attempt_id is not None:
-                self._redirect(f"/attempts/{posted.attempt_id}")
-                return
-            self._redirect(_issue_path(posted.repo, posted.issue_number))
+            self._redirect(f"/attempts/{attempt_id}")
 
         def _send_html(self, body: str) -> None:
             encoded = body.encode("utf-8")

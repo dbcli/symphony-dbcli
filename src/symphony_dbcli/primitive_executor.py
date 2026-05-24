@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from dataclasses import asdict, dataclass, field
+from typing import Any, Protocol, cast
 
 from .config import WorkflowConfig
 from .github import GitHubClient, GitHubError, GitHubIssue, PullRequest
+from .review_actions import GitHubReviewClient, ReviewActionError, ReviewActions
 from .runner import CodexRunner
 from .store import Store
 from .worker_prompt import (
@@ -41,6 +42,7 @@ class PrimitiveContext:
     worktree_path: str = ""
     branch: str = ""
     commit_sha: str = ""
+    input_data: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -67,10 +69,16 @@ class PrimitiveExecutor:
         store: Store,
         *,
         github: PrimitiveGitHubClient | None = None,
+        review_actions: ReviewActions | None = None,
     ):
         self.config = config
         self.store = store
         self.github = github or GitHubClient(config.github)
+        self.review_actions = review_actions or ReviewActions(
+            config,
+            store,
+            github=cast(GitHubReviewClient, self.github),
+        )
 
     def fetch_issues(self) -> PrimitiveOutcome:
         synced = 0
@@ -93,6 +101,10 @@ class PrimitiveExecutor:
             return self._run_setup(context)
         if context.transition.action in {"codex.research_issue", "codex.fix_issue"}:
             return self._run_codex(context)
+        if context.transition.action == "github.create_draft_pr":
+            return self._create_draft_pr(context)
+        if context.transition.action == "github.post_issue_comment":
+            return self._post_issue_comment(context)
         raise PrimitiveExecutionError(f"Primitive {context.transition.action} is not implemented.")
 
     def _apply_labels(self, context: PrimitiveContext) -> PrimitiveOutcome:
@@ -218,6 +230,43 @@ class PrimitiveExecutor:
             }
         )
 
+    def _create_draft_pr(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        if self.config.policy.dry_run:
+            raise PrimitiveExecutionError("policy.dry_run is true; refusing to create a GitHub pull request.")
+        attempt_id = _required_attempt_id(context)
+        try:
+            pull_request = self.review_actions.create_draft_pr(attempt_id)
+        except ReviewActionError as exc:
+            raise PrimitiveExecutionError(str(exc)) from exc
+        return PrimitiveOutcome(
+            {
+                "pull_request_number": pull_request.number,
+                "pull_request_url": pull_request.url,
+                "pull_request_title": pull_request.title,
+                "state": pull_request.state,
+                "merged_at": pull_request.merged_at,
+            }
+        )
+
+    def _post_issue_comment(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        if self.config.policy.dry_run:
+            raise PrimitiveExecutionError("policy.dry_run is true; refusing to post a GitHub issue comment.")
+        comment_id = _required_int(context.input_data, "comment_id")
+        body = _required_str(context.input_data, "body")
+        try:
+            posted = self.review_actions.post_comment(comment_id, body)
+        except ReviewActionError as exc:
+            raise PrimitiveExecutionError(str(exc)) from exc
+        return PrimitiveOutcome(
+            {
+                "comment_id": comment_id,
+                "comment_url": posted.url,
+                "attempt_id": posted.attempt_id,
+                "repo": posted.repo,
+                "issue_number": posted.issue_number,
+            }
+        )
+
     def _label_changes(self, to_state: str) -> tuple[list[str], list[str]]:
         labels = self.config.labels
         if to_state == "claimed":
@@ -235,3 +284,19 @@ def _required_attempt_id(context: PrimitiveContext) -> int:
     if context.attempt_id is None:
         raise PrimitiveExecutionError(f"Primitive {context.transition.action} requires an attempt.")
     return context.attempt_id
+
+
+def _required_int(data: dict[str, Any], key: str) -> int:
+    value = data.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value:
+        return int(value)
+    raise PrimitiveExecutionError(f"Primitive input '{key}' is required.")
+
+
+def _required_str(data: dict[str, Any], key: str) -> str:
+    value = str(data.get(key, "")).strip()
+    if not value:
+        raise PrimitiveExecutionError(f"Primitive input '{key}' is required.")
+    return value

@@ -318,6 +318,71 @@ class Orchestrator:
         finally:
             heartbeat.stop()
 
+    def run_human_gate(
+        self,
+        gate_id: int,
+        *,
+        input_data: dict[str, Any] | None = None,
+        decided_by: str = "dashboard",
+    ) -> WorkflowAdvanceResult:
+        gate = self.store.workflow_gate_by_id(gate_id)
+        if not gate:
+            raise OrchestratorError(f"Workflow gate {gate_id} does not exist.")
+        if str(gate["status"]) != "pending":
+            raise OrchestratorError(f"Workflow gate {gate_id} is not pending.")
+        instance = self.store.workflow_instance_by_id(int(gate["workflow_instance_id"]))
+        if not instance:
+            raise OrchestratorError(f"Workflow instance {gate['workflow_instance_id']} does not exist.")
+        transition_name = str(gate["transition_name"])
+        transition = self.config.workflow.transitions.get(transition_name)
+        if not transition:
+            raise OrchestratorError(f"Workflow transition {transition_name!r} is not configured.")
+        if transition.trigger != "human":
+            raise OrchestratorError(f"Workflow transition {transition_name!r} is not a human gate.")
+        if str(instance["current_state"]) != transition.from_state:
+            raise OrchestratorError(
+                f"Workflow instance {instance['id']} is in state {instance['current_state']!r}, "
+                f"not {transition.from_state!r}."
+            )
+        action_input = self._workflow_action_input(instance) | {"gate_id": gate_id} | (input_data or {})
+        action = self._start_workflow_action(
+            int(instance["id"]),
+            attempt_id=_optional_int(instance["attempt_id"]),
+            transition_name=transition_name,
+            input_data=action_input,
+        )
+        try:
+            outcome = self.primitives.execute(
+                self._primitive_context(
+                    instance,
+                    transition_name,
+                    transition,
+                    input_data=action_input,
+                )
+            )
+        except PrimitiveExecutionError as exc:
+            self._finish_workflow_action(action, "failed", output_data=exc.output, error=str(exc))
+            raise OrchestratorError(str(exc)) from exc
+        except Exception as exc:
+            self._finish_workflow_action(action, "failed", error=str(exc))
+            raise
+        self._finish_workflow_action(action, "succeeded", output_data=outcome.output)
+        self._transition_workflow_action(
+            action,
+            status=self._workflow_status_for_state(transition.to_state),
+            data=outcome.output,
+        )
+        self.store.resolve_workflow_gate(gate_id, decision="approved", decided_by=decided_by)
+        attempt_id = _optional_int(instance["attempt_id"])
+        if attempt_id is not None and transition.to_state in self.config.workflow.terminal_states:
+            self.store.finish_attempt(attempt_id, transition.to_state, transition.to_state)
+        if attempt_id is not None and transition.to_state == "pr_ready":
+            self.store.update_attempt_outcome(attempt_id, "draft_pr_created")
+        return self._advance_workflow_instance(
+            int(instance["id"]),
+            allowed_side_effects={"github_read", "github_write", "workspace_write", "codex_worker"},
+        )
+
     def _advance_workflow_instance(
         self,
         instance_id: int,
@@ -400,6 +465,7 @@ class Orchestrator:
         instance: sqlite3.Row,
         transition_name: str,
         transition: WorkflowTransitionConfig,
+        input_data: dict[str, Any] | None = None,
     ) -> PrimitiveContext:
         repo = str(instance["repo"])
         issue_number = int(instance["issue_number"])
@@ -420,6 +486,7 @@ class Orchestrator:
             worktree_path="" if not attempt else str(attempt["worktree_path"] or ""),
             branch="" if not attempt else str(attempt["branch"] or ""),
             commit_sha="" if not attempt else str(attempt["commit_sha"] or ""),
+            input_data=input_data or {},
         )
 
     def _workflow_status_for_state(self, state: str) -> str:
@@ -530,6 +597,7 @@ class Orchestrator:
                     message=str(exc),
                     recoverable=True,
                 )
+            raise OrchestratorError(str(exc)) from exc
 
     def _fail_workflow_instance(self, instance_id: int, message: str) -> None:
         try:
