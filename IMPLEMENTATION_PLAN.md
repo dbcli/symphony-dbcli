@@ -356,11 +356,14 @@ those primitives are composed into automatic transitions and human-gated steps.
   It must support states, terminal states, automatic transitions, human gates,
   transition conditions, action inputs, action outputs, retry policy, timeout
   policy, and artifact handoff between steps.
-- [ ] Extend `WORKFLOW.md` to capture worker preferences outside the state
+  Progress: states, terminal states, automatic/human transitions, conditions,
+  retry limits, and timeouts are now represented. Explicit action input/output
+  mappings and artifact handoff still need to be modeled.
+- [x] Extend `WORKFLOW.md` to capture worker preferences outside the state
   machine. These preferences should include review expectations, preferred test
   strategy, project-specific coding style, when to run `/review`, and any
   repo-specific instructions that should shape Codex prompts.
-- [ ] Add first-class workflow setup steps. The user should be able to define
+- [x] Add first-class workflow setup steps. The user should be able to define
   commands needed to prepare a repo or worktree before worker execution, such as
   installing test dependencies, running database migrations, generating local
   fixtures, or validating that required tools are available.
@@ -369,10 +372,14 @@ those primitives are composed into automatic transitions and human-gated steps.
   missing gate labels, invalid retry settings, and action input/output
   mismatches before a workflow version is accepted. It should also validate
   preference sections and setup-step definitions.
-- [ ] Add durable workflow runtime tables to SQLite. Track workflow instances,
+  Progress: typed parsing and validation now cover workflow states,
+  transitions, unknown actions, invalid state references, unreachable states,
+  human-gate labels, retry settings, timeout settings, preferences, and setup
+  steps. Action input/output mismatch validation remains.
+- [x] Add durable workflow runtime tables to SQLite. Track workflow instances,
   current state, pending gates, action runs, action outputs, transition events,
   retries, errors, and the workflow version that produced every runtime row.
-- [ ] Introduce an action primitive interface and registry. Each primitive must
+- [x] Introduce an action primitive interface and registry. Each primitive must
   declare its name, typed input, typed output, side-effect behavior,
   idempotency key strategy, and whether it can run automatically or only after
   a human gate.
@@ -380,25 +387,43 @@ those primitives are composed into automatic transitions and human-gated steps.
   `github.fetch_issue`, `github.fetch_comments`, `github.apply_labels`,
   `github.create_draft_pr`, `github.post_issue_comment`,
   `github.fetch_pull_request`, and `github.fetch_ci_status`.
+  Progress: primitive specs exist and current orchestration records
+  `github.apply_labels` action runs. The full primitive execution layer is not
+  implemented yet.
 - [ ] Implement the first Codex primitives: `codex.research_issue`,
   `codex.fix_issue`, `codex.address_pr_comments`, and
   `codex.fix_ci_failures`. These should store worker results in SQLite
   regardless of dry-run mode.
+  Progress: primitive specs exist and current orchestration records
+  `codex.research_issue` / `codex.fix_issue` action runs. Dedicated primitive
+  implementations and PR-comment/CI variants remain.
 - [ ] Implement workspace primitives: `workspace.allocate`,
   `workspace.run_setup`, `workspace.record_changes`, and
   `workspace.cleanup_after_merge`. The first implementation should support the
   existing worktree strategy; a clone strategy should share the same primitive
   contract once added. Setup execution should capture command, duration, exit
   status, stdout/stderr excerpts, and whether failure blocks the worker.
+  Progress: `workspace.run_setup` is implemented and current orchestration
+  records `workspace.allocate`, `workspace.run_setup`, and cleanup action runs.
+  `workspace.record_changes` and strategy-neutral primitive dispatch remain.
 - [ ] Add workspace strategy configuration and validation. The dashboard and
   CLI should clearly show whether new tasks start from git worktrees or full
   clones, which branch policy is active, and where cleanup will happen.
+  Progress: config now includes strategy, branch prefix, and base branch
+  validation for the existing worktree strategy. Dashboard/CLI strategy display
+  and clone support remain.
 - [ ] Implement human gate primitives for review steps, including reviewing a
   research answer, editing/posting an issue comment, reviewing a code diff, and
   approving draft PR creation.
+  Progress: workflow gates are stored, opened after worker completion, and
+  shown on the dashboard. Existing review actions are still route-specific
+  rather than gate-driven.
 - [ ] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.
+  Progress: orchestration now records workflow runtime rows and uses the
+  workflow engine for task-type transition selection and review gate selection.
+  The main poll/claim/run loop is still mostly hardcoded.
 - [ ] Move dashboard review actions to workflow gates. The dashboard should
   render available actions from pending gate rows rather than from hardcoded
   route-specific assumptions.
@@ -408,7 +433,7 @@ those primitives are composed into automatic transitions and human-gated steps.
   behavior, setup commands, and repo-specific instructions. The dashboard
   should show the proposed `WORKFLOW.md` diff, validate it, and apply it
   without leaving the dashboard.
-- [ ] Add workflow state-machine visualization to the dashboard. Render states,
+- [x] Add workflow state-machine visualization to the dashboard. Render states,
   automatic transitions, human gates, terminal states, and the current runtime
   position of active issues so users can verify the workflow intention before
   and while it runs.
@@ -416,13 +441,16 @@ those primitives are composed into automatic transitions and human-gated steps.
   fetch labeled issues, claim work, allocate a worktree, run Codex, store the
   result, move to human review, optionally post a reply or create a draft PR,
   and clean up the worktree after PR merge.
+  Progress: the default workflow is now encoded in `WORKFLOW.md`. Runtime still
+  needs to execute the whole flow through generic workflow dispatch rather than
+  a mostly hardcoded orchestrator.
 - [ ] Add fixture workflows under the e2e harness for fast iteration: code
   happy path, research answer review, research-to-code follow-up, PR review
   comments addressed by Codex, and CI failure fixed by Codex.
 - [ ] Add end-to-end tests that execute workflow files against
   `amjith/symphony-dbcli-e2e-fixture` and assert state transitions, stored
   artifacts, labels, comments, draft PRs, and cleanup behavior.
-- [ ] Keep compatibility with the existing dashboard, CLI, and SQLite data
+- [x] Keep compatibility with the existing dashboard, CLI, and SQLite data
   where practical. Add migrations for the new workflow runtime tables instead
   of rewriting existing attempt, worker, comment, and PR history.
 
