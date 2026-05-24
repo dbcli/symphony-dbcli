@@ -210,6 +210,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     store.init()
     summary = store.dashboard_summary()
     print(f"profile={config.profile.active} database={config.database.path}")
+    print(
+        "workspace="
+        f"{config.workspace.strategy} root={config.workspace.root} "
+        f"bare_repos={config.workspace.bare_repos_root} "
+        f"branch_prefix={config.workspace.branch_prefix} "
+        f"base_branch={config.workspace.base_branch or 'default'} "
+        f"retention_days={config.workspace.retention_days}"
+    )
     print(f"start_queued_work_automatically={store.start_queued_work_automatically()}")
     print(
         f"issues={summary['issue_count']} running={summary['running_attempts']} queued={summary['queued_attempts']}"

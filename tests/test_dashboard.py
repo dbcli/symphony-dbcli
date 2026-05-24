@@ -26,6 +26,9 @@ def test_dashboard_uses_static_css(tmp_path: Path) -> None:
     assert "Recent Attempts" in html
     assert "Dry Run" in html
     assert "On" in html
+    assert "Workspace Strategy" in html
+    assert "branch prefix symphony" in html
+    assert ".symphony/worktrees" in html
     assert "Start queued work automatically" in html
     assert 'role="switch"' in html
     assert 'aria-checked="true"' in html

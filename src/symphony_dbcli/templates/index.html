@@ -14,6 +14,27 @@
   <div class="metric"><strong>{{ summary.error_count }}</strong><span>Errors</span></div>
 </section>
 
+<section>
+  <div class="section-header">
+    <h2>Workspace Strategy</h2>
+    <span class="status-pill is-ok">{{ runtime.workspace_strategy }}</span>
+  </div>
+  <div class="workflow-grid">
+    <div>
+      <span class="label">New task workspace</span>
+      <strong>{{ runtime.workspace_strategy }}</strong>
+      <span class="muted">branch prefix {{ runtime.branch_prefix }}</span>
+      <code>{{ runtime.workspace_root }}</code>
+    </div>
+    <div>
+      <span class="label">Shared repositories</span>
+      <strong>{{ runtime.base_branch }}</strong>
+      <span class="muted">cleanup after {{ runtime.retention_days }} days</span>
+      <code>{{ runtime.bare_repos_root }}</code>
+    </div>
+  </div>
+</section>
+
 <section class="control-panel">
   <div>
     <h2>Start queued work automatically</h2>

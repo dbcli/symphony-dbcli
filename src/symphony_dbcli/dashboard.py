@@ -26,6 +26,12 @@ class DashboardRuntime:
     dry_run: bool
     database_path: str
     start_queued_work_automatically: bool
+    workspace_strategy: str
+    workspace_root: str
+    bare_repos_root: str
+    branch_prefix: str
+    base_branch: str
+    retention_days: int
 
     @classmethod
     def from_config(
@@ -39,6 +45,12 @@ class DashboardRuntime:
             dry_run=config.policy.dry_run,
             database_path=config.database.path,
             start_queued_work_automatically=start_queued_work_automatically,
+            workspace_strategy=config.workspace.strategy,
+            workspace_root=config.workspace.root,
+            bare_repos_root=config.workspace.bare_repos_root,
+            branch_prefix=config.workspace.branch_prefix,
+            base_branch=config.workspace.base_branch or "default branch",
+            retention_days=config.workspace.retention_days,
         )
 
 

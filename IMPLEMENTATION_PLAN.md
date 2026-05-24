@@ -414,12 +414,13 @@ those primitives are composed into automatic transitions and human-gated steps.
   Progress: all listed worktree-backed workspace primitives now execute through
   the primitive layer and record workflow action outputs/artifacts. Clone
   strategy support remains a future strategy extension.
-- [ ] Add workspace strategy configuration and validation. The dashboard and
+- [x] Add workspace strategy configuration and validation. The dashboard and
   CLI should clearly show whether new tasks start from git worktrees or full
   clones, which branch policy is active, and where cleanup will happen.
-  Progress: config now includes strategy, branch prefix, and base branch
-  validation for the existing worktree strategy. Dashboard/CLI strategy display
-  and clone support remain.
+  Progress: config validates the active strategy and branch policy for the
+  current worktree implementation, and the dashboard / CLI show the workspace
+  strategy, roots, branch prefix, base branch policy, and retention setting.
+  Full clone support remains a future strategy implementation.
 - [ ] Implement human gate primitives for review steps, including reviewing a
   research answer, editing/posting an issue comment, reviewing a code diff, and
   approving draft PR creation.
