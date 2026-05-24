@@ -24,6 +24,9 @@ def test_dashboard_uses_static_css(tmp_path: Path) -> None:
     assert '<script src="/static/dashboard.js" defer></script>' in html
     assert "<style>" not in html
     assert "Recent Attempts" in html
+    assert 'href="/workflow/edit"' in html
+    assert "Workflow Editor" in html
+    assert 'href="/ask"' in html
     assert "Dry Run" in html
     assert "On" in html
     assert "Workspace Strategy" in html
@@ -354,7 +357,7 @@ def _open_attempt_gate(store: Store, attempt_id: int, *, transition_name: str, g
         initial_state="review",
         attempt_id=attempt_id,
     )
-    return store.open_workflow_gate(
+    gate_id = store.open_workflow_gate(
         instance_id=instance_id,
         workflow_version_id=None,
         gate=gate,
@@ -362,3 +365,4 @@ def _open_attempt_gate(store: Store, attempt_id: int, *, transition_name: str, g
         state="review",
         prompt="Review the generated output.",
     )
+    return int(gate_id)

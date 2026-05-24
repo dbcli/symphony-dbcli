@@ -22,10 +22,10 @@ body {
 }
 
 header {
-  height: 56px;
+  min-height: 56px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   padding: 0 24px;
   border-bottom: 1px solid var(--line);
@@ -36,6 +36,31 @@ header a {
   color: var(--text);
   text-decoration: none;
   font-weight: 650;
+}
+
+.brand-link {
+  flex: 0 0 auto;
+}
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.header-nav a {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: #3f4a5a;
+  font-size: 12px;
+}
+
+.header-nav a:hover {
+  border-color: #b9c2cf;
+  background: #fbfcfd;
 }
 
 main {
@@ -55,6 +80,7 @@ section {
 h1 {
   min-width: 0;
   margin: 0;
+  margin-left: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

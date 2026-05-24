@@ -8,7 +8,15 @@
   <script src="/static/dashboard.js" defer></script>
 </head>
 <body>
-  <header><a href="/">Symphony DBCLI</a><h1>{{ title }}</h1></header>
+  <header>
+    <a class="brand-link" href="/">Symphony DBCLI</a>
+    <nav class="header-nav" aria-label="Dashboard">
+      <a href="/">Dashboard</a>
+      <a href="/workflow/edit">Workflow Editor</a>
+      <a href="/ask">Ask</a>
+    </nav>
+    <h1>{{ title }}</h1>
+  </header>
   <main>{% block body %}{% endblock %}</main>
 </body>
 </html>
