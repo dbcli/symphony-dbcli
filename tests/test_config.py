@@ -29,8 +29,15 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.workspace.strategy == "worktree"
     assert config.workspace.root == ".symphony/worktrees"
     assert config.workspace.bare_repos_root == ".symphony/repos"
+    assert config.workspace.branch_prefix == "symphony"
     assert config.dashboard.host == "127.0.0.1"
     assert config.policy.dry_run is True
+    assert config.workflow.initial_state == "todo"
+    assert config.workflow.transitions["fix_issue"].action == "codex.fix_issue"
+    assert config.workflow.transitions["create_draft_pr"].trigger == "human"
+    assert config.preferences.preferred_test_strategy == "unit"
+    assert config.preferences.run_review_after_code_change is True
+    assert config.setup.enabled is True
     assert "post_research_answers" not in workflow
     assert "open_pull_requests" not in workflow
     assert "Workers should be direct" in config.instructions
@@ -40,6 +47,10 @@ def test_rendered_workflow_includes_local_and_prod_profiles() -> None:
     workflow = render_workflow(default_config())
 
     assert '[profile]\nactive = "local"' in workflow
+    assert "[workflow]" in workflow
+    assert "[workflow.transitions.fix_issue]" in workflow
+    assert 'action = "codex.fix_issue"' in workflow
+    assert "[preferences]" in workflow
     assert "[profiles.local.database]" in workflow
     assert 'path = ".symphony/symphony.db"' in workflow
     assert "[profiles.prod.database]" in workflow
@@ -138,4 +149,78 @@ def test_workflow_rejects_enabled_side_effect_policy(monkeypatch: pytest.MonkeyP
     )
 
     with pytest.raises(WorkflowError, match="no longer configurable"):
+        parse_workflow(workflow)
+
+
+def test_workflow_validation_rejects_unknown_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        'action = "codex.fix_issue"',
+        'action = "codex.nope"',
+    )
+
+    with pytest.raises(WorkflowError, match="not a known primitive"):
+        parse_workflow(workflow)
+
+
+def test_workflow_validation_rejects_human_transition_without_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        'gate = "review_diff"',
+        'gate = ""',
+    )
+
+    with pytest.raises(WorkflowError, match="gate is required"):
+        parse_workflow(workflow)
+
+
+def test_workflow_accepts_setup_steps_and_preferences(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = (
+        render_workflow(default_config())
+        .replace(
+            "[workflow]\n",
+            "\n".join(
+                [
+                    "[setup.steps.install_deps]",
+                    'command = ["uv", "sync"]',
+                    'description = "Install dependencies before running tests."',
+                    'run = "per_repo"',
+                    'cwd = "workspace"',
+                    "timeout_seconds = 300",
+                    "blocks_worker = true",
+                    "",
+                    "[workflow]",
+                    "",
+                ]
+            ),
+        )
+        .replace('preferred_test_strategy = "unit"', 'preferred_test_strategy = "balanced"')
+    )
+
+    config = parse_workflow(workflow)
+
+    assert config.preferences.preferred_test_strategy == "balanced"
+    assert config.setup.steps["install_deps"].command == ["uv", "sync"]
+    assert config.setup.steps["install_deps"].run == "per_repo"
+    assert config.setup.steps["install_deps"].blocks_worker is True
+
+
+def test_workflow_validation_rejects_invalid_setup_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    clear_profile_env(monkeypatch)
+    workflow = render_workflow(default_config()).replace(
+        "[workflow]\n",
+        "\n".join(
+            [
+                "[setup.steps.install_deps]",
+                "command = []",
+                "timeout_seconds = 0",
+                "",
+                "[workflow]",
+                "",
+            ]
+        ),
+    )
+
+    with pytest.raises(WorkflowError, match="command must include at least one argument"):
         parse_workflow(workflow)

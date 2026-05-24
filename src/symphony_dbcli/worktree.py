@@ -77,7 +77,8 @@ class WorktreeManager:
 
     def branch_name(self, repo: str, issue_number: int, attempt_id: int) -> str:
         owner, name = repo.split("/", 1)
-        return f"symphony/{safe_key(owner)}-{safe_key(name)}-{issue_number}-attempt-{attempt_id}"
+        prefix = self.config.branch_prefix.strip("/")
+        return f"{prefix}/{safe_key(owner)}-{safe_key(name)}-{issue_number}-attempt-{attempt_id}"
 
     def cleanup_prunable(self) -> str:
         root = Path(self.config.bare_repos_root)

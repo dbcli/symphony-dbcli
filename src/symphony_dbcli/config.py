@@ -9,6 +9,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .workflow_definition import (
+    SetupConfig,
+    WorkerPreferencesConfig,
+    WorkflowDefinitionConfig,
+    default_setup_config,
+    default_worker_preferences,
+    default_workflow_definition,
+    setup_config_from_dict,
+    validate_setup_config,
+    validate_worker_preferences,
+    validate_workflow_definition,
+    worker_preferences_from_dict,
+    workflow_definition_from_dict,
+)
+
 
 class WorkflowError(ValueError):
     """Raised when WORKFLOW.md cannot be parsed or validated."""
@@ -73,6 +88,8 @@ class WorkspaceConfig:
     root: str = ".symphony/worktrees"
     bare_repos_root: str = ".symphony/repos"
     retention_days: int = 14
+    branch_prefix: str = "symphony"
+    base_branch: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,6 +143,9 @@ class WorkflowConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     codex: CodexConfig = field(default_factory=CodexConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
+    workflow: WorkflowDefinitionConfig = field(default_factory=default_workflow_definition)
+    preferences: WorkerPreferencesConfig = field(default_factory=default_worker_preferences)
+    setup: SetupConfig = field(default_factory=default_setup_config)
     instructions: str = DEFAULT_INSTRUCTIONS
 
     def to_dict(self) -> dict[str, Any]:
@@ -183,19 +203,27 @@ def config_from_dict(
 ) -> WorkflowConfig:
     active_profile = _selected_profile(data, profile)
     merged = _apply_profile(data, active_profile)
-    return WorkflowConfig(
-        profile=ProfileConfig(active=active_profile),
-        tracker=TrackerConfig(**_section(merged, "tracker")),
-        github=GitHubConfig(**_section(merged, "github")),
-        labels=LabelConfig(**_section(merged, "labels")),
-        workspace=WorkspaceConfig(**_section(merged, "workspace")),
-        workers=WorkerConfig(**_section(merged, "workers")),
-        dashboard=DashboardConfig(**_section(merged, "dashboard")),
-        database=DatabaseConfig(**_section(merged, "database")),
-        codex=CodexConfig(**_section(merged, "codex")),
-        policy=_policy_config(merged),
-        instructions=instructions.strip() or DEFAULT_INSTRUCTIONS,
-    )
+    try:
+        return WorkflowConfig(
+            profile=ProfileConfig(active=active_profile),
+            tracker=TrackerConfig(**_section(merged, "tracker")),
+            github=GitHubConfig(**_section(merged, "github")),
+            labels=LabelConfig(**_section(merged, "labels")),
+            workspace=WorkspaceConfig(**_section(merged, "workspace")),
+            workers=WorkerConfig(**_section(merged, "workers")),
+            dashboard=DashboardConfig(**_section(merged, "dashboard")),
+            database=DatabaseConfig(**_section(merged, "database")),
+            codex=CodexConfig(**_section(merged, "codex")),
+            policy=_policy_config(merged),
+            workflow=workflow_definition_from_dict(_section(merged, "workflow")),
+            preferences=worker_preferences_from_dict(_section(merged, "preferences")),
+            setup=setup_config_from_dict(_section(merged, "setup")),
+            instructions=instructions.strip() or DEFAULT_INSTRUCTIONS,
+        )
+    except TypeError as exc:
+        raise WorkflowError(str(exc)) from exc
+    except ValueError as exc:
+        raise WorkflowError(str(exc)) from exc
 
 
 def validate_config(config: WorkflowConfig) -> None:
@@ -205,7 +233,9 @@ def validate_config(config: WorkflowConfig) -> None:
     if not config.profile.active:
         errors.append("profile.active must not be empty.")
     if config.workspace.strategy != "worktree":
-        errors.append("workspace.strategy must be 'worktree'.")
+        errors.append("workspace.strategy must be 'worktree' until clone support is implemented.")
+    if not config.workspace.branch_prefix:
+        errors.append("workspace.branch_prefix must not be empty.")
     if config.github.auth_strategy not in {"auto", "github_app", "token"}:
         errors.append("github.auth_strategy must be 'auto', 'github_app', or 'token'.")
     if config.workers.max_global < 1:
@@ -237,6 +267,9 @@ def validate_config(config: WorkflowConfig) -> None:
     duplicates = {label for label in label_values if label_values.count(label) > 1}
     if duplicates:
         errors.append(f"labels must be unique: {', '.join(sorted(duplicates))}.")
+    errors.extend(validate_workflow_definition(config.workflow))
+    errors.extend(validate_worker_preferences(config.preferences))
+    errors.extend(validate_setup_config(config.setup))
     if errors:
         raise WorkflowError(" ".join(errors))
 
