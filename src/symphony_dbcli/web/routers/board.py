@@ -58,6 +58,7 @@ class BoardColumn:
     source_items: list[SourceItemView]
     work_items: list[WorkItemView]
     count: int
+    form_action: str
     query_param: str
     query: str
     hidden_params: tuple[tuple[str, str], ...]
@@ -81,15 +82,46 @@ def index(
     done_q: str = "",
     backlog_page: int = 1,
 ) -> Response:
-    filters = BoardFilters(
-        source_id=source_id,
-        backlog_q=backlog_q,
-        todo_q=todo_q,
-        in_progress_q=in_progress_q,
-        in_review_q=in_review_q,
-        done_q=done_q,
-        backlog_page=backlog_page,
+    return _render_board(
+        request,
+        BoardFilters(
+            source_id=source_id,
+            backlog_q=backlog_q,
+            todo_q=todo_q,
+            in_progress_q=in_progress_q,
+            in_review_q=in_review_q,
+            done_q=done_q,
+            backlog_page=backlog_page,
+        ),
     )
+
+
+@router.get("/board/source/{source_id}")
+def source_index(
+    request: Request,
+    source_id: int,
+    backlog_q: str = "",
+    todo_q: str = "",
+    in_progress_q: str = "",
+    in_review_q: str = "",
+    done_q: str = "",
+    backlog_page: int = 1,
+) -> Response:
+    return _render_board(
+        request,
+        BoardFilters(
+            source_id=source_id,
+            backlog_q=backlog_q,
+            todo_q=todo_q,
+            in_progress_q=in_progress_q,
+            in_review_q=in_review_q,
+            done_q=done_q,
+            backlog_page=backlog_page,
+        ),
+    )
+
+
+def _render_board(request: Request, filters: BoardFilters) -> Response:
     repo = source_repository(request)
     work_items = work_item_repository(request)
     sources = repo.list_sources()
@@ -155,9 +187,10 @@ def _backlog_column(
         source_items=page.items,
         work_items=[],
         count=page.total,
+        form_action=_board_base_url(source_id),
         query_param=SEARCH_PARAM_BY_STATE[BACKLOG_STATE],
         query=page.query,
-        hidden_params=_hidden_params(BACKLOG_STATE, source_id, filters),
+        hidden_params=_hidden_params(BACKLOG_STATE, filters),
         clear_url=_board_url(source_id, filters, clear_state=BACKLOG_STATE, backlog_page=1),
         page=page.page,
         page_start=page.start_index,
@@ -184,22 +217,20 @@ def _work_item_column(
         source_items=[],
         work_items=items,
         count=len(items),
+        form_action=_board_base_url(source_id),
         query_param=SEARCH_PARAM_BY_STATE[state],
         query=query,
-        hidden_params=_hidden_params(state, source_id, filters),
+        hidden_params=_hidden_params(state, filters),
         clear_url=_board_url(source_id, filters, clear_state=state),
     )
 
 
 def _hidden_params(
     state: str,
-    source_id: int | None,
     filters: BoardFilters,
 ) -> tuple[tuple[str, str], ...]:
     query_param = SEARCH_PARAM_BY_STATE[state]
     params: list[tuple[str, str]] = []
-    if source_id is not None:
-        params.append(("source_id", str(source_id)))
     params.extend(
         (name, value) for name, value in filters.query_values.items() if name != query_param and value
     )
@@ -216,8 +247,6 @@ def _board_url(
     clear_state: str | None = None,
 ) -> str:
     params: dict[str, str] = {}
-    if source_id is not None:
-        params["source_id"] = str(source_id)
     clear_query_param = SEARCH_PARAM_BY_STATE[clear_state] if clear_state else ""
     params.update(
         {name: value for name, value in filters.query_values.items() if value and name != clear_query_param}
@@ -225,4 +254,9 @@ def _board_url(
     page = filters.backlog_page if backlog_page is None else backlog_page
     if page > 1:
         params["backlog_page"] = str(page)
-    return f"/board?{urlencode(params)}" if params else "/board"
+    base_url = _board_base_url(source_id)
+    return f"{base_url}?{urlencode(params)}" if params else base_url
+
+
+def _board_base_url(source_id: int | None) -> str:
+    return f"/board/source/{source_id}" if source_id is not None else "/board"

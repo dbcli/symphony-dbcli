@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block page_actions %}
-<a class="button-link" href="/board?source_id={{ source_item.source_id }}">Board</a>
+<a class="button-link" href="/board/source/{{ source_item.source_id }}">Board</a>
 {% endblock %}
 {% block body %}
 <section class="panel narrow-panel">
@@ -34,7 +34,7 @@
     {% endif %}
     <div class="form-actions">
       <button type="submit">Queue Work</button>
-      <a class="button-link quiet" href="/board?source_id={{ source_item.source_id }}">Cancel</a>
+      <a class="button-link quiet" href="/board/source/{{ source_item.source_id }}">Cancel</a>
     </div>
   </form>
 </section>

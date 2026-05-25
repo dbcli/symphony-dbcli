@@ -115,11 +115,31 @@ def test_fastapi_board_is_scoped_by_source(tmp_path: Path) -> None:
 
     assert default_board.status_code == 200
     assert "Board · dbcli/litecli" in default_board.text
-    assert f'href="/board?source_id={litecli_id}"' in default_board.text
-    assert f'href="/board?source_id={pgcli_id}"' in default_board.text
+    assert f'href="/board/source/{litecli_id}"' in default_board.text
+    assert f'href="/board/source/{pgcli_id}"' in default_board.text
     assert 'aria-label="Work board for dbcli/litecli"' in litecli_board.text
     assert 'aria-label="Work board for dbcli/pgcli"' in pgcli_board.text
     assert "No backlog items" in pgcli_board.text
+
+
+def test_fastapi_board_search_preserves_selected_source(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=RepoScopedSearchSyncClient())
+    fixture_id = _add_source(client, "amjith/symphony-dbcli-e2e-fixture")
+    litecli_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, fixture_id)
+    _sync_source(client, litecli_id)
+
+    default_board = client.get("/board")
+    litecli_board = client.get(f"/board/source/{litecli_id}")
+    search = client.get(f"/board/source/{litecli_id}?backlog_q=completion")
+
+    assert "Board · amjith/symphony-dbcli-e2e-fixture" in default_board.text
+    assert f'action="/board/source/{litecli_id}"' in litecli_board.text
+    assert search.status_code == 200
+    assert "Board · dbcli/litecli" in search.text
+    assert 'aria-label="Work board for dbcli/litecli"' in search.text
+    assert "LiteCLI completion search hit" in search.text
+    assert "Fixture default issue" not in search.text
 
 
 def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) -> None:
@@ -131,7 +151,7 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     sources = client.get("/sources")
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/board?source_id={source_id}&sync=succeeded"
+    assert response.headers["location"] == f"/board/source/{source_id}?sync=succeeded"
     assert "synced" in sources.text
     assert "Fix completion crash" in board.text
     assert "Improve docs" in board.text
@@ -215,7 +235,7 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "Queue Work" in form.text
     assert "Fix completion crash" in form.text
     assert response.status_code == 303
-    assert response.headers["location"] == f"/board?source_id={source_id}"
+    assert response.headers["location"] == f"/board/source/{source_id}"
     assert "No backlog items" not in board.text
     assert "No todo items" not in board.text
     assert "work item #1" in board.text
@@ -504,7 +524,7 @@ def _add_source(client: TestClient, repo: str) -> int:
     response = client.post("/sources", data={"repo": repo}, follow_redirects=False)
     assert response.status_code == 303
     sources = client.get("/sources")
-    marker = 'href="/board?source_id='
+    marker = 'href="/board/source/'
     start = sources.text.index(marker, sources.text.index(repo)) + len(marker)
     end = sources.text.index('"', start)
     return int(sources.text[start:end])
@@ -643,6 +663,40 @@ class SearchableSourceSyncClient:
                 author="bob",
                 updated_at="2026-05-24T01:00:00Z",
             ),
+        ]
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        return []
+
+
+class RepoScopedSearchSyncClient:
+    def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
+        if repo == "dbcli/litecli":
+            return [
+                GitHubIssue(
+                    repo=repo,
+                    number=245,
+                    title="LiteCLI completion search hit",
+                    body="completion search should stay scoped to litecli",
+                    url=f"https://github.com/{repo}/issues/245",
+                    state="open",
+                    labels=["bug"],
+                    author="alice",
+                    updated_at="2026-05-25T01:00:00Z",
+                )
+            ]
+        return [
+            GitHubIssue(
+                repo=repo,
+                number=3,
+                title="Fixture default issue",
+                body="fixture-only backlog card",
+                url=f"https://github.com/{repo}/issues/3",
+                state="open",
+                labels=["bug"],
+                author="bob",
+                updated_at="2026-05-24T01:00:00Z",
+            )
         ]
 
     def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:

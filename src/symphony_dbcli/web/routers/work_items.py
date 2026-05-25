@@ -114,7 +114,7 @@ def archive_work_item(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     return RedirectResponse(
-        f"/board?source_id={work_item.source_id}",
+        f"/board/source/{work_item.source_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -167,7 +167,7 @@ def activate(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     return RedirectResponse(
-        f"/board?source_id={work_item.source_id}",
+        f"/board/source/{work_item.source_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -180,7 +180,7 @@ def ignore_source_item(
 ) -> Response:
     source_item = source_repository(request).ignore_source_item(source_item_id, note)
     return RedirectResponse(
-        f"/board?source_id={source_item.source_id}",
+        f"/board/source/{source_item.source_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

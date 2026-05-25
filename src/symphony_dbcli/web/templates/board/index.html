@@ -14,7 +14,7 @@
   {% for source in sources %}
   <a
     class="{{ 'is-active' if selected_source and source.id == selected_source.id else '' }}"
-    href="/board?source_id={{ source.id }}"
+    href="/board/source/{{ source.id }}"
   >
     {{ source.repo }}
   </a>
@@ -43,7 +43,7 @@
       <h2>{{ column.label }}</h2>
       <span>{{ column.count }}</span>
     </div>
-    <form class="column-search" method="get" action="/board" role="search">
+    <form class="column-search" method="get" action="{{ column.form_action }}" role="search">
       {% for name, value in column.hidden_params %}
       <input type="hidden" name="{{ name }}" value="{{ value }}" />
       {% endfor %}

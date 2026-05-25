@@ -160,8 +160,8 @@ def sync(request: Request, source_id: int) -> Response:
         return RedirectResponse("/sources", status_code=status.HTTP_303_SEE_OTHER)
     except RuntimeError:
         return RedirectResponse(
-            f"/board?source_id={source_id}&sync=failed", status_code=status.HTTP_303_SEE_OTHER
+            f"/board/source/{source_id}?sync=failed", status_code=status.HTTP_303_SEE_OTHER
         )
     return RedirectResponse(
-        f"/board?source_id={source_id}&sync=succeeded", status_code=status.HTTP_303_SEE_OTHER
+        f"/board/source/{source_id}?sync=succeeded", status_code=status.HTTP_303_SEE_OTHER
     )
