@@ -19,6 +19,11 @@ Primary v1 capabilities:
 - Support both coding tasks and research/support-answer tasks.
 - Persist workers, issue snapshots, attempts, events, comments, PR links,
   token metrics, and dashboard state in SQLite.
+- Survive worker crashes, stale heartbeats, and runtime timeouts by resuming
+  the same attempt from durable workflow checkpoints rather than starting a
+  clean workflow from scratch.
+- Enforce per-transition retry limits from `WORKFLOW.md` so retry behavior is
+  owned by the workflow definition, not hidden Python control flow.
 - Provide a dashboard plus an "ask Symphony" interface for issue, worker, and
   task status questions.
 
@@ -180,6 +185,16 @@ Database requirements:
 - Keep current-state columns for fast dashboard queries.
 - Persist worker state before launching external processes so restarts can
   reconcile safely.
+- Persist workflow action runs as checkpoints. If a worker dies after a
+  primitive succeeds but before the state transition is recorded, the
+  orchestrator must be able to promote that succeeded action output without
+  rerunning the primitive.
+- Mark abandoned running action runs as failed when a worker crashes, times
+  out, or misses its heartbeat. Those failed action runs count against the
+  transition's `retry_limit`.
+- Requeue process-level crash and timeout retries against the same attempt and
+  workflow instance whenever retry budget remains, preserving current state,
+  artifacts, action history, timing, and errors.
 - Store monotonic timestamps and wall-clock timestamps for worker timing so
   elapsed durations are accurate even if system time changes.
 - Associate every attempt, turn, error, PR, comment, and log event with the
@@ -219,8 +234,14 @@ On restart:
 
 - Reconcile active workers from SQLite.
 - Check whether GitHub state changed while the service was down.
-- Requeue interrupted eligible work.
-- Preserve previous attempts and logs.
+- Requeue interrupted eligible work against the same attempt when retry budget
+  remains.
+- Preserve previous attempts, logs, workflow action runs, workflow artifacts,
+  and transition events.
+- Resume from the last durable workflow state. Do not rerun succeeded
+  primitives merely because the worker died before recording a transition.
+- Rerun only the interrupted or failed primitive, and only while that
+  transition's `retry_limit` allows another attempt.
 - Preserve timing data and mark interrupted attempts with a restart/reconcile
   event rather than overwriting their state.
 
@@ -437,6 +458,18 @@ those primitives are composed into automatic transitions and human-gated steps.
   through a generic dispatcher. The poll loop also advances ready, idle
   workflow instances for non-Codex automatic transitions while leaving queued
   and running attempts to worker processes.
+- [x] Make workflow execution resilient to worker failure. Worker crashes,
+  heartbeat misses, and runtime timeouts should preserve the same attempt and
+  workflow instance, mark abandoned running action runs failed, requeue the
+  attempt while retry budget remains, and resume from the last durable
+  checkpoint. Per-transition `retry_limit` from `WORKFLOW.md` must be enforced
+  by the workflow engine.
+  Progress: the supervisor now requeues the same attempt after crash/timeout
+  when `[workers].retry_limit` allows it, failed/running action runs are
+  persisted for retry accounting, and the workflow engine blocks automatic and
+  human transitions once their configured `retry_limit` is exhausted.
+  Succeeded action runs are reusable checkpoints, so a resumed worker can
+  advance the workflow without rerunning a primitive that already completed.
 - [x] Move dashboard review actions to workflow gates. The dashboard should
   render available actions from pending gate rows rather than from hardcoded
   route-specific assumptions.
@@ -491,9 +524,53 @@ those primitives are composed into automatic transitions and human-gated steps.
   where practical. Add migrations for the new workflow runtime tables instead
   of rewriting existing attempt, worker, comment, and PR history.
 
+## Durable Cross-Project Spec
+
+After the DBCLI implementation is complete, produce a durable, project-neutral
+spec file that can be used to recreate this orchestrator for repositories
+outside `dbcli`. This should be a first-class deliverable, not an afterthought
+buried in the DBCLI implementation notes.
+
+The durable spec should separate reusable Symphony behavior from DBCLI defaults:
+
+- Reusable core: workflow DSL, primitive registry contract, SQLite runtime
+  state model, worker lifecycle, retry/resume semantics, human gates,
+  dashboard/ask behavior, setup steps, workspace strategies, and deployment
+  profiles.
+- Project adapters: tracker configuration, repository list, labels, auth
+  strategy, worker taste preferences, setup commands, test policy, branch
+  naming, and dashboard branding.
+- Example defaults: DBCLI can be included as one worked example, but the spec
+  must not require DBCLI repo names, DBCLI labels, exe.dev paths, or GitHub-only
+  assumptions except where explicitly called out as one adapter choice.
+
+Minimum contents for the durable spec:
+
+- System goals and non-goals.
+- Required storage schema and invariants.
+- `WORKFLOW.md` DSL reference with states, transitions, conditions, inputs,
+  outputs, artifacts, retries, timeouts, setup, preferences, profiles, and
+  human gates.
+- Primitive interface contract, including side-effect classification,
+  idempotency strategy, input/output fields, guidance text, retry behavior,
+  and resume/checkpoint requirements.
+- Worker lifecycle contract covering launch, heartbeat, timeout, crash
+  detection, retry, resume, cancellation, and cleanup.
+- Dashboard contract covering workflow visualization, pending human gates,
+  editable artifacts before side effects, worker status, attempt details, and
+  Ask Symphony answers with links back to detailed pages.
+- Deployment contract for local and production profiles.
+- Test harness requirements for fast local fixture runs and optional live
+  tracker-backed end-to-end runs.
+- Porting checklist for bringing the orchestrator to a new organization or
+  project set.
+- A minimal example workflow for a non-DBCLI repository.
+
 ## Assumptions
 
 - Initial scope is exactly `dbcli/pgcli`, `dbcli/mycli`, and `dbcli/litecli`.
+- A reusable cross-project spec is required after the DBCLI implementation is
+  complete.
 - GitHub Issues are the v1 tracker source of truth.
 - GitHub Projects are out of scope for v1.
 - Linear is out of scope for v1.
