@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+from sqlalchemy import Engine, text
 from sqlalchemy import inspect as sqlalchemy_inspect
-from sqlalchemy import text
 
+from symphony_dbcli.cli import main
+from symphony_dbcli.config import DatabaseConfig, default_config, write_workflow
 from symphony_dbcli.db import create_db_engine, create_session_factory, sqlite_url
 from symphony_dbcli.models import create_model_tables
 from symphony_dbcli.work_items import WorkItemRepository
@@ -29,6 +32,36 @@ def test_engine_factory_creates_parent_directory(tmp_path: Path) -> None:
 
 def test_model_table_creation_repairs_existing_sqlite_columns() -> None:
     engine = create_db_engine(":memory:")
+    _create_legacy_work_item_tables(engine)
+
+    create_model_tables(engine)
+
+    _assert_work_item_columns_repaired(engine)
+    assert WorkItemRepository(create_session_factory(engine)).list_operations() == []
+
+
+def test_init_db_repairs_existing_model_tables(tmp_path: Path) -> None:
+    database_path = tmp_path / "symphony.db"
+    workflow_path = tmp_path / "WORKFLOW.md"
+    config = replace(default_config(), database=DatabaseConfig(path=str(database_path)))
+    write_workflow(workflow_path, config)
+    workflow_path.write_text(
+        workflow_path.read_text(encoding="utf-8").replace(
+            'path = ".symphony/symphony.db"',
+            f'path = "{database_path.as_posix()}"',
+        ),
+        encoding="utf-8",
+    )
+    engine = create_db_engine(str(database_path))
+    _create_legacy_work_item_tables(engine)
+
+    result = main(["--workflow", str(workflow_path), "init-db"])
+
+    assert result == 0
+    _assert_work_item_columns_repaired(engine)
+
+
+def _create_legacy_work_item_tables(engine: Engine) -> None:
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -68,8 +101,8 @@ def test_model_table_creation_repairs_existing_sqlite_columns() -> None:
             )
         )
 
-    create_model_tables(engine)
 
+def _assert_work_item_columns_repaired(engine: Engine) -> None:
     inspector = sqlalchemy_inspect(engine)
     work_item_columns = {column["name"] for column in inspector.get_columns("work_items")}
     run_columns = {column["name"] for column in inspector.get_columns("work_item_runs")}
@@ -77,4 +110,3 @@ def test_model_table_creation_repairs_existing_sqlite_columns() -> None:
         work_item_columns
     )
     assert {"attempt_id", "workflow_instance_id"} <= run_columns
-    assert WorkItemRepository(create_session_factory(engine)).list_operations() == []

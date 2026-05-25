@@ -21,10 +21,12 @@ from .config import (
     write_workflow,
 )
 from .dashboard import DashboardState, serve_dashboard
+from .db import create_db_engine
 from .e2e import DEFAULT_FIXTURE_REPO, E2EFixtureConfig, fixture_scenarios, run_fixture
 from .env import load_local_env, parse_env_file
 from .github import GitHubClient
 from .github_app import default_manifest, write_manifest_form
+from .models import create_model_tables
 from .orchestrator import Orchestrator, WorkflowWatcher, load_and_record_workflow
 from .store import Store
 from .supervisor import WorkerSupervisor
@@ -184,6 +186,7 @@ def cmd_init_db(args: argparse.Namespace) -> int:
     config = _load_config_if_exists(args.workflow, profile=profile)
     store = Store(config.database.path)
     store.init()
+    create_model_tables(create_db_engine(config.database.path))
     workflow_path = Path(args.workflow)
     if workflow_path.exists():
         load_and_record_workflow(store, workflow_path, profile=profile)
