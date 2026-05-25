@@ -5,7 +5,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from symphony_dbcli.config import WorkflowConfig, WorkspaceConfig, default_config
-from symphony_dbcli.github import GitHubCheckRun, GitHubCiStatus, GitHubComment, GitHubIssue, PullRequest
+from symphony_dbcli.github import (
+    GitHubCheckRun,
+    GitHubCiStatus,
+    GitHubComment,
+    GitHubIssue,
+    GitHubPullRequestReviewComment,
+    PullRequest,
+    PullRequestMergeStatus,
+)
 from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutionError, PrimitiveOutcome
 from symphony_dbcli.store import IssueSnapshot, Store
@@ -464,6 +472,13 @@ class FakeCleanupGitHub:
     def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]:
         return []
 
+    def list_pull_request_review_comments(
+        self,
+        repo: str,
+        pull_request_number: int,
+    ) -> list[GitHubPullRequestReviewComment]:
+        return []
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         return
 
@@ -484,6 +499,20 @@ class FakeCleanupGitHub:
             title="Fix #245",
             state="closed",
             merged_at="2026-05-24T14:00:00Z",
+        )
+
+    def merge_status(self, repo: str, pull_request_number: int) -> PullRequestMergeStatus:
+        pull_request = self.pull_request(repo, pull_request_number)
+        return PullRequestMergeStatus(
+            number=pull_request.number,
+            url=pull_request.url,
+            title=pull_request.title,
+            state=pull_request.state,
+            merged_at=pull_request.merged_at,
+            head_sha=pull_request.head_sha,
+            mergeable=True,
+            mergeable_state="clean",
+            has_conflicts=False,
         )
 
     def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus:

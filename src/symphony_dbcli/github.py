@@ -29,10 +29,25 @@ class PullRequest:
     state: str = ""
     merged_at: str = ""
     head_sha: str = ""
+    mergeable: bool | None = None
+    mergeable_state: str = ""
 
     @property
     def is_merged(self) -> bool:
         return bool(self.merged_at)
+
+
+@dataclass(frozen=True)
+class PullRequestMergeStatus:
+    number: int
+    url: str
+    title: str
+    state: str
+    merged_at: str
+    head_sha: str
+    mergeable: bool | None
+    mergeable_state: str
+    has_conflicts: bool
 
 
 @dataclass(frozen=True)
@@ -94,6 +109,24 @@ class GitHubComment:
 
 
 @dataclass(frozen=True)
+class GitHubPullRequestReviewComment:
+    id: int
+    url: str
+    body: str
+    author: str
+    created_at: str
+    updated_at: str
+    kind: str
+    review_id: int | None = None
+    path: str = ""
+    line: int | None = None
+    original_line: int | None = None
+    side: str = ""
+    diff_hunk: str = ""
+    state: str = ""
+
+
+@dataclass(frozen=True)
 class GitHubCheckRun:
     name: str
     status: str
@@ -137,6 +170,24 @@ class GitHubClient:
             f"/repos/{repo}/issues/{issue_number}/comments?per_page=100",
         )
         return [_comment_from_json(item) for item in data]
+
+    def list_pull_request_review_comments(
+        self,
+        repo: str,
+        pull_request_number: int,
+    ) -> list[GitHubPullRequestReviewComment]:
+        reviews = self._request_json(
+            "GET",
+            f"/repos/{repo}/pulls/{pull_request_number}/reviews?per_page=100",
+        )
+        inline_comments = self._request_json(
+            "GET",
+            f"/repos/{repo}/pulls/{pull_request_number}/comments?per_page=100",
+        )
+        return [
+            *[_review_comment_from_json(item) for item in _json_objects(reviews) if item.get("body")],
+            *[_inline_review_comment_from_json(item) for item in _json_objects(inline_comments)],
+        ]
 
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         self._require_token()
@@ -186,6 +237,10 @@ class GitHubClient:
     def pull_request(self, repo: str, number: int) -> PullRequest:
         data = self._request_json("GET", f"/repos/{repo}/pulls/{number}")
         return _pull_request_from_json(data)
+
+    def merge_status(self, repo: str, pull_request_number: int) -> PullRequestMergeStatus:
+        data = self._request_json("GET", f"/repos/{repo}/pulls/{pull_request_number}")
+        return _merge_status_from_json(data)
 
     def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus:
         pull_request = self._request_json("GET", f"/repos/{repo}/pulls/{pull_request_number}")
@@ -315,6 +370,24 @@ def _pull_request_from_json(data: dict[str, Any]) -> PullRequest:
         state=str(data.get("state") or ""),
         merged_at=str(data.get("merged_at") or ""),
         head_sha=_head_sha(data),
+        mergeable=_optional_bool(data.get("mergeable")),
+        mergeable_state=str(data.get("mergeable_state") or ""),
+    )
+
+
+def _merge_status_from_json(data: dict[str, Any]) -> PullRequestMergeStatus:
+    mergeable = _optional_bool(data.get("mergeable"))
+    mergeable_state = str(data.get("mergeable_state") or "")
+    return PullRequestMergeStatus(
+        number=int(data["number"]),
+        url=str(data["html_url"]),
+        title=str(data["title"]),
+        state=str(data.get("state") or ""),
+        merged_at=str(data.get("merged_at") or ""),
+        head_sha=_head_sha(data),
+        mergeable=mergeable,
+        mergeable_state=mergeable_state,
+        has_conflicts=mergeable is False or mergeable_state == "dirty",
     )
 
 
@@ -340,6 +413,37 @@ def _comment_from_json(data: dict[str, Any]) -> GitHubComment:
         author=str(_json_object(data.get("user")).get("login") or ""),
         created_at=str(data.get("created_at") or ""),
         updated_at=str(data.get("updated_at") or ""),
+    )
+
+
+def _review_comment_from_json(data: dict[str, Any]) -> GitHubPullRequestReviewComment:
+    return GitHubPullRequestReviewComment(
+        id=int(data["id"]),
+        url=str(data.get("html_url") or ""),
+        body=str(data.get("body") or ""),
+        author=str(_json_object(data.get("user")).get("login") or ""),
+        created_at=str(data.get("submitted_at") or ""),
+        updated_at=str(data.get("submitted_at") or ""),
+        kind="review",
+        state=str(data.get("state") or ""),
+    )
+
+
+def _inline_review_comment_from_json(data: dict[str, Any]) -> GitHubPullRequestReviewComment:
+    return GitHubPullRequestReviewComment(
+        id=int(data["id"]),
+        url=str(data.get("html_url") or ""),
+        body=str(data.get("body") or ""),
+        author=str(_json_object(data.get("user")).get("login") or ""),
+        created_at=str(data.get("created_at") or ""),
+        updated_at=str(data.get("updated_at") or ""),
+        kind="inline",
+        review_id=_optional_int(data.get("pull_request_review_id")),
+        path=str(data.get("path") or ""),
+        line=_optional_int(data.get("line")),
+        original_line=_optional_int(data.get("original_line")),
+        side=str(data.get("side") or ""),
+        diff_hunk=str(data.get("diff_hunk") or ""),
     )
 
 
@@ -403,6 +507,14 @@ def _legacy_status_conclusion(state: str) -> str:
 
 def _head_sha(data: dict[str, Any]) -> str:
     return str(_json_object(data.get("head")).get("sha") or "")
+
+
+def _optional_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _optional_int(value: Any) -> int | None:
+    return int(value) if isinstance(value, int) else None
 
 
 def _json_object(value: Any) -> dict[str, Any]:

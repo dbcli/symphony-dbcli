@@ -418,7 +418,10 @@ those primitives are composed into automatic transitions and human-gated steps.
   Progress: all listed GitHub primitives now execute through the primitive
   layer. Read primitives return typed snapshots that are persisted through
   workflow action outputs/artifacts; write primitives remain guarded by
-  `policy.dry_run`.
+  `policy.dry_run`. The GitHub primitive surface also includes
+  `github.fetch_pr_review_comments` for combined review-body and inline review
+  comment context, plus `github.detect_merge_conflicts` for PR mergeability and
+  conflict detection.
 - [x] Implement the first Codex primitives: `codex.research_issue`,
   `codex.fix_issue`, `codex.address_pr_comments`, and
   `codex.fix_ci_failures`. These should store worker results in SQLite

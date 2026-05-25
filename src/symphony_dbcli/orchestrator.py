@@ -13,7 +13,15 @@ from typing import Any, Protocol, cast
 
 from .actions import DEFAULT_ACTION_REGISTRY, PrimitiveSideEffect
 from .config import WorkflowConfig, WorkflowError, parse_workflow
-from .github import GitHubCiStatus, GitHubClient, GitHubComment, GitHubIssue, PullRequest
+from .github import (
+    GitHubCiStatus,
+    GitHubClient,
+    GitHubComment,
+    GitHubIssue,
+    GitHubPullRequestReviewComment,
+    PullRequest,
+    PullRequestMergeStatus,
+)
 from .primitive_executor import (
     PrimitiveContext,
     PrimitiveExecutionError,
@@ -43,11 +51,19 @@ class OrchestratorGitHubClient(Protocol):
 
     def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]: ...
 
+    def list_pull_request_review_comments(
+        self,
+        repo: str,
+        pull_request_number: int,
+    ) -> list[GitHubPullRequestReviewComment]: ...
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
 
     def remove_label(self, repo: str, issue_number: int, label: str) -> None: ...
 
     def pull_request(self, repo: str, number: int) -> PullRequest: ...
+
+    def merge_status(self, repo: str, pull_request_number: int) -> PullRequestMergeStatus: ...
 
     def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus: ...
 

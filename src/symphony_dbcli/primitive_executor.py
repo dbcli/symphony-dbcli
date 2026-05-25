@@ -5,7 +5,16 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, cast
 
 from .config import WorkflowConfig
-from .github import GitHubCiStatus, GitHubClient, GitHubComment, GitHubError, GitHubIssue, PullRequest
+from .github import (
+    GitHubCiStatus,
+    GitHubClient,
+    GitHubComment,
+    GitHubError,
+    GitHubIssue,
+    GitHubPullRequestReviewComment,
+    PullRequest,
+    PullRequestMergeStatus,
+)
 from .review_actions import GitHubReviewClient, ReviewActionError, ReviewActions
 from .runner import CodexRunner
 from .store import Store
@@ -26,11 +35,19 @@ class PrimitiveGitHubClient(Protocol):
 
     def list_comments(self, repo: str, issue_number: int) -> list[GitHubComment]: ...
 
+    def list_pull_request_review_comments(
+        self,
+        repo: str,
+        pull_request_number: int,
+    ) -> list[GitHubPullRequestReviewComment]: ...
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
 
     def remove_label(self, repo: str, issue_number: int, label: str) -> None: ...
 
     def pull_request(self, repo: str, number: int) -> PullRequest: ...
+
+    def merge_status(self, repo: str, pull_request_number: int) -> PullRequestMergeStatus: ...
 
     def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus: ...
 
@@ -110,6 +127,10 @@ class PrimitiveExecutor:
             return self._fetch_pull_request(context)
         if context.transition.action == "github.fetch_ci_status":
             return self._fetch_ci_status(context)
+        if context.transition.action == "github.fetch_pr_review_comments":
+            return self._fetch_pr_review_comments(context)
+        if context.transition.action == "github.detect_merge_conflicts":
+            return self._detect_merge_conflicts(context)
         if context.transition.action == "workspace.allocate":
             return self._allocate_workspace(context)
         if context.transition.action == "workspace.run_setup":
@@ -224,6 +245,28 @@ class PrimitiveExecutor:
     def _fetch_ci_status(self, context: PrimitiveContext) -> PrimitiveOutcome:
         pull_request_number = _required_int(context.input_data, "pull_request_number")
         return PrimitiveOutcome(asdict(self.github.ci_status(context.repo, pull_request_number)))
+
+    def _fetch_pr_review_comments(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        comments = self.github.list_pull_request_review_comments(context.repo, pull_request_number)
+        return PrimitiveOutcome({"comments": [asdict(comment) for comment in comments]})
+
+    def _detect_merge_conflicts(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        merge_status = self.github.merge_status(context.repo, pull_request_number)
+        return PrimitiveOutcome(
+            {
+                "pull_request_number": merge_status.number,
+                "pull_request_url": merge_status.url,
+                "pull_request_title": merge_status.title,
+                "state": merge_status.state,
+                "merged_at": merge_status.merged_at,
+                "head_sha": merge_status.head_sha,
+                "mergeable": merge_status.mergeable,
+                "mergeable_state": merge_status.mergeable_state,
+                "has_conflicts": merge_status.has_conflicts,
+            }
+        )
 
     def _run_setup(self, context: PrimitiveContext) -> PrimitiveOutcome:
         if not context.worktree_path:

@@ -6,7 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from symphony_dbcli.config import CodexConfig, WorkflowConfig, WorkspaceConfig, default_config
-from symphony_dbcli.github import GitHubCheckRun, GitHubCiStatus, GitHubComment, GitHubIssue, PullRequest
+from symphony_dbcli.github import (
+    GitHubCheckRun,
+    GitHubCiStatus,
+    GitHubComment,
+    GitHubIssue,
+    GitHubPullRequestReviewComment,
+    PullRequest,
+    PullRequestMergeStatus,
+)
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
 from symphony_dbcli.store import Store
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
@@ -89,6 +97,62 @@ def test_fetch_ci_status_returns_failed_checks(tmp_path: Path) -> None:
             "url": "https://github.com/dbcli/litecli/actions/runs/1",
         }
     ]
+
+
+def test_fetch_pr_review_comments_returns_review_and_inline_comments(tmp_path: Path) -> None:
+    executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=FakePrimitiveGitHub())
+
+    output = executor.execute(
+        _context("github.fetch_pr_review_comments", input_data={"pull_request_number": 12})
+    ).output
+
+    assert output["comments"] == [
+        {
+            "id": 501,
+            "url": "https://github.com/dbcli/litecli/pull/12#pullrequestreview-501",
+            "body": "Overall this needs a regression test.",
+            "author": "reviewer",
+            "created_at": "2026-05-24T12:00:00Z",
+            "updated_at": "2026-05-24T12:00:00Z",
+            "kind": "review",
+            "review_id": None,
+            "path": "",
+            "line": None,
+            "original_line": None,
+            "side": "",
+            "diff_hunk": "",
+            "state": "CHANGES_REQUESTED",
+        },
+        {
+            "id": 502,
+            "url": "https://github.com/dbcli/litecli/pull/12#discussion_r502",
+            "body": "Please cover tilde expansion here.",
+            "author": "reviewer",
+            "created_at": "2026-05-24T12:01:00Z",
+            "updated_at": "2026-05-24T12:01:00Z",
+            "kind": "inline",
+            "review_id": 501,
+            "path": "litecli/main.py",
+            "line": 42,
+            "original_line": 41,
+            "side": "RIGHT",
+            "diff_hunk": "@@ -40,6 +40,7 @@",
+            "state": "",
+        },
+    ]
+
+
+def test_detect_merge_conflicts_returns_mergeability(tmp_path: Path) -> None:
+    executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=FakePrimitiveGitHub())
+
+    output = executor.execute(
+        _context("github.detect_merge_conflicts", input_data={"pull_request_number": 12})
+    ).output
+
+    assert output["pull_request_number"] == 12
+    assert output["mergeable"] is False
+    assert output["mergeable_state"] == "dirty"
+    assert output["has_conflicts"] is True
 
 
 def test_address_pr_comments_runs_codex_with_review_context(tmp_path: Path) -> None:
@@ -275,6 +339,39 @@ class FakePrimitiveGitHub:
             )
         ]
 
+    def list_pull_request_review_comments(
+        self,
+        repo: str,
+        pull_request_number: int,
+    ) -> list[GitHubPullRequestReviewComment]:
+        return [
+            GitHubPullRequestReviewComment(
+                id=501,
+                url=f"https://github.com/{repo}/pull/{pull_request_number}#pullrequestreview-501",
+                body="Overall this needs a regression test.",
+                author="reviewer",
+                created_at="2026-05-24T12:00:00Z",
+                updated_at="2026-05-24T12:00:00Z",
+                kind="review",
+                state="CHANGES_REQUESTED",
+            ),
+            GitHubPullRequestReviewComment(
+                id=502,
+                url=f"https://github.com/{repo}/pull/{pull_request_number}#discussion_r502",
+                body="Please cover tilde expansion here.",
+                author="reviewer",
+                created_at="2026-05-24T12:01:00Z",
+                updated_at="2026-05-24T12:01:00Z",
+                kind="inline",
+                review_id=501,
+                path="litecli/main.py",
+                line=42,
+                original_line=41,
+                side="RIGHT",
+                diff_hunk="@@ -40,6 +40,7 @@",
+            ),
+        ]
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         return
 
@@ -288,6 +385,22 @@ class FakePrimitiveGitHub:
             title="Fix logging path support",
             state="open",
             head_sha="abc123",
+            mergeable=False,
+            mergeable_state="dirty",
+        )
+
+    def merge_status(self, repo: str, pull_request_number: int) -> PullRequestMergeStatus:
+        pull_request = self.pull_request(repo, pull_request_number)
+        return PullRequestMergeStatus(
+            number=pull_request.number,
+            url=pull_request.url,
+            title=pull_request.title,
+            state=pull_request.state,
+            merged_at=pull_request.merged_at,
+            head_sha=pull_request.head_sha,
+            mergeable=pull_request.mergeable,
+            mergeable_state=pull_request.mergeable_state,
+            has_conflicts=True,
         )
 
     def ci_status(self, repo: str, pull_request_number: int) -> GitHubCiStatus:
