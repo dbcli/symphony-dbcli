@@ -122,6 +122,33 @@ def test_eligible_issues_use_labels(tmp_path: Path) -> None:
     assert store.eligible_issues("symphony:todo", "symphony:blocked") == []
 
 
+def test_failed_attempt_does_not_block_eligible_issue(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=245,
+            title="Support question",
+            url="https://github.com/dbcli/litecli/issues/245",
+            state="open",
+            labels=["symphony:todo"],
+            task_type="research",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+    )
+    store.finish_attempt(attempt_id, "failed", "failed")
+
+    eligible = store.eligible_issues("symphony:todo", "symphony:blocked")
+
+    assert [row["number"] for row in eligible] == [245]
+
+
 def test_start_queued_work_automatically_setting_defaults_on(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

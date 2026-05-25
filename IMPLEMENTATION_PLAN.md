@@ -542,6 +542,83 @@ those primitives are composed into automatic transitions and human-gated steps.
   where practical. Add migrations for the new workflow runtime tables instead
   of rewriting existing attempt, worker, comment, and PR history.
 
+## Source-Backed Kanban Pivot Task List
+
+The next major architecture milestone is documented in
+[SOURCES_AND_WORK_ITEMS.md](SOURCES_AND_WORK_ITEMS.md). This pivots Symphony
+from a GitHub-label-driven dispatcher to a source-backed, database-owned kanban
+board. GitHub Issues and PRs become synced source items; Symphony work items
+become the durable unit of orchestration.
+
+Core decisions recorded in the design:
+
+- Sources are GitHub repositories in v1.
+- Source sync defaults to all open issues and pull requests.
+- Source filters can include labels, authors, stale items, and date ranges.
+- GitHub labels are no longer the primary queue mechanism.
+- Kanban state lives in SQLite on Symphony work items.
+- Workflows run against `work_item_id`, not a raw GitHub issue number.
+- The dashboard should migrate to FastAPI, Jinja partials, HTMX, SortableJS,
+  SQLAlchemy 2.0, and Alembic. The project is pre-alpha, so compatibility may
+  be broken when the cleaner work-item design requires it.
+- Moving backlog to todo creates or reuses a work item and records task type,
+  optional user hint, and linked source items.
+- Task types are `research`, `code`, and `operations`.
+- Operations produce durable summaries viewable in the dashboard.
+- Issue and PR links are stored strongly in SQLite and reinforced by exact PR
+  body markers for Symphony-created PRs.
+- Multiple PRs per issue are allowed in the model and shown as grouped cards
+  with one active PR for the current run.
+- Moving `in_review` back to `in_progress` allows optional multi-select
+  reasons; no reason means rerun from the top.
+- Symphony may automatically mark work items done when linked PRs merge or
+  linked issues close externally.
+
+Implementation checklist:
+
+- [ ] Add FastAPI application scaffolding alongside the current dashboard.
+- [ ] Split FastAPI routers by dashboard hierarchy: board, sources, work
+  items, workers, workflow, ask, settings, and narrowly scoped JSON APIs.
+- [ ] Add SQLAlchemy 2.0 models and session/repository boundaries for new
+  source/work-item data.
+- [ ] Add Alembic migration setup and migrate new schema changes through
+  Alembic.
+- [ ] Add HTMX and SortableJS assets for server-rendered interactive kanban
+  behavior.
+- [ ] Add SQLite tables for `sources`, `source_sync_runs`, and `source_items`.
+- [ ] Implement GitHub source sync for open issues and open PRs.
+- [ ] Add source filter support for labels, authors, stale items, and date
+  ranges.
+- [ ] Build a Sources dashboard page with add/edit/sync controls and sync
+  status.
+- [ ] Add `work_items`, `work_item_links`, state history, and run/reason
+  storage.
+- [ ] Build the kanban board with backlog, todo, in progress, in review, and
+  done columns.
+- [ ] Implement backlog-to-todo activation with task type and optional user
+  hint.
+- [ ] Default issue-with-linked-PR and PR cards to review/fix mode.
+- [ ] Implement in-review-to-in-progress reason selection with multi-select
+  reasons.
+- [ ] Pivot orchestrator runtime identity to `work_item_id`.
+- [ ] Adapt workflow artifacts and input resolution to expose linked issue,
+  active PR, user hint, and rerun reasons.
+- [ ] Add source/work-item primitives such as `source.sync`,
+  `work_item.activate`, `work_item.move`, and `work_item.select_active_pr`.
+- [ ] Add `codex.operations_task` and operation-summary dashboard views.
+- [ ] Update PR creation to link work item, issue, and PR in SQLite and in the
+  PR body marker.
+- [ ] Add grouped issue/PR cards with an expandable detail view and active PR
+  selector.
+- [ ] Auto-mark work items done on external PR merge or issue close with
+  explicit outcome.
+- [ ] Add ignore/archive support for source items.
+- [ ] Update Ask Symphony for source, work item, and kanban-state questions.
+- [ ] Add fast local tests for sync, kanban transitions, grouping, and work item
+  workflow execution.
+- [ ] Add a GitHub-backed e2e scenario for source sync through kanban activation
+  and PR review/fix workflow.
+
 ## Durable Cross-Project Spec
 
 After the DBCLI implementation is complete, produce a durable, project-neutral

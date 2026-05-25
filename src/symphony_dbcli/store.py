@@ -815,7 +815,7 @@ class Store:
                           SELECT 1 FROM attempts a
                           WHERE a.repo = i.repo
                             AND a.issue_number = i.number
-                            AND a.status IN ('queued', 'running', 'review', 'failed')
+                            AND a.status IN ('queued', 'running', 'review')
                       )
                     ORDER BY i.first_seen_at ASC, i.repo ASC, i.number ASC
                     LIMIT ?
