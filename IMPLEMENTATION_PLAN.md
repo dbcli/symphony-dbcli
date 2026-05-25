@@ -586,7 +586,7 @@ Implementation checklist:
 - [x] Add Alembic migration scaffolding.
 - [x] Add Alembic revisions for new source schema changes.
 - [x] Add Alembic revisions for new work-item schema changes.
-- [ ] Add HTMX and SortableJS assets for server-rendered interactive kanban
+- [x] Add HTMX and SortableJS assets for server-rendered interactive kanban
   behavior.
 - [x] Add SQLite/Alembic table for `sources`.
 - [x] Add SQLite/Alembic tables for `source_sync_runs` and `source_items`.
@@ -605,7 +605,7 @@ Implementation checklist:
 - [x] Implement backlog-to-todo activation with task type and optional user
   hint.
 - [ ] Default issue-with-linked-PR and PR cards to review/fix mode.
-- [ ] Implement in-review-to-in-progress reason selection with multi-select
+- [x] Implement in-review-to-in-progress reason selection with multi-select
   reasons.
 - [ ] Pivot orchestrator runtime identity to `work_item_id`.
 - [ ] Adapt workflow artifacts and input resolution to expose linked issue,
@@ -621,7 +621,8 @@ Implementation checklist:
   explicit outcome.
 - [ ] Add ignore/archive support for source items.
 - [ ] Update Ask Symphony for source, work item, and kanban-state questions.
-- [x] Add fast local tests for source sync and backlog-to-todo activation.
+- [x] Add fast local tests for source sync, backlog-to-todo activation, and
+  kanban state transitions.
 - [ ] Add fast local tests for grouping and work item workflow execution.
 - [x] Add a GitHub-backed e2e smoke scenario for source sync through kanban
   activation.
@@ -655,6 +656,10 @@ Progress notes:
 - 2026-05-25: Added source edit controls and structured source filters for
   labels, authors, updated date ranges, and stale items. Source sync now
   applies those filters before writing source items to SQLite.
+- 2026-05-25: Added HTMX and SortableJS dashboard assets, work-item move
+  endpoints, durable state events for manual kanban transitions, and queued
+  rerun records when in-review items move back to in-progress with selected
+  reasons.
 
 ## Durable Cross-Project Spec
 

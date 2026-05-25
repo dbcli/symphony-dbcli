@@ -12,6 +12,18 @@ from .models import SourceItem, WorkItem, WorkItemLink, WorkItemRun, WorkItemSta
 KANBAN_STATES = ("todo", "in_progress", "in_review", "done")
 TASK_TYPES = frozenset({"research", "code", "operations"})
 DONE_STATE = "done"
+STATE_LABELS = {
+    "todo": "Todo",
+    "in_progress": "In Progress",
+    "in_review": "In Review",
+    "done": "Done",
+}
+REVIEW_RERUN_REASONS = {
+    "address_pr_comments": "Address PR comments",
+    "fix_ci": "Fix CI",
+    "resolve_merge_conflicts": "Resolve merge conflicts",
+    "revise_implementation": "Revise implementation",
+}
 
 
 class WorkItemError(ValueError):
@@ -23,6 +35,14 @@ class WorkItemActivation:
     source_item_id: int
     task_type: str
     user_hint: str = ""
+
+
+@dataclass(frozen=True)
+class WorkItemMove:
+    work_item_id: int
+    target_state: str
+    reasons: list[str]
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,6 +63,10 @@ class WorkItemView:
     @property
     def source_label(self) -> str:
         return "PR" if self.source_kind == "pull_request" else "Issue"
+
+    @property
+    def state_label(self) -> str:
+        return STATE_LABELS[self.state]
 
 
 class WorkItemRepository:
@@ -149,11 +173,73 @@ class WorkItemRepository:
             work_item, source_item = row
             return _work_item_view(work_item, source_item)
 
+    def move_work_item(self, move: WorkItemMove) -> WorkItemView:
+        target_state = _validated_state(move.target_state)
+        reasons = _validated_reasons(move.reasons)
+        note = move.note.strip()
+        now = utc_now()
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItem, SourceItem)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .where(WorkItem.id == move.work_item_id)
+            ).one_or_none()
+            if row is None:
+                raise WorkItemError("Work item not found.")
+            work_item, source_item = row
+            previous_state = work_item.state
+            if previous_state == target_state:
+                return _work_item_view(work_item, source_item)
+
+            work_item.state = target_state
+            work_item.updated_at = now
+            session.add(
+                WorkItemStateEvent(
+                    work_item_id=work_item.id,
+                    from_state=previous_state,
+                    to_state=target_state,
+                    reasons_json=reasons_json(reasons),
+                    note=note,
+                    created_at=now,
+                )
+            )
+            if target_state == "in_progress":
+                session.add(
+                    WorkItemRun(
+                        work_item_id=work_item.id,
+                        task_type=work_item.task_type,
+                        trigger="rerun" if previous_state == "in_review" else "manual_move",
+                        status="queued",
+                        reasons_json=reasons_json(reasons),
+                        user_hint=note or work_item.user_hint,
+                        started_at=None,
+                        completed_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            session.commit()
+            session.refresh(work_item)
+            return _work_item_view(work_item, source_item)
+
 
 def _validated_task_type(task_type: str) -> str:
     if task_type not in TASK_TYPES:
         raise WorkItemError("Task type must be research, code, or operations.")
     return task_type
+
+
+def _validated_state(state: str) -> str:
+    if state not in KANBAN_STATES:
+        raise WorkItemError("Target state must be todo, in_progress, in_review, or done.")
+    return state
+
+
+def _validated_reasons(reasons: list[str]) -> list[str]:
+    invalid = sorted({reason for reason in reasons if reason not in REVIEW_RERUN_REASONS})
+    if invalid:
+        raise WorkItemError(f"Unknown rerun reason: {', '.join(invalid)}.")
+    return reasons
 
 
 def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemView:

@@ -44,7 +44,7 @@
       <span>{{ column.count }}</span>
     </div>
     {% if column.source_items %}
-    <div class="source-card-list">
+    <div class="source-card-list kanban-list" data-state="{{ column.name }}">
       {% for item in column.source_items %}
       <article class="source-card">
         <div>
@@ -58,9 +58,9 @@
       {% endfor %}
     </div>
     {% elif column.work_items %}
-    <div class="source-card-list">
+    <div class="source-card-list kanban-list" data-state="{{ column.name }}">
       {% for item in column.work_items %}
-      <article class="source-card">
+      <article class="source-card" data-work-item-id="{{ item.id }}">
         <div>
           <span class="source-card-kind">{{ item.source_label }}</span>
           <a href="{{ item.source_url }}" target="_blank" rel="noreferrer">#{{ item.source_number }}</a>
@@ -71,6 +71,7 @@
       {% endfor %}
     </div>
     {% else %}
+    <div class="source-card-list kanban-list" data-state="{{ column.name }}"></div>
     <div class="empty-state">No {{ column.label|lower }} items</div>
     {% endif %}
   </div>

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from symphony_dbcli.config import DatabaseConfig, default_config
+from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import GitHubIssue, PullRequest
+from symphony_dbcli.models import WorkItemRun, WorkItemStateEvent
 from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import Store
 from symphony_dbcli.web.app import create_app
@@ -30,6 +34,8 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert "data-theme-toggle" in response.text
     assert "Switch to dark mode" in response.text
     assert '<link rel="stylesheet" href="/web-static/web.css"' in response.text
+    assert '<script src="/web-static/vendor/htmx.min.js"' in response.text
+    assert '<script src="/web-static/vendor/sortable.min.js"' in response.text
     assert "<style>" not in response.text
 
 
@@ -148,9 +154,48 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "No backlog items" not in board.text
     assert "No todo items" not in board.text
     assert "work item #1" in board.text
+    assert 'data-work-item-id="1"' in board.text
     assert "code" in board.text
     assert "Fix completion crash" in work_items.text
     assert "Prefer unit tests." in detail.text
+
+
+def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+
+    review_move = client.post(
+        "/work-items/1/move",
+        data={"target_state": "in_review"},
+        follow_redirects=False,
+    )
+    rerun_move = client.post(
+        "/work-items/1/move",
+        data={
+            "target_state": "in_progress",
+            "reasons": ["address_pr_comments", "fix_ci"],
+            "note": "Reviewer asked for tests.",
+        },
+        follow_redirects=False,
+    )
+    detail = client.get("/work-items/1")
+    board = client.get(f"/board?source_id={source_id}")
+    events, runs = _work_item_events_and_runs(tmp_path)
+
+    assert review_move.status_code == 303
+    assert rerun_move.status_code == 303
+    assert "In Progress" in detail.text
+    assert "Reviewer asked for tests." not in detail.text
+    assert "work item #1" in board.text
+    assert "No in progress items" not in board.text
+    assert [event.to_state for event in events[-2:]] == ["in_review", "in_progress"]
+    assert runs[-1].status == "queued"
+    assert runs[-1].trigger == "rerun"
+    assert runs[-1].user_hint == "Reviewer asked for tests."
+    assert json.loads(runs[-1].reasons_json) == ["address_pr_comments", "fix_ci"]
 
 
 def test_fastapi_source_filters_can_be_edited_and_applied_to_sync(tmp_path: Path) -> None:
@@ -270,12 +315,29 @@ def _sync_source(client: TestClient, source_id: int) -> None:
     assert response.status_code == 303
 
 
+def _activate_source_item(client: TestClient, source_item_id: int, *, task_type: str = "research") -> None:
+    response = client.post(
+        f"/source-items/{source_item_id}/activate",
+        data={"task_type": task_type, "user_hint": ""},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
 def _source_item_id_for(client: TestClient, source_id: int, title: str) -> int:
     board = client.get(f"/board?source_id={source_id}")
     marker = 'href="/source-items/'
     start = board.text.index(marker, board.text.index(title)) + len(marker)
     end = board.text.index("/activate", start)
     return int(board.text[start:end])
+
+
+def _work_item_events_and_runs(tmp_path: Path) -> tuple[list[WorkItemStateEvent], list[WorkItemRun]]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        events = list(session.scalars(select(WorkItemStateEvent).order_by(WorkItemStateEvent.id.asc())))
+        runs = list(session.scalars(select(WorkItemRun).order_by(WorkItemRun.id.asc())))
+    return events, runs
 
 
 class FakeSourceSyncClient:

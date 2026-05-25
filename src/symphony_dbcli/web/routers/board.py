@@ -12,17 +12,11 @@ from symphony_dbcli.web.dependencies import (
     templates,
     work_item_repository,
 )
-from symphony_dbcli.work_items import KANBAN_STATES, WorkItemRepository, WorkItemView
+from symphony_dbcli.work_items import KANBAN_STATES, STATE_LABELS, WorkItemRepository, WorkItemView
 
 router = APIRouter(tags=["board"])
 BACKLOG_STATE = "backlog"
-STATE_LABELS = {
-    "backlog": "Backlog",
-    "todo": "Todo",
-    "in_progress": "In Progress",
-    "in_review": "In Review",
-    "done": "Done",
-}
+BOARD_STATE_LABELS = {"backlog": "Backlog", **STATE_LABELS}
 
 
 @dataclass(frozen=True)
@@ -78,7 +72,7 @@ def _board_columns(
     return [
         BoardColumn(
             name=BACKLOG_STATE,
-            label=STATE_LABELS[BACKLOG_STATE],
+            label=BOARD_STATE_LABELS[BACKLOG_STATE],
             source_items=backlog_items,
             work_items=[],
             count=len(backlog_items),
@@ -95,7 +89,7 @@ def _work_item_column(
     items = work_items.list_by_state(selected_source.id, state) if selected_source else []
     return BoardColumn(
         name=state,
-        label=STATE_LABELS[state],
+        label=BOARD_STATE_LABELS[state],
         source_items=[],
         work_items=items,
         count=len(items),

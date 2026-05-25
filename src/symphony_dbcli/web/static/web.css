@@ -200,6 +200,10 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.flow-panel {
+  margin-top: 12px;
+}
+
 .narrow-panel {
   max-width: 560px;
 }
@@ -305,6 +309,11 @@ h2 {
   background: var(--surface-subtle);
 }
 
+.source-card.is-dragging,
+.source-card.is-moving {
+  opacity: 0.72;
+}
+
 .source-card strong {
   overflow-wrap: anywhere;
 }
@@ -387,6 +396,23 @@ h2 {
 .split-fields > div {
   display: grid;
   gap: 10px;
+}
+
+.option-group {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.option-group legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .form-actions {

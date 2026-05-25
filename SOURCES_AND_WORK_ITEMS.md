@@ -826,7 +826,7 @@ Likely new primitives:
 - [x] Implement backlog-to-todo activation modal with task type and optional
   user hint.
 - [ ] Default issue-with-linked-PR and PR cards to review/fix mode.
-- [ ] Implement in-review-to-in-progress reason selector with multi-select
+- [x] Implement in-review-to-in-progress reason selector with multi-select
   reasons.
 - [ ] Pivot orchestrator runtime identity from issue/attempt to work item.
 - [ ] Preserve existing attempt/worker history while introducing
@@ -844,7 +844,8 @@ Likely new primitives:
 - [ ] Add opt-in archive/ignore support for source items and work items.
 - [ ] Update Ask Symphony to answer source, work item, and board-state
   questions.
-- [x] Build fast local tests for source sync and backlog-to-todo activation.
+- [x] Build fast local tests for source sync, backlog-to-todo activation, and
+  kanban state transitions.
 - [ ] Build fast local tests for grouped cards and work item workflow
   execution.
 - [x] Add GitHub-backed e2e smoke scenario for source sync through kanban
