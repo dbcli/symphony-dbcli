@@ -24,6 +24,8 @@ def test_action_registry_records_execution_boundaries() -> None:
     merge_conflicts = DEFAULT_ACTION_REGISTRY.get("github.detect_merge_conflicts")
     address_feedback = DEFAULT_ACTION_REGISTRY.get("codex.address_pr_feedback")
     push_update = DEFAULT_ACTION_REGISTRY.get("github.push_pr_update")
+    source_sync = DEFAULT_ACTION_REGISTRY.get("source.sync")
+    work_item_move = DEFAULT_ACTION_REGISTRY.get("work_item.move")
     noop = DEFAULT_ACTION_REGISTRY.get("workflow.noop")
 
     assert draft_pr is not None
@@ -70,6 +72,17 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert push_update.side_effect == "github_write"
     assert push_update.human_gate_allowed is True
     assert "commit_sha" in push_update.output_fields
+
+    assert source_sync is not None
+    assert source_sync.idempotency_strategy == "source_sync"
+    assert source_sync.side_effect == "github_read"
+    assert "source_id" in source_sync.input_fields
+
+    assert work_item_move is not None
+    assert work_item_move.idempotency_strategy == "work_item_transition"
+    assert work_item_move.side_effect == "none"
+    assert work_item_move.human_gate_allowed is True
+    assert "target_state" in work_item_move.input_fields
 
     assert noop is not None
     assert noop.side_effect == "none"

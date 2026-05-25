@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, cast
 
 from .config import WorkflowConfig
+from .db import create_db_engine, create_session_factory
 from .github import (
     GitHubCiStatus,
     GitHubClient,
@@ -15,6 +16,7 @@ from .github import (
     PullRequest,
     PullRequestMergeStatus,
 )
+from .models import create_model_tables
 from .review_actions import (
     GitHubReviewClient,
     ReviewActionError,
@@ -23,7 +25,9 @@ from .review_actions import (
     issue_link_marker,
 )
 from .runner import CodexRunner
+from .sources import SourceRepository, SourceSyncService
 from .store import Store
+from .work_items import WorkItemActivation, WorkItemMove, WorkItemRepository, WorkItemView
 from .worker_prompt import (
     build_worker_prompt,
     format_follow_up_context,
@@ -70,6 +74,12 @@ class PrimitiveContext:
     task_type: str
     issue_title: str
     attempt_id: int | None = None
+    source_id: int | None = None
+    source_item_id: int | None = None
+    work_item_id: int | None = None
+    active_pr_source_item_id: int | None = None
+    user_hint: str = ""
+    rerun_reasons: list[str] = field(default_factory=list)
     base_repo_path: str = ""
     worktree_path: str = ""
     branch: str = ""
@@ -106,6 +116,11 @@ class PrimitiveExecutor:
         self.config = config
         self.store = store
         self.github = github or GitHubClient(config.github)
+        engine = create_db_engine(store.path)
+        create_model_tables(engine)
+        session_factory = create_session_factory(engine)
+        self.sources = SourceRepository(session_factory)
+        self.work_items = WorkItemRepository(session_factory)
         self.review_actions = review_actions or ReviewActions(
             config,
             store,
@@ -165,6 +180,18 @@ class PrimitiveExecutor:
             return self._push_pr_update(context)
         if context.transition.action == "github.post_issue_comment":
             return self._post_issue_comment(context)
+        if context.transition.action == "source.sync":
+            return self._source_sync(context)
+        if context.transition.action == "source.sync_all":
+            return self._source_sync_all()
+        if context.transition.action == "work_item.activate":
+            return self._work_item_activate(context)
+        if context.transition.action == "work_item.move":
+            return self._work_item_move(context)
+        if context.transition.action == "work_item.link_source_item":
+            return self._work_item_link_source_item(context)
+        if context.transition.action == "work_item.select_active_pr":
+            return self._work_item_select_active_pr(context)
         raise PrimitiveExecutionError(f"Primitive {context.transition.action} is not implemented.")
 
     def _noop(self, context: PrimitiveContext) -> PrimitiveOutcome:
@@ -541,6 +568,61 @@ class PrimitiveExecutor:
             }
         )
 
+    def _source_sync(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        source_id = _context_or_input_int(context, "source_id")
+        summary = SourceSyncService(self.sources, self.github).sync_source(source_id)
+        return PrimitiveOutcome(asdict(summary))
+
+    def _source_sync_all(self) -> PrimitiveOutcome:
+        service = SourceSyncService(self.sources, self.github)
+        summaries = [asdict(service.sync_source(source.id)) for source in self.sources.list_sources()]
+        return PrimitiveOutcome({"sources": summaries, "synced": len(summaries)})
+
+    def _work_item_activate(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        source_item_id = _context_or_input_int(context, "source_item_id")
+        task_type = str(context.input_data.get("task_type") or context.task_type)
+        user_hint = str(context.input_data.get("user_hint") or context.user_hint)
+        work_item = self.work_items.activate_source_item(
+            WorkItemActivation(
+                source_item_id=source_item_id,
+                task_type=task_type,
+                user_hint=user_hint,
+            )
+        )
+        return PrimitiveOutcome(_work_item_output(work_item))
+
+    def _work_item_move(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        work_item_id = _context_or_input_int(context, "work_item_id")
+        target_state = str(context.input_data.get("target_state") or context.transition.to_state)
+        reasons = _string_list(context.input_data.get("reasons")) or context.rerun_reasons
+        note = str(context.input_data.get("note") or context.user_hint)
+        work_item = self.work_items.move_work_item(
+            WorkItemMove(
+                work_item_id=work_item_id,
+                target_state=target_state,
+                reasons=reasons,
+                note=note,
+            )
+        )
+        return PrimitiveOutcome(_work_item_output(work_item))
+
+    def _work_item_link_source_item(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        work_item_id = _context_or_input_int(context, "work_item_id")
+        source_item_id = _context_or_input_int(context, "source_item_id")
+        relationship = str(context.input_data.get("relationship") or "related")
+        work_item = self.work_items.link_source_item(
+            work_item_id=work_item_id,
+            source_item_id=source_item_id,
+            relationship=relationship,
+        )
+        return PrimitiveOutcome(_work_item_output(work_item))
+
+    def _work_item_select_active_pr(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        work_item_id = _context_or_input_int(context, "work_item_id")
+        source_item_id = _context_or_input_int(context, "source_item_id")
+        work_item = self.work_items.select_active_pr(work_item_id, source_item_id)
+        return PrimitiveOutcome(_work_item_output(work_item))
+
     def _label_changes(self, to_state: str) -> tuple[list[str], list[str]]:
         labels = self.config.labels
         if to_state == "claimed":
@@ -582,6 +664,40 @@ def _context_or_input_str(context: PrimitiveContext, key: str) -> str:
     if not value:
         raise PrimitiveExecutionError(f"Primitive input '{key}' is required.")
     return value
+
+
+def _context_or_input_int(context: PrimitiveContext, key: str) -> int:
+    value = context.input_data.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value:
+        return int(value)
+    context_value = getattr(context, key)
+    if isinstance(context_value, int):
+        return context_value
+    raise PrimitiveExecutionError(f"Primitive input '{key}' is required.")
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
+
+
+def _work_item_output(work_item: WorkItemView) -> dict[str, Any]:
+    return {
+        "work_item_id": work_item.id,
+        "source_id": work_item.source_id,
+        "primary_source_item_id": work_item.primary_source_item_id,
+        "active_pr_source_item_id": work_item.active_pr_source_item_id,
+        "state": work_item.state,
+        "task_type": work_item.task_type,
+        "title": work_item.title,
+    }
 
 
 def _pull_request_for_cleanup(

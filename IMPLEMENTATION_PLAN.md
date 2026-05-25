@@ -610,7 +610,7 @@ Implementation checklist:
 - [ ] Pivot orchestrator runtime identity to `work_item_id`.
 - [ ] Adapt workflow artifacts and input resolution to expose linked issue,
   active PR, user hint, and rerun reasons.
-- [ ] Add source/work-item primitives such as `source.sync`,
+- [x] Add source/work-item primitives such as `source.sync`,
   `work_item.activate`, `work_item.move`, and `work_item.select_active_pr`.
 - [ ] Add `codex.operations_task` and operation-summary dashboard views.
 - [ ] Update PR creation to link work item, issue, and PR in SQLite and in the
@@ -668,6 +668,10 @@ Progress notes:
   records, board actions to ignore backlog cards and archive work items, and
   sync-time auto-completion when a primary issue or active PR disappears from
   the open GitHub source set.
+- 2026-05-25: Added workflow primitive specs and executor implementations for
+  `source.sync`, `source.sync_all`, `work_item.activate`, `work_item.move`,
+  `work_item.link_source_item`, and `work_item.select_active_pr`, plus
+  `PrimitiveContext` fields for work-item-aware execution.
 
 ## Durable Cross-Project Spec
 

@@ -17,6 +17,7 @@ from symphony_dbcli.github import (
 )
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
 from symphony_dbcli.review_actions import issue_link_marker
+from symphony_dbcli.sources import SourceCreate
 from symphony_dbcli.store import Store
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
 
@@ -49,6 +50,54 @@ def test_fetch_comments_returns_comment_snapshots(tmp_path: Path) -> None:
             "updated_at": "2026-05-24T10:00:00Z",
         }
     ]
+
+
+def test_source_sync_primitive_persists_source_items(tmp_path: Path) -> None:
+    executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=FakePrimitiveGitHub())
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+
+    output = executor.execute(_context("source.sync", input_data={"source_id": source.id})).output
+    backlog = executor.sources.backlog_source_items(source.id)
+
+    assert output["source_id"] == source.id
+    assert output["issue_count"] == 1
+    assert output["pull_request_count"] == 2
+    assert [item.title for item in backlog] == ["Logging path support", "Mention issue without marker"]
+    assert backlog[0].default_task_type == "code"
+    assert backlog[0].linked_items[0].number == 12
+
+
+def test_work_item_primitives_activate_and_move_work(tmp_path: Path) -> None:
+    executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=FakePrimitiveGitHub())
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+    executor.execute(_context("source.sync", input_data={"source_id": source.id}))
+    source_item = executor.sources.backlog_source_items(source.id)[0]
+
+    activated = executor.execute(
+        _context(
+            "work_item.activate",
+            input_data={
+                "source_item_id": source_item.id,
+                "task_type": "code",
+                "user_hint": "Prefer unit tests.",
+            },
+        )
+    ).output
+    moved = executor.execute(
+        _context(
+            "work_item.move",
+            input_data={
+                "work_item_id": activated["work_item_id"],
+                "target_state": "in_progress",
+                "reasons": ["fix_ci"],
+                "note": "Rerun after CI failure.",
+            },
+        )
+    ).output
+
+    assert activated["state"] == "todo"
+    assert activated["active_pr_source_item_id"] == source_item.linked_items[0].id
+    assert moved["state"] == "in_progress"
 
 
 def test_fetch_pull_request_records_attempt_pr(tmp_path: Path) -> None:

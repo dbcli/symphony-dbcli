@@ -305,6 +305,36 @@ class WorkItemRepository:
             session.refresh(work_item)
             return _work_item_view(work_item, primary_source_item)
 
+    def link_source_item(
+        self,
+        *,
+        work_item_id: int,
+        source_item_id: int,
+        relationship: str,
+    ) -> WorkItemView:
+        now = utc_now()
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItem, SourceItem)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .where(WorkItem.id == work_item_id)
+            ).one_or_none()
+            linked_source_item = session.get(SourceItem, source_item_id)
+            if row is None or linked_source_item is None:
+                raise WorkItemError("Work item or source item not found.")
+            work_item, primary_source_item = row
+            if linked_source_item.source_id != work_item.source_id:
+                raise WorkItemError("Linked source item must belong to the same source.")
+            _ensure_work_item_link(session, work_item_id, source_item_id, relationship, now)
+            if relationship == "active_pr":
+                if linked_source_item.kind != "pull_request":
+                    raise WorkItemError("Active PR source item must be a pull request.")
+                work_item.active_pr_source_item_id = linked_source_item.id
+            work_item.updated_at = now
+            session.commit()
+            session.refresh(work_item)
+            return _work_item_view(work_item, primary_source_item)
+
     def move_work_item(self, move: WorkItemMove) -> WorkItemView:
         target_state = _validated_state(move.target_state)
         reasons = _validated_reasons(move.reasons)
