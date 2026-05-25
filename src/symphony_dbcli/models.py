@@ -68,5 +68,70 @@ class SourceItem(Base):
     source: Mapped[Source] = relationship(back_populates="items")
 
 
+class WorkItem(Base):
+    __tablename__ = "work_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), nullable=False)
+    primary_source_item_id: Mapped[int] = mapped_column(
+        ForeignKey("source_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_hint: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    outcome: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class WorkItemLink(Base):
+    __tablename__ = "work_item_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "work_item_id", "source_item_id", "relationship", name="uq_work_item_links_identity"
+        ),
+        Index("ix_work_item_links_source_item", "source_item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), nullable=False)
+    source_item_id: Mapped[int] = mapped_column(
+        ForeignKey("source_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    relationship: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class WorkItemStateEvent(Base):
+    __tablename__ = "work_item_state_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), nullable=False)
+    from_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    reasons_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class WorkItemRun(Base):
+    __tablename__ = "work_item_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reasons_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    user_hint: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 def create_model_tables(engine: Engine) -> None:
     Base.metadata.create_all(engine)

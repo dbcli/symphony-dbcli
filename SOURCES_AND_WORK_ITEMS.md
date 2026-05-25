@@ -814,16 +814,16 @@ Likely new primitives:
 
 ## Implementation Task List
 
-- [ ] Add source models and SQLite tables for `sources`, `source_sync_runs`,
+- [x] Add source models and SQLite tables for `sources`, `source_sync_runs`,
   and `source_items`.
-- [ ] Implement GitHub source sync for open issues and PRs with default
+- [x] Implement GitHub source sync for open issues and PRs with default
   all-open behavior.
 - [ ] Add source filters for labels, authors, stale items, and date ranges.
-- [ ] Add Sources dashboard page with add source, edit filters, sync now, and
-  sync status.
-- [ ] Add work item tables, link tables, state history, and migration tests.
-- [ ] Build kanban board UI backed by `work_items`.
-- [ ] Implement backlog-to-todo activation modal with task type and optional
+- [x] Add Sources dashboard page with add source, sync now, and sync status.
+- [ ] Add source edit controls for filters and source settings.
+- [x] Add work item tables, link tables, state history, and migration tests.
+- [x] Build kanban board UI backed by `work_items`.
+- [x] Implement backlog-to-todo activation modal with task type and optional
   user hint.
 - [ ] Default issue-with-linked-PR and PR cards to review/fix mode.
 - [ ] Implement in-review-to-in-progress reason selector with multi-select
@@ -844,7 +844,9 @@ Likely new primitives:
 - [ ] Add opt-in archive/ignore support for source items and work items.
 - [ ] Update Ask Symphony to answer source, work item, and board-state
   questions.
-- [ ] Build fast local tests for source sync, kanban transitions, grouped
-  cards, and work item workflow execution.
-- [ ] Add/update GitHub-backed e2e scenario for source sync through kanban
-  activation and PR review/fix workflow.
+- [x] Build fast local tests for source sync and backlog-to-todo activation.
+- [ ] Build fast local tests for grouped cards and work item workflow
+  execution.
+- [x] Add GitHub-backed e2e smoke scenario for source sync through kanban
+  activation.
+- [ ] Extend the GitHub-backed e2e scenario through PR review/fix workflow.

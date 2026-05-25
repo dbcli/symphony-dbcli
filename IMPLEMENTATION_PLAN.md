@@ -581,11 +581,11 @@ Implementation checklist:
   items, workers, workflow, ask, settings, and narrowly scoped JSON APIs.
 - [x] Add SQLAlchemy 2.0 models and session/repository boundaries for source
   data.
-- [ ] Add SQLAlchemy 2.0 models and session/repository boundaries for work-item
+- [x] Add SQLAlchemy 2.0 models and session/repository boundaries for work-item
   data.
 - [x] Add Alembic migration scaffolding.
 - [x] Add Alembic revisions for new source schema changes.
-- [ ] Add Alembic revisions for new work-item schema changes.
+- [x] Add Alembic revisions for new work-item schema changes.
 - [ ] Add HTMX and SortableJS assets for server-rendered interactive kanban
   behavior.
 - [x] Add SQLite/Alembic table for `sources`.
@@ -594,14 +594,15 @@ Implementation checklist:
 - [ ] Add source filter support for labels, authors, stale items, and date
   ranges.
 - [x] Build a basic Sources dashboard page with add/list controls.
-- [ ] Add source edit/sync controls and sync status.
-- [ ] Add `work_items`, `work_item_links`, state history, and run/reason
+- [x] Add source sync controls and sync status.
+- [ ] Add source edit controls for filters and source settings.
+- [x] Add `work_items`, `work_item_links`, state history, and run/reason
   storage.
 - [x] Build the source-scoped kanban board shell with backlog, todo, in
   progress, in review, and done columns.
 - [x] Populate source-scoped backlog from synced source items.
-- [ ] Populate todo, in progress, in review, and done from work-item state.
-- [ ] Implement backlog-to-todo activation with task type and optional user
+- [x] Populate todo, in progress, in review, and done from work-item state.
+- [x] Implement backlog-to-todo activation with task type and optional user
   hint.
 - [ ] Default issue-with-linked-PR and PR cards to review/fix mode.
 - [ ] Implement in-review-to-in-progress reason selection with multi-select
@@ -620,10 +621,11 @@ Implementation checklist:
   explicit outcome.
 - [ ] Add ignore/archive support for source items.
 - [ ] Update Ask Symphony for source, work item, and kanban-state questions.
-- [ ] Add fast local tests for sync, kanban transitions, grouping, and work item
-  workflow execution.
-- [ ] Add a GitHub-backed e2e scenario for source sync through kanban activation
-  and PR review/fix workflow.
+- [x] Add fast local tests for source sync and backlog-to-todo activation.
+- [ ] Add fast local tests for grouping and work item workflow execution.
+- [x] Add a GitHub-backed e2e smoke scenario for source sync through kanban
+  activation.
+- [ ] Extend the GitHub-backed e2e scenario through PR review/fix workflow.
 
 Progress notes:
 
@@ -645,6 +647,11 @@ Progress notes:
 - 2026-05-25: Implemented GitHub source sync. Source sync now fetches open
   issues and pull requests, records sync runs and source items in SQLite, and
   renders synced items in the selected source board backlog.
+- 2026-05-25: Added work-item tables, repository boundaries, source-item to
+  work-item activation, task type and hint capture, state event/run records,
+  work-item list/detail pages, and board rendering from work-item state.
+  Verified source sync through backlog-to-todo activation against the
+  `amjith/symphony-dbcli-e2e-fixture` repository.
 
 ## Durable Cross-Project Spec
 

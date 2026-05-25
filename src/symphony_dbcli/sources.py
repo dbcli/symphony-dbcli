@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from .clock import utc_now
 from .db import SessionFactory
 from .github import GitHubIssue, PullRequest
-from .models import Source, SourceItem, SourceSyncRun
+from .models import Source, SourceItem, SourceSyncRun, WorkItem, WorkItemLink
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -77,6 +77,10 @@ class SourceItemView:
     @property
     def kind_label(self) -> str:
         return "PR" if self.kind == "pull_request" else "Issue"
+
+    @property
+    def default_task_type(self) -> str:
+        return "code" if self.kind == "pull_request" else "research"
 
 
 @dataclass(frozen=True)
@@ -162,6 +166,29 @@ class SourceRepository:
                 .order_by(SourceItem.kind.asc(), SourceItem.number.desc())
             ).all()
             return [SourceItemView.from_model(row) for row in rows]
+
+    def backlog_source_items(self, source_id: int) -> list[SourceItemView]:
+        linked_active_source_items = (
+            select(WorkItemLink.source_item_id)
+            .join(WorkItem, WorkItemLink.work_item_id == WorkItem.id)
+            .where(WorkItem.state != "done")
+        )
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(SourceItem)
+                .where(
+                    SourceItem.source_id == source_id,
+                    SourceItem.state == "open",
+                    ~SourceItem.id.in_(linked_active_source_items),
+                )
+                .order_by(SourceItem.kind.asc(), SourceItem.number.desc())
+            ).all()
+            return [SourceItemView.from_model(row) for row in rows]
+
+    def get_source_item(self, source_item_id: int) -> SourceItemView | None:
+        with self._session_factory() as session:
+            source_item = session.get(SourceItem, source_item_id)
+            return SourceItemView.from_model(source_item) if source_item else None
 
     def start_sync_run(self, source_id: int) -> int:
         now = utc_now()

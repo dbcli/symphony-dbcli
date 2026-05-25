@@ -41,7 +41,6 @@ def test_fastapi_dashboard_hierarchy_routes_render(tmp_path: Path) -> None:
         "/sources": "Sources",
         "/sources/new": "Add Source",
         "/work-items": "Work Items",
-        "/work-items/42": "Work Item #42",
         "/workers": "Workers",
         "/workflow": "Workflow",
         "/workflow/edit": "Workflow Editor",
@@ -125,6 +124,35 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     assert "No backlog items" not in board.text
 
 
+def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+
+    form = client.get(f"/source-items/{source_item_id}/activate")
+    response = client.post(
+        f"/source-items/{source_item_id}/activate",
+        data={"task_type": "code", "user_hint": "Prefer unit tests."},
+        follow_redirects=False,
+    )
+    board = client.get(f"/board?source_id={source_id}")
+    work_items = client.get("/work-items")
+    detail = client.get("/work-items/1")
+
+    assert form.status_code == 200
+    assert "Queue Work" in form.text
+    assert "Fix completion crash" in form.text
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/board?source_id={source_id}"
+    assert "No backlog items" not in board.text
+    assert "No todo items" not in board.text
+    assert "work item #1" in board.text
+    assert "code" in board.text
+    assert "Fix completion crash" in work_items.text
+    assert "Prefer unit tests." in detail.text
+
+
 def test_fastapi_sources_can_be_added_and_listed(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -179,6 +207,19 @@ def _add_source(client: TestClient, repo: str) -> int:
     start = sources.text.index(marker, sources.text.index(repo)) + len(marker)
     end = sources.text.index('"', start)
     return int(sources.text[start:end])
+
+
+def _sync_source(client: TestClient, source_id: int) -> None:
+    response = client.post(f"/sources/{source_id}/sync", follow_redirects=False)
+    assert response.status_code == 303
+
+
+def _source_item_id_for(client: TestClient, source_id: int, title: str) -> int:
+    board = client.get(f"/board?source_id={source_id}")
+    marker = 'href="/source-items/'
+    start = board.text.index(marker, board.text.index(title)) + len(marker)
+    end = board.text.index("/activate", start)
+    return int(board.text[start:end])
 
 
 class FakeSourceSyncClient:

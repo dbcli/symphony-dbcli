@@ -67,6 +67,7 @@ button:disabled {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -318,6 +319,19 @@ h2 {
   color: var(--accent);
   font-size: 11px;
   font-weight: 800;
+}
+
+.activation-summary {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.text-action {
+  justify-self: start;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .inline-form {

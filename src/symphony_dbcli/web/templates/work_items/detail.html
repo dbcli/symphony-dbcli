@@ -4,13 +4,24 @@
   <dl class="settings-list">
     <div>
       <dt>ID</dt>
-      <dd>#{{ work_item_id }}</dd>
+      <dd>#{{ work_item.id }}</dd>
     </div>
     <div>
-      <dt>Status</dt>
-      <dd>Pending schema migration</dd>
+      <dt>State</dt>
+      <dd>{{ work_item.state }}</dd>
+    </div>
+    <div>
+      <dt>Task</dt>
+      <dd>{{ work_item.task_type }}</dd>
+    </div>
+    <div>
+      <dt>Source</dt>
+      <dd><a href="{{ work_item.source_url }}" target="_blank" rel="noreferrer">{{ work_item.source_label }} #{{ work_item.source_number }}</a></dd>
+    </div>
+    <div>
+      <dt>Hint</dt>
+      <dd>{{ work_item.user_hint or "-" }}</dd>
     </div>
   </dl>
 </section>
 {% endblock %}
-

@@ -40,12 +40,12 @@
   {% for column in columns %}
   <div class="board-column">
     <div class="column-header">
-      <h2>{{ column.name|title }}</h2>
+      <h2>{{ column.label }}</h2>
       <span>{{ column.count }}</span>
     </div>
-    {% if column.items %}
+    {% if column.source_items %}
     <div class="source-card-list">
-      {% for item in column.items %}
+      {% for item in column.source_items %}
       <article class="source-card">
         <div>
           <span class="source-card-kind">{{ item.kind_label }}</span>
@@ -53,11 +53,25 @@
         </div>
         <strong>{{ item.title }}</strong>
         <span class="muted">{{ item.author or "unknown author" }}</span>
+        <a class="text-action" href="/source-items/{{ item.id }}/activate">Queue</a>
+      </article>
+      {% endfor %}
+    </div>
+    {% elif column.work_items %}
+    <div class="source-card-list">
+      {% for item in column.work_items %}
+      <article class="source-card">
+        <div>
+          <span class="source-card-kind">{{ item.source_label }}</span>
+          <a href="{{ item.source_url }}" target="_blank" rel="noreferrer">#{{ item.source_number }}</a>
+        </div>
+        <strong><a href="/work-items/{{ item.id }}">{{ item.title }}</a></strong>
+        <span class="muted">{{ item.task_type }} · work item #{{ item.id }}</span>
       </article>
       {% endfor %}
     </div>
     {% else %}
-    <div class="empty-state">No {{ column.name }} items</div>
+    <div class="empty-state">No {{ column.label|lower }} items</div>
     {% endif %}
   </div>
   {% endfor %}

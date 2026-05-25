@@ -12,6 +12,7 @@ from symphony_dbcli.dashboard import DashboardRuntime
 from symphony_dbcli.db import SessionFactory
 from symphony_dbcli.sources import SourceRepository, SourceSyncClient
 from symphony_dbcli.store import Store
+from symphony_dbcli.work_items import WorkItemRepository
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -51,6 +52,10 @@ def get_app_state(request: Request) -> WebAppState:
 
 def source_repository(request: Request) -> SourceRepository:
     return SourceRepository(get_app_state(request).session_factory)
+
+
+def work_item_repository(request: Request) -> WorkItemRepository:
+    return WorkItemRepository(get_app_state(request).session_factory)
 
 
 def page_context(request: Request, *, title: str, active: str) -> dict[str, object]:

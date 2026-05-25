@@ -1,7 +1,31 @@
 {% extends "base.html" %}
 {% block body %}
 <section class="panel">
+  {% if work_items %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Work Item</th>
+        <th>State</th>
+        <th>Task</th>
+        <th>Source</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in work_items %}
+      <tr>
+        <td><a href="/work-items/{{ item.id }}">#{{ item.id }}</a> {{ item.title }}</td>
+        <td>{{ item.state }}</td>
+        <td>{{ item.task_type }}</td>
+        <td><a href="{{ item.source_url }}" target="_blank" rel="noreferrer">{{ item.source_label }} #{{ item.source_number }}</a></td>
+        <td>{{ item.updated_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
   <div class="empty-state">No work items</div>
+  {% endif %}
 </section>
 {% endblock %}
-
