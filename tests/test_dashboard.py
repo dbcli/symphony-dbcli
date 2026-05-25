@@ -5,6 +5,7 @@ from pathlib import Path
 
 from symphony_dbcli.config import PolicyConfig, ProfileConfig, default_config, render_workflow
 from symphony_dbcli.dashboard import (
+    DashboardCycleResult,
     DashboardRuntime,
     DashboardState,
     render_attempt,
@@ -33,10 +34,35 @@ def test_dashboard_uses_static_css(tmp_path: Path) -> None:
     assert "branch prefix symphony" in html
     assert ".symphony/worktrees" in html
     assert "Start queued work automatically" in html
+    assert 'action="/workflow/run-cycle" method="post"' in html
+    assert "Run Cycle Now" in html
     assert 'role="switch"' in html
     assert 'aria-checked="true"' in html
     assert 'form action="/" method="get" data-ask-form' in html
     assert "data-ask-answer" in html
+
+
+def test_dashboard_shows_manual_workflow_cycle_result(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+
+    html = render_index(
+        store,
+        cycle_result=DashboardCycleResult(
+            synced=2,
+            advanced=3,
+            claimed=1,
+            started=1,
+            cleaned_worktrees=1,
+            retried=0,
+        ),
+    )
+
+    assert "Workflow Cycle" in html
+    assert "Completed" in html
+    assert "Issues Synced" in html
+    assert "States Advanced" in html
+    assert "Workers Started" in html
 
 
 def test_dashboard_shows_worker_auto_start_off(tmp_path: Path) -> None:

@@ -386,6 +386,46 @@ a {
   flex: 0 0 auto;
 }
 
+.control-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.cycle-result.has-error {
+  border-color: #e2aaa7;
+}
+
+.cycle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 10px;
+}
+
+.cycle-grid > div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcfd;
+}
+
+.cycle-grid strong,
+.cycle-grid span {
+  display: block;
+}
+
+.cycle-grid strong {
+  font-size: 20px;
+}
+
+.cycle-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .toggle-switch {
   display: inline-flex;
   align-items: center;

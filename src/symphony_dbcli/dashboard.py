@@ -16,9 +16,10 @@ from jinja2 import Environment, PackageLoader, StrictUndefined, select_autoescap
 
 from .ask import AskAnswer, answer_with_links
 from .config import WorkflowConfig, WorkflowError, default_config, render_workflow
-from .orchestrator import Orchestrator, OrchestratorError
+from .orchestrator import Orchestrator, OrchestratorError, load_and_record_workflow
 from .review_actions import DraftPullRequestContent, build_draft_pr_content
 from .store import Store
+from .supervisor import DispatchResult, WorkerSupervisor
 from .workflow_edit import (
     CodexWorkflowEditModel,
     WorkflowEditProposal,
@@ -62,6 +63,28 @@ class DashboardRuntime:
             base_branch=config.workspace.base_branch or "default branch",
             retention_days=config.workspace.retention_days,
         )
+
+
+@dataclass(frozen=True)
+class DashboardCycleResult:
+    synced: int = 0
+    advanced: int = 0
+    claimed: int = 0
+    started: int = 0
+    crashed: int = 0
+    timed_out: int = 0
+    retried: int = 0
+    cleaned_worktrees: int = 0
+    skipped_worktrees: int = 0
+    error: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return not self.error
+
+    @classmethod
+    def failed(cls, error: str) -> DashboardCycleResult:
+        return cls(error=error)
 
 
 @dataclass(frozen=True)
@@ -180,6 +203,7 @@ def render_index(
     runtime: DashboardRuntime | None = None,
     config: WorkflowConfig | None = None,
     ask_question: str = "",
+    cycle_result: DashboardCycleResult | None = None,
 ) -> str:
     cfg = config or default_config()
     ask_answer = answer_with_links(store, ask_question) if ask_question else None
@@ -197,6 +221,7 @@ def render_index(
             ),
             ask_question=ask_question,
             ask_answer=ask_answer,
+            cycle_result=cycle_result,
         )
     )
 
@@ -219,6 +244,43 @@ def render_ask(store: Store, question: str) -> str:
             question=question,
             answer=answer,
         )
+    )
+
+
+def run_dashboard_cycle(store: Store, state: DashboardState) -> DashboardCycleResult:
+    config = state.config()
+    workflow_path = state.workflow_path()
+    workflow_version_id = _latest_workflow_version_id(store)
+    path = Path(workflow_path)
+    if path.exists():
+        config, workflow_version_id = load_and_record_workflow(
+            store,
+            workflow_path,
+            profile=config.profile.active,
+        )
+        state.update_config(config)
+
+    orchestrator = Orchestrator(config, store, workflow_version_id)
+    supervisor = WorkerSupervisor(
+        store,
+        workflow_path=workflow_path,
+        profile=config.profile.active,
+    )
+    reconciled = supervisor.reconcile(config, workflow_version_id)
+    synced = orchestrator.poll_once()
+    cleanup = orchestrator.cleanup_merged_pull_request_worktrees()
+    advanced = orchestrator.advance_ready_workflow_instances(
+        allowed_side_effects={"github_read", "github_write", "workspace_write"}
+    )
+    claimed = orchestrator.claim_available()
+    dispatched = supervisor.start_queued(config)
+    return _dashboard_cycle_result(
+        synced=synced,
+        advanced=advanced,
+        claimed=claimed,
+        cleanup=cleanup,
+        reconciled=reconciled,
+        dispatched=dispatched,
     )
 
 
@@ -413,6 +475,9 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 store.set_start_queued_work_automatically(enabled)
                 self._redirect("/")
                 return
+            if parsed.path == "/workflow/run-cycle":
+                self._run_dashboard_cycle()
+                return
             if parsed.path == "/workflow/edit":
                 self._workflow_edit()
                 return
@@ -482,6 +547,20 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
                 self._send_html(render_workflow_edit(proposal=proposal, applied=True))
                 return
             self._send_html(render_workflow_edit(proposal=proposal))
+
+        def _run_dashboard_cycle(self) -> None:
+            try:
+                result = run_dashboard_cycle(store, state)
+            except (WorkflowError, RuntimeError) as exc:
+                result = DashboardCycleResult.failed(str(exc))
+            self._send_html(
+                render_index(
+                    store,
+                    state.runtime(start_queued_work_automatically=store.start_queued_work_automatically()),
+                    state.config(),
+                    cycle_result=result,
+                )
+            )
 
         def _create_draft_pr(self, attempt_id: int) -> None:
             params = self._read_form()
@@ -630,3 +709,30 @@ def _workflow_content(state: DashboardState) -> str:
     if path.exists():
         return path.read_text(encoding="utf-8")
     return render_workflow(state.config())
+
+
+def _latest_workflow_version_id(store: Store) -> int | None:
+    workflow = store.latest_workflow_version()
+    return int(workflow["id"]) if workflow else None
+
+
+def _dashboard_cycle_result(
+    *,
+    synced: int,
+    advanced: int,
+    claimed: int,
+    cleanup: Any,
+    reconciled: DispatchResult,
+    dispatched: DispatchResult,
+) -> DashboardCycleResult:
+    return DashboardCycleResult(
+        synced=synced,
+        advanced=advanced,
+        claimed=claimed,
+        started=dispatched.started,
+        crashed=reconciled.crashed,
+        timed_out=reconciled.timed_out,
+        retried=reconciled.retried,
+        cleaned_worktrees=int(cleanup.cleaned),
+        skipped_worktrees=int(cleanup.skipped),
+    )

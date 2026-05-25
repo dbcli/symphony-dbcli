@@ -37,28 +37,62 @@
 
 <section class="control-panel">
   <div>
-    <h2>Start queued work automatically</h2>
+    <h2>Workflow Controls</h2>
     <span class="muted">
       {{ "Workers will start when capacity is available." if runtime.start_queued_work_automatically else "Queued work will wait until this is turned on." }}
     </span>
   </div>
-  <form action="/settings/start-queued-work-automatically" method="post">
-    <input
-      type="hidden"
-      name="enabled"
-      value="{{ 'false' if runtime.start_queued_work_automatically else 'true' }}"
-    />
-    <button
-      class="toggle-switch {{ 'is-on' if runtime.start_queued_work_automatically else '' }}"
-      type="submit"
-      role="switch"
-      aria-checked="{{ 'true' if runtime.start_queued_work_automatically else 'false' }}"
-    >
-      <span class="toggle-track" aria-hidden="true"><span class="toggle-knob"></span></span>
-      <span class="toggle-state">{{ "On" if runtime.start_queued_work_automatically else "Off" }}</span>
-    </button>
-  </form>
+  <div class="control-actions">
+    <form action="/workflow/run-cycle" method="post">
+      <button type="submit">Run Cycle Now</button>
+    </form>
+    <form action="/settings/start-queued-work-automatically" method="post">
+      <input
+        type="hidden"
+        name="enabled"
+        value="{{ 'false' if runtime.start_queued_work_automatically else 'true' }}"
+      />
+      <button
+        class="toggle-switch {{ 'is-on' if runtime.start_queued_work_automatically else '' }}"
+        type="submit"
+        role="switch"
+        aria-checked="{{ 'true' if runtime.start_queued_work_automatically else 'false' }}"
+        aria-label="Start queued work automatically"
+      >
+        <span class="toggle-track" aria-hidden="true"><span class="toggle-knob"></span></span>
+        <span class="toggle-state">{{ "On" if runtime.start_queued_work_automatically else "Off" }}</span>
+      </button>
+    </form>
+  </div>
 </section>
+
+{% if cycle_result %}
+<section class="cycle-result {{ 'has-error' if not cycle_result.succeeded else '' }}">
+  <div class="section-header">
+    <h2>Workflow Cycle</h2>
+    <span class="status-pill {{ 'is-error' if not cycle_result.succeeded else 'is-ok' }}">
+      {{ "Failed" if not cycle_result.succeeded else "Completed" }}
+    </span>
+  </div>
+  {% if cycle_result.succeeded %}
+  <div class="cycle-grid">
+    <div><strong>{{ cycle_result.synced }}</strong><span>Issues Synced</span></div>
+    <div><strong>{{ cycle_result.advanced }}</strong><span>States Advanced</span></div>
+    <div><strong>{{ cycle_result.claimed }}</strong><span>Issues Claimed</span></div>
+    <div><strong>{{ cycle_result.started }}</strong><span>Workers Started</span></div>
+    <div><strong>{{ cycle_result.cleaned_worktrees }}</strong><span>Worktrees Cleaned</span></div>
+    <div><strong>{{ cycle_result.retried }}</strong><span>Retries Queued</span></div>
+  </div>
+  {% if cycle_result.crashed or cycle_result.timed_out or cycle_result.skipped_worktrees %}
+  <p class="muted">
+    Crashed {{ cycle_result.crashed }}, timed out {{ cycle_result.timed_out }}, skipped cleanups {{ cycle_result.skipped_worktrees }}.
+  </p>
+  {% endif %}
+  {% else %}
+  <p class="workflow-error">{{ cycle_result.error }}</p>
+  {% endif %}
+</section>
+{% endif %}
 
 <section class="workflow-panel {{ 'has-error' if summary.workflow.has_current_error else '' }}">
   <div class="section-header">
