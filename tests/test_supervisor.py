@@ -80,20 +80,46 @@ def test_supervisor_retries_crashed_worker(tmp_path: Path) -> None:
         process_factory=factory,
     )
     supervisor.start_queued(config)
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=7,
+        task_type="research",
+        workflow_version_id=version_id,
+        initial_state="setup_complete",
+        attempt_id=attempt_id,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=version_id,
+        attempt_id=attempt_id,
+        transition_name="research_issue",
+        action_name="codex.research_issue",
+    )
     process.returncode = 1
 
     result = supervisor.reconcile(config, version_id)
 
-    failed_attempt = store.attempt_by_id(attempt_id)
+    retried_attempt = store.attempt_by_id(attempt_id)
+    instance = store.workflow_instance_by_id(instance_id)
     queued_attempts = store.queued_attempts()
+    with store.connect() as conn:
+        action_run = conn.execute(
+            "SELECT * FROM workflow_action_runs WHERE id = ?",
+            (action_run_id,),
+        ).fetchone()
     assert result.crashed == 1
     assert result.retried == 1
-    assert failed_attempt is not None
-    assert failed_attempt["status"] == "failed"
-    assert failed_attempt["outcome"] == "crashed"
+    assert retried_attempt is not None
+    assert retried_attempt["status"] == "queued"
+    assert retried_attempt["outcome"] == "retry_queued:crashed"
+    assert retried_attempt["retry_count"] == 1
+    assert instance is not None
+    assert instance["current_state"] == "setup_complete"
+    assert instance["status"] == "active"
+    assert action_run is not None
+    assert action_run["status"] == "failed"
     assert len(queued_attempts) == 1
-    assert queued_attempts[0]["parent_attempt_id"] == attempt_id
-    assert queued_attempts[0]["retry_count"] == 1
+    assert queued_attempts[0]["id"] == attempt_id
 
 
 def _seed_store(tmp_path: Path) -> Store:

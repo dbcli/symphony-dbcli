@@ -8,6 +8,7 @@ from symphony_dbcli.workflow_engine import (
     WorkflowEngineError,
     WorkflowExecutionContext,
     condition_matches,
+    transition_retry_available,
 )
 
 
@@ -50,3 +51,36 @@ def test_condition_matching_rejects_unknown_conditions() -> None:
 
     with pytest.raises(WorkflowEngineError, match="Unsupported workflow condition"):
         condition_matches("issue.priority == high", WorkflowExecutionContext(task_type="code"))
+
+
+def test_workflow_engine_blocks_transition_after_retry_limit() -> None:
+    workflow = default_config().workflow
+    engine = WorkflowEngine(workflow)
+    transition = workflow.transitions["fix_issue"]
+
+    assert transition_retry_available(
+        "fix_issue",
+        transition,
+        WorkflowExecutionContext(
+            task_type="code",
+            transition_failure_counts={"fix_issue": transition.retry_limit},
+        ),
+    )
+    assert not transition_retry_available(
+        "fix_issue",
+        transition,
+        WorkflowExecutionContext(
+            task_type="code",
+            transition_failure_counts={"fix_issue": transition.retry_limit + 1},
+        ),
+    )
+
+    with pytest.raises(WorkflowEngineError, match="Workflow transition retry limit exceeded: fix_issue"):
+        engine.single_transition(
+            from_state="setup_complete",
+            trigger="automatic",
+            context=WorkflowExecutionContext(
+                task_type="code",
+                transition_failure_counts={"fix_issue": transition.retry_limit + 1},
+            ),
+        )

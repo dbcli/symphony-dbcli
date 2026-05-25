@@ -7,7 +7,7 @@ from pathlib import Path
 from symphony_dbcli.config import WorkflowConfig, WorkspaceConfig, default_config
 from symphony_dbcli.github import GitHubCheckRun, GitHubCiStatus, GitHubComment, GitHubIssue, PullRequest
 from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
-from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveOutcome
+from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutionError, PrimitiveOutcome
 from symphony_dbcli.store import IssueSnapshot, Store
 
 
@@ -127,6 +127,93 @@ def test_orchestrator_hands_off_artifacts_between_transitions(tmp_path: Path) ->
     assert artifacts["allocate_workspace.worktree_path"] == "/tmp/worktree"
     assert primitives.inputs[1]["worktree_path"] == "/tmp/worktree"
     assert primitives.inputs[2]["worktree_path"] == "/tmp/worktree"
+
+
+def test_orchestrator_retries_failed_transition_within_retry_limit(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+    )
+    config = _config_with_transition_retry("fix_issue", retry_limit=1)
+    primitives = FakeWorkflowPrimitives(fail_once={"fix_issue"})
+
+    Orchestrator(
+        config,
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_attempt(attempt_id)
+
+    with store.connect() as conn:
+        fix_runs = list(
+            conn.execute(
+                """
+                SELECT status, retry_count
+                FROM workflow_action_runs
+                WHERE transition_name = 'fix_issue'
+                ORDER BY id ASC
+                """
+            )
+        )
+    assert primitives.transitions == [
+        "allocate_workspace",
+        "run_setup",
+        "fix_issue",
+        "fix_issue",
+        "request_review",
+    ]
+    assert [(row["status"], row["retry_count"]) for row in fix_runs] == [("failed", 0), ("succeeded", 1)]
+
+
+def test_orchestrator_resumes_succeeded_action_checkpoint(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+        worktree_path="/tmp/worktree",
+        base_repo_path="/tmp/repo.git",
+        branch="symphony/test",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="setup_complete",
+        attempt_id=attempt_id,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        attempt_id=attempt_id,
+        transition_name="fix_issue",
+        action_name="codex.fix_issue",
+    )
+    store.finish_workflow_action_run(
+        action_run_id,
+        status="succeeded",
+        output_data={"transition": "fix_issue", "worktree_path": "/tmp/worktree"},
+    )
+    primitives = FakeWorkflowPrimitives()
+
+    Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_attempt(attempt_id)
+
+    instance = store.workflow_instance_by_id(instance_id)
+    assert primitives.transitions == ["request_review"]
+    assert instance is not None
+    assert instance["current_state"] == "review"
 
 
 def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -> None:
@@ -410,9 +497,11 @@ class FakeCleanupGitHub:
 
 
 class FakeWorkflowPrimitives:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_once: set[str] | None = None) -> None:
         self.transitions: list[str] = []
         self.inputs: list[dict[str, object]] = []
+        self.fail_once = fail_once or set()
+        self.failed: set[str] = set()
 
     def fetch_issues(self) -> PrimitiveOutcome:
         return PrimitiveOutcome({"synced": 0})
@@ -420,6 +509,9 @@ class FakeWorkflowPrimitives:
     def execute(self, context: PrimitiveContext) -> PrimitiveOutcome:
         self.transitions.append(context.transition_name)
         self.inputs.append(dict(context.input_data))
+        if context.transition_name in self.fail_once and context.transition_name not in self.failed:
+            self.failed.add(context.transition_name)
+            raise PrimitiveExecutionError(f"{context.transition_name} failed once")
         if context.transition_name == "allocate_workspace":
             return PrimitiveOutcome(
                 {
@@ -449,6 +541,13 @@ def _config_with_artifact_handoff() -> WorkflowConfig:
     )
     workflow = replace(config.workflow, transitions=transitions)
     return replace(config, workflow=workflow)
+
+
+def _config_with_transition_retry(transition_name: str, *, retry_limit: int) -> WorkflowConfig:
+    config = default_config()
+    transitions = dict(config.workflow.transitions)
+    transitions[transition_name] = replace(transitions[transition_name], retry_limit=retry_limit)
+    return replace(config, workflow=replace(config.workflow, transitions=transitions))
 
 
 def _seed_store(tmp_path: Path) -> Store:

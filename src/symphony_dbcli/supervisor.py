@@ -179,6 +179,7 @@ class WorkerSupervisor:
     ) -> bool:
         should_retry = self._should_retry(attempt_id, config)
         self.store.mark_worker_exited(worker_id, exit_code, stop_reason=reason)
+        self.store.fail_running_workflow_action_runs(attempt_id, error=message)
         self.store.record_error(
             attempt_id,
             phase="supervisor",
@@ -186,16 +187,23 @@ class WorkerSupervisor:
             message=message,
             recoverable=should_retry,
         )
-        self.store.finish_attempt(attempt_id, "failed", reason)
         if should_retry:
-            retry_attempt_id = self.store.create_retry_attempt(attempt_id, workflow_version_id)
-            if retry_attempt_id:
-                self.store.record_timeline_event(
-                    retry_attempt_id,
-                    phase="queue",
-                    event_type="retry_queued",
-                    message=f"Retry after attempt {attempt_id} {reason}",
-                    data={"parent_attempt_id": attempt_id},
+            self.store.requeue_attempt_for_retry(attempt_id, reason=reason)
+            self.store.record_timeline_event(
+                attempt_id,
+                phase="queue",
+                event_type="retry_queued",
+                message=f"Retry after worker {worker_id} {reason}",
+                data={"worker_id": worker_id, "reason": reason},
+            )
+        else:
+            self.store.finish_attempt(attempt_id, "failed", reason)
+            instance = self.store.workflow_instance_for_attempt(attempt_id)
+            if instance and str(instance["status"]) == "active":
+                self.store.fail_workflow_instance(
+                    int(instance["id"]),
+                    workflow_version_id=workflow_version_id,
+                    message=message,
                 )
         return should_retry
 

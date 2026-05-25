@@ -385,6 +385,70 @@ class Store:
             return {}
         return cast(dict[str, Any], json.loads(str(row["output_json"])))
 
+    def latest_succeeded_workflow_action_run(
+        self,
+        instance_id: int,
+        transition_name: str,
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM workflow_action_runs
+                    WHERE workflow_instance_id = ?
+                      AND transition_name = ?
+                      AND status = 'succeeded'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (instance_id, transition_name),
+                ).fetchone(),
+            )
+
+    def workflow_action_failure_counts(self, instance_id: int) -> dict[str, int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT transition_name, COUNT(*) AS count
+                FROM workflow_action_runs
+                WHERE workflow_instance_id = ?
+                  AND status = 'failed'
+                GROUP BY transition_name
+                """,
+                (instance_id,),
+            )
+            return {str(row["transition_name"]): int(row["count"]) for row in rows}
+
+    def fail_running_workflow_action_runs(self, attempt_id: int, *, error: str) -> int:
+        ended_ns = monotonic_ns()
+        now = utc_now()
+        with self.connect() as conn:
+            rows = list(
+                conn.execute(
+                    """
+                    SELECT id, started_monotonic_ns
+                    FROM workflow_action_runs
+                    WHERE attempt_id = ?
+                      AND status = 'running'
+                    """,
+                    (attempt_id,),
+                )
+            )
+            for row in rows:
+                duration = elapsed_ms(int(row["started_monotonic_ns"]), ended_ns)
+                conn.execute(
+                    """
+                    UPDATE workflow_action_runs
+                    SET status = 'failed', error = ?, completed_at = ?,
+                        ended_monotonic_ns = ?, duration_ms = ?
+                    WHERE id = ?
+                    """,
+                    (error, now, ended_ns, duration, int(row["id"])),
+                )
+            return len(rows)
+
     def transition_workflow_instance(
         self,
         instance_id: int,
@@ -880,7 +944,7 @@ class Store:
                 """
                 UPDATE workers
                 SET status = ?, completed_at = ?, updated_at = ?
-                WHERE attempt_id = ?
+                WHERE attempt_id = ? AND status = 'running'
                 """,
                 (status, now, now, attempt_id),
             )
@@ -1289,18 +1353,22 @@ class Store:
                 )
             )
 
-    def create_retry_attempt(self, attempt_id: int, workflow_version_id: int | None) -> int | None:
-        attempt = self.attempt_by_id(attempt_id)
-        if not attempt:
-            return None
-        return self.create_attempt(
-            repo=str(attempt["repo"]),
-            issue_number=int(attempt["issue_number"]),
-            task_type=str(attempt["task_type"]),
-            workflow_version_id=workflow_version_id,
-            parent_attempt_id=attempt_id,
-            retry_count=int(attempt["retry_count"] or 0) + 1,
-        )
+    def requeue_attempt_for_retry(self, attempt_id: int, *, reason: str) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE attempts
+                SET status = 'queued',
+                    worker_id = '',
+                    outcome = ?,
+                    retry_count = retry_count + 1,
+                    queued_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (f"retry_queued:{reason}", now, now, attempt_id),
+            )
 
     def create_code_follow_up_attempt(self, source_attempt_id: int, workflow_version_id: int | None) -> int:
         source = self.attempt_by_id(source_attempt_id)
@@ -1439,14 +1507,19 @@ class Store:
             )
 
     def mark_worker_exited(self, worker_id: str, exit_code: int | None, stop_reason: str = "") -> None:
+        now = utc_now()
         with self.connect() as conn:
             conn.execute(
                 """
                 UPDATE workers
-                SET exit_code = ?, stop_reason = ?, updated_at = ?
+                SET status = 'failed',
+                    exit_code = ?,
+                    stop_reason = ?,
+                    completed_at = COALESCE(completed_at, ?),
+                    updated_at = ?
                 WHERE id = ?
                 """,
-                (exit_code, stop_reason, utc_now(), worker_id),
+                (exit_code, stop_reason, now, now, worker_id),
             )
 
     def dashboard_summary(self) -> dict[str, Any]:

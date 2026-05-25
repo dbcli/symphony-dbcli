@@ -105,6 +105,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="claimed",
                 action="github.apply_labels",
                 description="Move a dispatchable issue into the working state.",
+                retry_limit=1,
                 guidance=[
                     "Keep label changes minimal and explainable.",
                     "Do not alter labels unrelated to Symphony state.",
@@ -115,6 +116,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="workspace_ready",
                 action="workspace.allocate",
                 description="Create the per-attempt workspace.",
+                retry_limit=1,
                 guidance=[
                     "Prefer isolated worktrees so concurrent workers do not share a checkout.",
                     "Use deterministic paths and branch names that are easy to inspect.",
@@ -125,6 +127,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="setup_complete",
                 action="workspace.run_setup",
                 description="Run configured setup commands before Codex starts.",
+                retry_limit=1,
                 guidance=[
                     "Run only setup commands declared in this workflow.",
                     "Treat blocking setup failures as worker-blocking failures.",
@@ -136,6 +139,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 action="codex.research_issue",
                 description="Use Codex to draft a research or support answer.",
                 condition='task.type == "research"',
+                retry_limit=1,
                 guidance=[
                     "Draft a concise support answer in the user's voice.",
                     "Keep the reply under two sentences unless the issue requires concrete steps.",
@@ -148,6 +152,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 action="codex.fix_issue",
                 description="Use Codex to implement a code change.",
                 condition='task.type == "code"',
+                retry_limit=1,
                 guidance=[
                     "Keep the code change focused on the issue.",
                     "Prefer narrow unit tests before broader integration tests.",
@@ -159,6 +164,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="review",
                 action="github.apply_labels",
                 description="Move completed worker output into human review.",
+                retry_limit=1,
                 guidance=[
                     "Preserve worker output for human review before external side effects.",
                     "Avoid posting comments or opening PRs in this step.",
@@ -172,6 +178,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 gate="review_answer",
                 description="Post an edited research answer to GitHub.",
                 condition='task.type == "research"',
+                retry_limit=1,
                 guidance=[
                     "Let the human edit the final reply before posting.",
                     "Keep the posted response succinct and avoid unnecessary caveats.",
@@ -185,6 +192,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 gate="review_diff",
                 description="Create a draft pull request after human diff review.",
                 condition='task.type == "code"',
+                retry_limit=1,
                 guidance=[
                     "Let the human edit the PR title and description before creation.",
                     "Keep the PR description clear, succinct, and linked to the GitHub issue.",
@@ -196,6 +204,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 action="workspace.cleanup_after_merge",
                 description="Clean up the workspace after the pull request is merged.",
                 condition="pull_request.is_merged",
+                retry_limit=1,
                 guidance=[
                     "Clean only workspaces owned by Symphony.",
                     "Do not remove worktrees with uncommitted changes.",
@@ -208,6 +217,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 trigger="human",
                 gate="mark_blocked",
                 description="Let a human stop progress when review cannot continue.",
+                retry_limit=1,
                 guidance=[
                     "Use this only when human review cannot continue safely.",
                     "Leave enough context in the dashboard for a future retry.",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import threading
@@ -8,7 +9,7 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from .actions import DEFAULT_ACTION_REGISTRY, PrimitiveSideEffect
 from .config import WorkflowConfig, WorkflowError, parse_workflow
@@ -22,7 +23,12 @@ from .primitive_executor import (
 from .store import IssueSnapshot, Store
 from .worker_prompt import build_worker_prompt as build_worker_prompt
 from .workflow_definition import WorkflowTransitionConfig
-from .workflow_engine import WorkflowEngine, WorkflowEngineError, WorkflowExecutionContext
+from .workflow_engine import (
+    WorkflowEngine,
+    WorkflowEngineError,
+    WorkflowExecutionContext,
+    transition_retry_available,
+)
 from .worktree import WorktreeError, WorktreeManager
 
 
@@ -372,6 +378,9 @@ class Orchestrator:
                 f"Workflow instance {instance['id']} is in state {instance['current_state']!r}, "
                 f"not {transition.from_state!r}."
             )
+        context = self._workflow_context(instance)
+        if not transition_retry_available(transition_name, transition, context):
+            raise OrchestratorError(f"Workflow transition retry limit exceeded: {transition_name}.")
         action_input = self._workflow_action_input(
             instance,
             transition=transition,
@@ -452,6 +461,16 @@ class Orchestrator:
                 raise OrchestratorError(f"Unknown primitive: {match.transition.action}")
             if allowed_side_effects is not None and primitive.side_effect not in allowed_side_effects:
                 return WorkflowAdvanceResult(current_state, ran_actions, "side_effect_not_allowed")
+            checkpoint = self._succeeded_workflow_action(instance, match.name, match.transition)
+            if checkpoint is not None:
+                checkpoint_action, output = checkpoint
+                self._transition_workflow_action(
+                    checkpoint_action,
+                    status=self._workflow_status_for_state(match.transition.to_state),
+                    data=output,
+                )
+                self._record_workflow_artifacts(checkpoint_action, match.transition, output)
+                continue
             action_input = self._workflow_action_input(instance, transition=match.transition)
             action = self._start_workflow_action(
                 instance_id,
@@ -470,10 +489,10 @@ class Orchestrator:
                 )
             except PrimitiveExecutionError as exc:
                 self._finish_workflow_action(action, "failed", output_data=exc.output, error=str(exc))
-                raise
+                continue
             except Exception as exc:
                 self._finish_workflow_action(action, "failed", error=str(exc))
-                raise
+                continue
             self._finish_workflow_action(action, "succeeded", output_data=outcome.output)
             self._transition_workflow_action(
                 action,
@@ -487,6 +506,7 @@ class Orchestrator:
         return WorkflowExecutionContext(
             task_type=str(instance["task_type"]),
             pull_request_is_merged=self._pull_request_is_merged(_optional_int(instance["attempt_id"])),
+            transition_failure_counts=self.store.workflow_action_failure_counts(int(instance["id"])),
         )
 
     def _workflow_action_input(
@@ -647,6 +667,7 @@ class Orchestrator:
         transition = self.config.workflow.transitions.get(transition_name)
         if not transition:
             return None
+        retry_count = self.store.workflow_action_failure_counts(instance_id).get(transition_name, 0)
         action_run_id = self.store.start_workflow_action_run(
             instance_id=instance_id,
             workflow_version_id=self.workflow_version_id,
@@ -655,6 +676,7 @@ class Orchestrator:
             action_name=transition.action,
             input_data=input_data,
             idempotency_key=_workflow_action_idempotency_key(instance_id, transition_name),
+            retry_count=retry_count,
         )
         return WorkflowActionRuntime(
             instance_id=instance_id,
@@ -715,6 +737,29 @@ class Orchestrator:
                     recoverable=True,
                 )
             raise OrchestratorError(str(exc)) from exc
+
+    def _succeeded_workflow_action(
+        self,
+        instance: sqlite3.Row,
+        transition_name: str,
+        transition: WorkflowTransitionConfig,
+    ) -> tuple[WorkflowActionRuntime, dict[str, Any]] | None:
+        row = self.store.latest_succeeded_workflow_action_run(int(instance["id"]), transition_name)
+        if not row:
+            return None
+        return (
+            WorkflowActionRuntime(
+                instance_id=int(instance["id"]),
+                attempt_id=_optional_int(row["attempt_id"]),
+                action_run_id=int(row["id"]),
+                transition_name=transition_name,
+                action_name=str(row["action_name"] or transition.action),
+                trigger=transition.trigger,
+                from_state=transition.from_state,
+                to_state=transition.to_state,
+            ),
+            cast(dict[str, Any], json.loads(str(row["output_json"]))),
+        )
 
     def _fail_workflow_instance(self, instance_id: int, message: str) -> None:
         try:

@@ -135,7 +135,7 @@ description = "Move a dispatchable issue into the working state."
 condition = ""
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Keep label changes minimal and explainable.", "Do not alter labels unrelated to Symphony state."]
 
@@ -148,7 +148,7 @@ description = "Create the per-attempt workspace."
 condition = ""
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Prefer isolated worktrees so concurrent workers do not share a checkout.", "Use deterministic paths and branch names that are easy to inspect."]
 
@@ -161,7 +161,7 @@ description = "Run configured setup commands before Codex starts."
 condition = ""
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Run only setup commands declared in this workflow.", "Treat blocking setup failures as worker-blocking failures."]
 
@@ -174,7 +174,7 @@ description = "Use Codex to draft a research or support answer."
 condition = "task.type == \"research\""
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Draft a concise support answer in the user's voice.", "Keep the reply under two sentences unless the issue requires concrete steps.", "Cite specific files, commands, or issue facts when they matter."]
 
@@ -187,7 +187,7 @@ description = "Use Codex to implement a code change."
 condition = "task.type == \"code\""
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Keep the code change focused on the issue.", "Prefer narrow unit tests before broader integration tests.", "Run a review pass after implementation when the workflow asks for it."]
 
@@ -200,7 +200,7 @@ description = "Move completed worker output into human review."
 condition = ""
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Preserve worker output for human review before external side effects.", "Avoid posting comments or opening PRs in this step."]
 
@@ -213,7 +213,7 @@ description = "Post an edited research answer to GitHub."
 condition = "task.type == \"research\""
 gate = "review_answer"
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Let the human edit the final reply before posting.", "Keep the posted response succinct and avoid unnecessary caveats."]
 
@@ -226,7 +226,7 @@ description = "Create a draft pull request after human diff review."
 condition = "task.type == \"code\""
 gate = "review_diff"
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Let the human edit the PR title and description before creation.", "Keep the PR description clear, succinct, and linked to the GitHub issue."]
 
@@ -239,7 +239,7 @@ description = "Clean up the workspace after the pull request is merged."
 condition = "pull_request.is_merged"
 gate = ""
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Clean only workspaces owned by Symphony.", "Do not remove worktrees with uncommitted changes."]
 
@@ -252,7 +252,7 @@ description = "Let a human stop progress when review cannot continue."
 condition = ""
 gate = "mark_blocked"
 on_failure = "failed"
-retry_limit = 0
+retry_limit = 1
 timeout_seconds = 0
 guidance = ["Use this only when human review cannot continue safely.", "Leave enough context in the dashboard for a future retry."]
 
