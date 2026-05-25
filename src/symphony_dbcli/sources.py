@@ -58,6 +58,11 @@ class SourceRepository:
             rows = session.scalars(select(Source).order_by(Source.repo.asc())).all()
             return [SourceView.from_model(row) for row in rows]
 
+    def get_source(self, source_id: int) -> SourceView | None:
+        with self._session_factory() as session:
+            source = session.get(Source, source_id)
+            return SourceView.from_model(source) if source else None
+
     def create_source(self, source: SourceCreate) -> SourceView:
         repo = normalize_repo(source.repo)
         now = utc_now()

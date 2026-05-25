@@ -597,8 +597,9 @@ Implementation checklist:
 - [ ] Add source edit/sync controls and sync status.
 - [ ] Add `work_items`, `work_item_links`, state history, and run/reason
   storage.
-- [ ] Build the kanban board with backlog, todo, in progress, in review, and
-  done columns.
+- [x] Build the source-scoped kanban board shell with backlog, todo, in
+  progress, in review, and done columns.
+- [ ] Populate source-scoped kanban columns from work-item state.
 - [ ] Implement backlog-to-todo activation with task type and optional user
   hint.
 - [ ] Default issue-with-linked-PR and PR cards to review/fix mode.
@@ -636,6 +637,10 @@ Progress notes:
 - 2026-05-25: Added a dashboard dark-mode toggle and removed the
   auto-dispatch toggle. Auto-dispatch is now treated as always on, including
   when an old database setting says otherwise.
+- 2026-05-25: Split the board by source. `/board` now selects a source when
+  available, source tabs link to isolated board views, the Sources table links
+  to each source board, and the sync action is shown as pending instead of a
+  dead button until GitHub source sync lands.
 
 ## Durable Cross-Project Spec
 

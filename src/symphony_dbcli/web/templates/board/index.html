@@ -1,18 +1,53 @@
 {% extends "base.html" %}
 {% block page_actions %}
-<button type="button">Sync Sources</button>
+{% if selected_source %}
+<button type="button" disabled title="GitHub sync is the next implementation slice">Sync Source</button>
+{% else %}
+<a class="button-link" href="/sources/new">Add Source</a>
+{% endif %}
 {% endblock %}
 {% block body %}
-<section class="board" aria-label="Work board">
-  {% for column in ["backlog", "todo", "in progress", "in review", "done"] %}
+{% if sources %}
+<section class="source-switcher" aria-label="Source boards">
+  {% for source in sources %}
+  <a
+    class="{{ 'is-active' if selected_source and source.id == selected_source.id else '' }}"
+    href="/board?source_id={{ source.id }}"
+  >
+    {{ source.repo }}
+  </a>
+  {% endfor %}
+</section>
+
+<section class="panel board-context">
+  <div>
+    <span class="kicker">Source</span>
+    <strong>{{ selected_source.repo }}</strong>
+  </div>
+  <div>
+    <span class="kicker">Sync</span>
+    <strong>{{ selected_source.sync_status }}</strong>
+  </div>
+  <div>
+    <span class="kicker">Last Sync</span>
+    <strong>{{ selected_source.last_synced_at or "Never" }}</strong>
+  </div>
+</section>
+
+<section class="board" aria-label="Work board for {{ selected_source.repo }}">
+  {% for column in columns %}
   <div class="board-column">
     <div class="column-header">
-      <h2>{{ column|title }}</h2>
-      <span>0</span>
+      <h2>{{ column.name|title }}</h2>
+      <span>{{ column.count }}</span>
     </div>
-    <div class="empty-state">No items</div>
+    <div class="empty-state">No {{ column.name }} items</div>
   </div>
   {% endfor %}
 </section>
+{% else %}
+<section class="panel">
+  <div class="empty-state">Add a source to start a board.</div>
+</section>
+{% endif %}
 {% endblock %}
-

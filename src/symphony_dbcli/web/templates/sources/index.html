@@ -11,6 +11,7 @@
         <th>Repository</th>
         <th>Status</th>
         <th>Last Sync</th>
+        <th>Board</th>
         <th>Created</th>
       </tr>
     </thead>
@@ -20,6 +21,7 @@
         <td><strong>{{ source.repo }}</strong></td>
         <td>{{ source.sync_status }}</td>
         <td>{{ source.last_synced_at or "Never" }}</td>
+        <td><a href="/board?source_id={{ source.id }}">Open Board</a></td>
         <td>{{ source.created_at }}</td>
       </tr>
       {% endfor %}
