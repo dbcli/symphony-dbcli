@@ -834,7 +834,7 @@ Likely new primitives:
 - [ ] Adapt workflow context resolution to expose work item, linked issue,
   active PR, user hint, and rerun reasons as artifacts.
 - [x] Add work-item-aware source refresh primitives.
-- [ ] Add operations task primitive and dashboard view for operation summaries.
+- [x] Add operations task primitive and dashboard view for operation summaries.
 - [ ] Update PR creation to strongly link work item, issue, and PR in SQLite
   and PR body marker.
 - [x] Group linked issue/PR cards in the board and add expandable detail view.

@@ -23,6 +23,7 @@ def test_action_registry_records_execution_boundaries() -> None:
     pr_comments = DEFAULT_ACTION_REGISTRY.get("github.fetch_pr_review_comments")
     merge_conflicts = DEFAULT_ACTION_REGISTRY.get("github.detect_merge_conflicts")
     address_feedback = DEFAULT_ACTION_REGISTRY.get("codex.address_pr_feedback")
+    operations_task = DEFAULT_ACTION_REGISTRY.get("codex.operations_task")
     push_update = DEFAULT_ACTION_REGISTRY.get("github.push_pr_update")
     source_sync = DEFAULT_ACTION_REGISTRY.get("source.sync")
     work_item_move = DEFAULT_ACTION_REGISTRY.get("work_item.move")
@@ -67,6 +68,13 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert "failed_checks" in address_feedback.input_fields
     assert "comments" in address_feedback.input_fields
     assert "has_conflicts" in address_feedback.input_fields
+
+    assert operations_task is not None
+    assert operations_task.side_effect == "codex_worker"
+    assert operations_task.input_type == "CodexOperationsTask"
+    assert operations_task.output_type == "WorkerResult"
+    assert operations_task.human_gate_allowed is True
+    assert "worktree_path" in operations_task.input_fields
 
     assert push_update is not None
     assert push_update.side_effect == "github_write"

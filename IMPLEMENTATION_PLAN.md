@@ -612,7 +612,7 @@ Implementation checklist:
   active PR, user hint, and rerun reasons.
 - [x] Add source/work-item primitives such as `source.sync`,
   `work_item.activate`, `work_item.move`, and `work_item.select_active_pr`.
-- [ ] Add `codex.operations_task` and operation-summary dashboard views.
+- [x] Add `codex.operations_task` and operation-summary dashboard views.
 - [ ] Update PR creation to link work item, issue, and PR in SQLite and in the
   PR body marker.
 - [x] Add grouped issue/PR cards with an expandable detail view and active PR
@@ -675,6 +675,9 @@ Progress notes:
 - 2026-05-25: Updated Ask Symphony to answer board status, source sync status,
   source item, and work item questions with dashboard links, and rendered those
   answers inline on the FastAPI Ask page.
+- 2026-05-25: Added the `codex.operations_task` primitive, operations summary
+  result typing, and an Operations dashboard page that lists operation work-item
+  runs with links back to their work item detail pages.
 
 ## Durable Cross-Project Spec
 

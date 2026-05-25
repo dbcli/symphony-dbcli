@@ -172,6 +172,7 @@ class PrimitiveExecutor:
             "codex.address_pr_comments",
             "codex.fix_ci_failures",
             "codex.address_pr_feedback",
+            "codex.operations_task",
         }:
             return self._run_codex(context)
         if context.transition.action == "github.create_draft_pr":
@@ -781,10 +782,20 @@ def _codex_task_context(context: PrimitiveContext) -> str:
                 _format_records("Review comments", comments),
             ]
         ).strip()
+    if context.transition.action == "codex.operations_task":
+        user_hint = str(context.input_data.get("user_hint") or context.user_hint).strip()
+        return "\n".join(
+            [
+                "Perform the requested operational task and return a durable summary.",
+                f"Operator hint: {user_hint or 'none provided'}",
+            ]
+        ).strip()
     return ""
 
 
 def _codex_result_type(context: PrimitiveContext) -> str:
+    if context.transition.action == "codex.operations_task":
+        return "operations_summary"
     if context.transition.action == "codex.address_pr_comments":
         return "pr_review_update"
     if context.transition.action == "codex.fix_ci_failures":
@@ -795,6 +806,8 @@ def _codex_result_type(context: PrimitiveContext) -> str:
 
 
 def _codex_result_title(context: PrimitiveContext) -> str:
+    if context.transition.action == "codex.operations_task":
+        return "Operations Summary"
     if context.transition.action == "codex.address_pr_comments":
         return "PR Review Update"
     if context.transition.action == "codex.fix_ci_failures":

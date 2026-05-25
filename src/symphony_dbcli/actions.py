@@ -424,6 +424,20 @@ def default_action_registry() -> ActionRegistry:
             ),
         ),
         PrimitiveSpec(
+            name="codex.operations_task",
+            input_type="CodexOperationsTask",
+            output_type="WorkerResult",
+            side_effect="codex_worker",
+            idempotency_strategy="attempt_transition",
+            automatic_allowed=True,
+            human_gate_allowed=True,
+            description="Ask Codex to perform an operational task and record the action summary.",
+            input_fields=frozenset({"attempt_id", "repo", "issue_number", "task_type", "worktree_path"}),
+            output_fields=frozenset(
+                {"thread_id", "turn_count", "duration_ms", "message_chars", "result_type"}
+            ),
+        ),
+        PrimitiveSpec(
             name="workspace.allocate",
             input_type="WorkspaceAllocationRequest",
             output_type="WorkspaceAllocationResult",

@@ -87,6 +87,17 @@ class WorkItemLinkedSourceView:
         return "PR" if self.kind == "pull_request" else "Issue"
 
 
+@dataclass(frozen=True)
+class OperationRunView:
+    id: int
+    work_item_id: int
+    title: str
+    status: str
+    user_hint: str
+    created_at: str
+    updated_at: str
+
+
 class WorkItemRepository:
     def __init__(self, session_factory: SessionFactory):
         self._session_factory = session_factory
@@ -207,6 +218,27 @@ class WorkItemRepository:
                 .order_by(WorkItem.updated_at.desc(), WorkItem.id.desc())
             ).all()
             return [_work_item_view(work_item, source_item) for work_item, source_item in rows]
+
+    def list_operations(self) -> list[OperationRunView]:
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(WorkItemRun, WorkItem)
+                .join(WorkItem, WorkItemRun.work_item_id == WorkItem.id)
+                .where(WorkItem.task_type == "operations")
+                .order_by(WorkItemRun.created_at.desc(), WorkItemRun.id.desc())
+            ).all()
+            return [
+                OperationRunView(
+                    id=run.id,
+                    work_item_id=work_item.id,
+                    title=work_item.title,
+                    status=run.status,
+                    user_hint=run.user_hint,
+                    created_at=run.created_at,
+                    updated_at=run.updated_at,
+                )
+                for run, work_item in rows
+            ]
 
     def detail(self, work_item_id: int) -> WorkItemView | None:
         with self._session_factory() as session:

@@ -39,6 +39,7 @@ NAV_ITEMS = (
     NavItem("board", "Board", "/board"),
     NavItem("sources", "Sources", "/sources"),
     NavItem("work_items", "Work Items", "/work-items"),
+    NavItem("operations", "Operations", "/operations"),
     NavItem("workers", "Workers", "/workers"),
     NavItem("workflow", "Workflow", "/workflow"),
     NavItem("ask", "Ask", "/ask"),

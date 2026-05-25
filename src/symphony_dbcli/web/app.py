@@ -11,7 +11,7 @@ from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import Store
 
 from .dependencies import STATIC_DIR, WebAppState
-from .routers import api, ask, board, settings, sources, work_items, workers, workflow
+from .routers import api, ask, board, operations, settings, sources, work_items, workers, workflow
 
 
 def create_app(
@@ -41,6 +41,7 @@ def create_app(
     app.include_router(board.router)
     app.include_router(sources.router)
     app.include_router(work_items.router)
+    app.include_router(operations.router)
     app.include_router(workers.router)
     app.include_router(workflow.router)
     app.include_router(ask.router)

@@ -388,6 +388,31 @@ def test_address_pr_feedback_runs_codex_with_combined_pr_context(tmp_path: Path)
     assert detail["result"]["body"] == "Addressed PR feedback."
 
 
+def test_operations_task_runs_codex_and_records_operation_summary(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    attempt_id, worktree = _seed_attempt(store, tmp_path)
+    prompt_path = tmp_path / "prompt.txt"
+    config = _config_with_fake_codex(tmp_path, prompt_path, "Restarted the local fixture service.")
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+
+    output = executor.execute(
+        _context(
+            "codex.operations_task",
+            attempt_id=attempt_id,
+            worktree_path=str(worktree),
+            input_data={"user_hint": "Check why the fixture service is stopped."},
+        )
+    ).output
+
+    detail = store.attempt_detail(attempt_id)
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "Task type: code" in prompt
+    assert output["result_type"] == "operations_summary"
+    assert detail is not None
+    assert detail["result"]["result_type"] == "operations_summary"
+    assert detail["result"]["body"] == "Restarted the local fixture service."
+
+
 def test_record_workspace_changes_reports_changed_files(tmp_path: Path) -> None:
     store = _store(tmp_path)
     attempt_id, worktree = _seed_attempt(store, tmp_path)

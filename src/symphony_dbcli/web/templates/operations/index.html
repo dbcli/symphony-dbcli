@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="panel">
+  {% if runs %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Run</th>
+        <th>Work Item</th>
+        <th>Status</th>
+        <th>Hint</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>#{{ run.id }}</td>
+        <td><a href="/work-items/{{ run.work_item_id }}">#{{ run.work_item_id }}</a> {{ run.title }}</td>
+        <td>{{ run.status }}</td>
+        <td>{{ run.user_hint or "-" }}</td>
+        <td>{{ run.updated_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No operations runs</div>
+  {% endif %}
+</section>
+{% endblock %}

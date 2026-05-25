@@ -65,12 +65,16 @@ Research result:
 
 
 def result_type(task_type: str) -> str:
+    if task_type == "operations":
+        return "operations_summary"
     if task_type == "code":
         return "code_summary"
     return "research_answer"
 
 
 def result_title(task_type: str) -> str:
+    if task_type == "operations":
+        return "Operations Summary"
     if task_type == "code":
         return "Code Worker Summary"
     return "Research Answer"

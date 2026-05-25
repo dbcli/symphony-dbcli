@@ -55,6 +55,7 @@ def test_fastapi_dashboard_hierarchy_routes_render(tmp_path: Path) -> None:
         "/sources": "Sources",
         "/sources/new": "Add Source",
         "/work-items": "Work Items",
+        "/operations": "Operations",
         "/workers": "Workers",
         "/workflow": "Workflow",
         "/workflow/edit": "Workflow Editor",
@@ -166,6 +167,26 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "code" in board.text
     assert "Fix completion crash" in work_items.text
     assert "Prefer unit tests." in detail.text
+
+
+def test_fastapi_operations_page_lists_operation_runs(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+
+    _activate_source_item(
+        client,
+        source_item_id,
+        task_type="operations",
+        user_hint="Restart the fixture service.",
+    )
+    response = client.get("/operations")
+
+    assert response.status_code == 200
+    assert "Fix completion crash" in response.text
+    assert "Restart the fixture service." in response.text
+    assert 'href="/work-items/1"' in response.text
 
 
 def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> None:
@@ -438,10 +459,16 @@ def _sync_source(client: TestClient, source_id: int) -> None:
     assert response.status_code == 303
 
 
-def _activate_source_item(client: TestClient, source_item_id: int, *, task_type: str = "research") -> None:
+def _activate_source_item(
+    client: TestClient,
+    source_item_id: int,
+    *,
+    task_type: str = "research",
+    user_hint: str = "",
+) -> None:
     response = client.post(
         f"/source-items/{source_item_id}/activate",
-        data={"task_type": task_type, "user_hint": ""},
+        data={"task_type": task_type, "user_hint": user_hint},
         follow_redirects=False,
     )
     assert response.status_code == 303
