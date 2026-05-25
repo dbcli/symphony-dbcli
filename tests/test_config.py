@@ -207,45 +207,41 @@ def test_workflow_validation_rejects_action_trigger_mismatch(monkeypatch: pytest
 def test_workflow_accepts_transition_input_output_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_profile_env(monkeypatch)
     workflow = render_workflow(default_config()).replace(
-        "\n[workflow.transitions.run_setup]\n",
+        "\n[workflow.transitions.research_issue]\n",
         "\n".join(
             [
                 "",
-                "[workflow.transitions.allocate_workspace.inputs]",
+                "[workflow.transitions.run_setup.inputs]",
                 'attempt_id = "attempt.id"',
-                'repo = "issue.repo"',
-                "",
-                "[workflow.transitions.allocate_workspace.outputs]",
                 'worktree_path = "attempt.worktree_path"',
-                'branch = "attempt.branch"',
                 "",
-                "[workflow.transitions.run_setup]",
+                "[workflow.transitions.run_setup.outputs]",
+                'steps = "artifact.setup.steps"',
+                "",
+                "[workflow.transitions.research_issue]",
                 "",
             ]
         ),
     )
 
     config = parse_workflow(workflow)
-    transition = config.workflow.transitions["allocate_workspace"]
+    transition = config.workflow.transitions["run_setup"]
 
-    assert transition.inputs == {"attempt_id": "attempt.id", "repo": "issue.repo"}
-    assert transition.outputs == {
-        "worktree_path": "attempt.worktree_path",
-        "branch": "attempt.branch",
-    }
+    assert transition.inputs == {"attempt_id": "attempt.id", "worktree_path": "attempt.worktree_path"}
+    assert transition.outputs == {"steps": "artifact.setup.steps"}
 
 
 def test_workflow_validation_rejects_action_mapping_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_profile_env(monkeypatch)
     workflow = render_workflow(default_config()).replace(
-        "\n[workflow.transitions.run_setup]\n",
+        "\n[workflow.transitions.research_issue]\n",
         "\n".join(
             [
                 "",
-                "[workflow.transitions.allocate_workspace.inputs]",
+                "[workflow.transitions.run_setup.inputs]",
                 'comment_id = "comment.id"',
                 "",
-                "[workflow.transitions.run_setup]",
+                "[workflow.transitions.research_issue]",
                 "",
             ]
         ),

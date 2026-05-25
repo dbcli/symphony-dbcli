@@ -46,6 +46,27 @@ def test_workflow_engine_lists_matching_human_gates() -> None:
     assert [match.name for match in matches] == ["create_draft_pr", "mark_blocked"]
 
 
+def test_workflow_engine_returns_parallel_batch_for_pr_checks() -> None:
+    engine = WorkflowEngine(default_config().workflow)
+
+    batch = engine.automatic_batch(
+        from_state="setup_complete",
+        context=WorkflowExecutionContext(
+            task_type="code",
+            artifacts={"pull_request.exists": True, "pull_request.number": 12},
+        ),
+    )
+
+    assert batch is not None
+    assert batch.name == "initial_pr_checks"
+    assert batch.is_parallel is True
+    assert {match.name for match in batch.transitions} == {
+        "check_pr_ci",
+        "check_pr_comments",
+        "check_pr_mergeability",
+    }
+
+
 def test_condition_matching_rejects_unknown_conditions() -> None:
     assert condition_matches('task.type == "code"', WorkflowExecutionContext(task_type="code")) is True
 
@@ -66,6 +87,14 @@ def test_condition_matching_reads_workflow_artifacts() -> None:
     assert condition_matches("ci.has_failures", context) is True
     assert condition_matches("not pull_request.has_conflicts", context) is True
     assert condition_matches("review_comments.present", context) is False
+    assert (
+        condition_matches(
+            'task.type == "code" and ci.has_failures and not review_comments.present',
+            context,
+        )
+        is True
+    )
+    assert condition_matches("ci.has_failures or review_comments.present", context) is True
 
 
 def test_workflow_engine_blocks_transition_after_retry_limit() -> None:

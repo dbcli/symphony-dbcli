@@ -16,6 +16,7 @@ from symphony_dbcli.github import (
     PullRequestMergeStatus,
 )
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
+from symphony_dbcli.review_actions import issue_link_marker
 from symphony_dbcli.store import Store
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
 
@@ -76,6 +77,34 @@ def test_fetch_pull_request_records_attempt_pr(tmp_path: Path) -> None:
     detail = store.attempt_detail(attempt_id)
     assert output["pull_request_url"] == "https://github.com/dbcli/litecli/pull/12"
     assert output["is_merged"] is False
+    assert detail is not None
+    assert detail["pull_requests"][0]["number"] == 12
+
+
+def test_find_issue_pull_requests_uses_exact_marker_and_records_link(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    github = FakePrimitiveGitHub()
+    store.upsert_issue(github.issue("dbcli/litecli", 245).snapshot(default_config().labels, "code"))
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+    )
+    executor = PrimitiveExecutor(default_config(), store, github=github)
+
+    output = executor.execute(_context("github.find_issue_pull_requests", attempt_id=attempt_id)).output
+
+    links = store.issue_pull_request_links("dbcli/litecli", 245)
+    detail = store.attempt_detail(attempt_id)
+    assert output["has_pull_request"] is True
+    assert output["pull_request_count"] == 1
+    assert output["pull_request_number"] == 12
+    assert output["pull_request_head_ref"] == "symphony/existing-pr"
+    assert output["pull_request_source_ref"] == "origin/symphony/existing-pr"
+    assert len(links) == 1
+    assert links[0]["link_source"] == "description_marker"
     assert detail is not None
     assert detail["pull_requests"][0]["number"] == 12
 
@@ -275,6 +304,41 @@ def test_fix_ci_failures_runs_codex_with_failed_check_context(tmp_path: Path) ->
     assert detail["result"]["body"] == "Fixed failing CI."
 
 
+def test_address_pr_feedback_runs_codex_with_combined_pr_context(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    attempt_id, worktree = _seed_attempt(store, tmp_path)
+    prompt_path = tmp_path / "prompt.txt"
+    config = _config_with_fake_codex(tmp_path, prompt_path, "Addressed PR feedback.")
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+
+    output = executor.execute(
+        _context(
+            "codex.address_pr_feedback",
+            attempt_id=attempt_id,
+            worktree_path=str(worktree),
+            input_data={
+                "pull_request_number": 12,
+                "failed_checks": [{"name": "tests", "conclusion": "failure", "url": "https://ci/1"}],
+                "checks": [{"name": "lint", "conclusion": "success"}],
+                "comments": [{"body": "Please add a regression test.", "author": "reviewer"}],
+                "has_conflicts": True,
+                "mergeable_state": "dirty",
+            },
+        )
+    ).output
+
+    detail = store.attempt_detail(attempt_id)
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "Address the pull request feedback below in one focused update." in prompt
+    assert "Merge conflicts: yes; mergeable_state=dirty" in prompt
+    assert "name=tests" in prompt
+    assert "Please add a regression test." in prompt
+    assert output["result_type"] == "pr_feedback_update"
+    assert detail is not None
+    assert detail["result"]["result_type"] == "pr_feedback_update"
+    assert detail["result"]["body"] == "Addressed PR feedback."
+
+
 def test_record_workspace_changes_reports_changed_files(tmp_path: Path) -> None:
     store = _store(tmp_path)
     attempt_id, worktree = _seed_attempt(store, tmp_path)
@@ -429,6 +493,30 @@ class FakePrimitiveGitHub:
             ),
         ]
 
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        return [
+            PullRequest(
+                number=12,
+                url=f"https://github.com/{repo}/pull/12",
+                title="Fix logging path support",
+                state="open",
+                head_sha="abc123",
+                head_ref="symphony/existing-pr",
+                head_repo=repo,
+                body=issue_link_marker(repo, 245),
+            ),
+            PullRequest(
+                number=13,
+                url=f"https://github.com/{repo}/pull/13",
+                title="Mention issue without marker",
+                state="open",
+                head_sha="def456",
+                head_ref="symphony/unrelated",
+                head_repo=repo,
+                body="This mentions https://github.com/dbcli/litecli/issues/245 without the marker.",
+            ),
+        ]
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         return
 
@@ -442,6 +530,9 @@ class FakePrimitiveGitHub:
             title="Fix logging path support",
             state="open",
             head_sha="abc123",
+            head_ref="symphony/existing-pr",
+            head_repo=repo,
+            body=issue_link_marker(repo, 245),
             mergeable=False,
             mergeable_state="dirty",
         )

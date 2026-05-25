@@ -25,7 +25,7 @@ from .config import (
 from .github import GitHubClient, GitHubError
 from .orchestrator import Orchestrator, load_and_record_workflow
 from .primitive_executor import PrimitiveContext, PrimitiveExecutor
-from .review_actions import ReviewActions
+from .review_actions import ReviewActions, issue_link_marker
 from .store import Store
 from .workflow_definition import WorkflowTransitionConfig
 from .worktree import safe_key
@@ -41,6 +41,7 @@ class FixtureScenario:
     description: str
     create_code_follow_up: bool = False
     codex_follow_up_action: str = ""
+    create_associated_pr_before_claim: bool = False
 
 
 FIXTURE_SCENARIOS = {
@@ -63,6 +64,12 @@ FIXTURE_SCENARIOS = {
         True,
         "Code issue followed by CI failure repair.",
         codex_follow_up_action="codex.fix_ci_failures",
+    ),
+    "associated_pr_parallel_checks": FixtureScenario(
+        "code",
+        False,
+        "Existing associated PR is discovered, checked in parallel, and fed into PR feedback repair.",
+        create_associated_pr_before_claim=True,
     ),
 }
 
@@ -116,6 +123,13 @@ def run_fixture(config: E2EFixtureConfig) -> E2EFixtureResult:
         _clear_open_todo_issues(config.repo)
     issue_url = _create_issue(config.repo, config.task_type)
     issue_number = _issue_number_from_url(issue_url)
+    associated_pull_request_url = ""
+    if scenario.create_associated_pr_before_claim:
+        associated_pull_request_url = _create_associated_pull_request(
+            config.repo,
+            issue_number,
+            paths,
+        )
 
     orchestrator = Orchestrator(workflow_config, store, workflow_version_id)
     _poll_until_issue_visible(orchestrator, store, config.repo, issue_number)
@@ -134,7 +148,7 @@ def run_fixture(config: E2EFixtureConfig) -> E2EFixtureResult:
         orchestrator.run_attempt(follow_up_attempt_id)
         target_attempt_id = follow_up_attempt_id
 
-    pull_request_url = ""
+    pull_request_url = associated_pull_request_url
     target_attempt = store.attempt_by_id(target_attempt_id)
     if config.create_pr and target_attempt and str(target_attempt["task_type"]) == "code":
         pull_request_url = (
@@ -456,11 +470,88 @@ def _create_issue(repo: str, task_type: str) -> str:
     ).strip()
 
 
+def _create_associated_pull_request(repo: str, issue_number: int, paths: _FixturePaths) -> str:
+    branch = f"symphony/e2e-associated-{issue_number}-{int(time.time())}"
+    checkout = paths.root / "associated-pr-checkouts" / safe_key(branch)
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    _run(["gh", "repo", "clone", repo, str(checkout)])
+    _run(["git", "-C", str(checkout), "checkout", "-b", branch])
+    fixture_note = checkout / "ASSOCIATED_PR_FIXTURE.md"
+    fixture_note.write_text(
+        f"Associated PR fixture for {repo}#{issue_number}.\n",
+        encoding="utf-8",
+    )
+    _run(["git", "-C", str(checkout), "add", str(fixture_note)])
+    _run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "-c",
+            "user.name=symphony-dbcli",
+            "-c",
+            "user.email=symphony-dbcli@users.noreply.github.com",
+            "commit",
+            "-m",
+            f"Fixture associated PR for issue {issue_number}",
+        ]
+    )
+    _run(["git", "-C", str(checkout), "push", "origin", branch])
+    body = "\n".join(
+        [
+            f"Fixture associated pull request for https://github.com/{repo}/issues/{issue_number}.",
+            "",
+            issue_link_marker(repo, issue_number),
+        ]
+    )
+    pr_url = _gh(
+        [
+            "pr",
+            "create",
+            "--repo",
+            repo,
+            "--title",
+            f"Associated PR fixture for issue {issue_number}",
+            "--body",
+            body,
+            "--head",
+            branch,
+            "--draft",
+        ]
+    ).strip()
+    pr_number = _pull_request_number_from_url(pr_url)
+    _gh(
+        [
+            "api",
+            f"repos/{repo}/pulls/{pr_number}/reviews",
+            "-f",
+            "event=COMMENT",
+            "-f",
+            "body=Please confirm the fixture unittest suite still passes.",
+        ]
+    )
+    return pr_url
+
+
 def _issue_number_from_url(issue_url: str) -> int:
     match = re.search(r"/issues/(\d+)$", issue_url.strip())
     if not match:
         raise E2EFixtureError(f"Could not parse issue number from {issue_url!r}.")
     return int(match.group(1))
+
+
+def _pull_request_number_from_url(pull_request_url: str) -> int:
+    match = re.search(r"/pull/(\d+)$", pull_request_url.strip())
+    if not match:
+        raise E2EFixtureError(f"Could not parse pull request number from {pull_request_url!r}.")
+    return int(match.group(1))
+
+
+def _run(args: list[str]) -> str:
+    result = subprocess.run(args, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise E2EFixtureError(result.stderr.strip() or f"{' '.join(args)} failed")
+    return result.stdout
 
 
 def _gh(args: list[str]) -> str:

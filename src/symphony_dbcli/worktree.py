@@ -63,14 +63,22 @@ class WorktreeManager:
     def __init__(self, config: WorkspaceConfig):
         self.config = config
 
-    def allocate(self, repo: str, issue_number: int, attempt_id: int) -> WorktreeAllocation:
+    def allocate(
+        self,
+        repo: str,
+        issue_number: int,
+        attempt_id: int,
+        *,
+        branch_name: str = "",
+        source_ref: str = "",
+    ) -> WorktreeAllocation:
         base_repo_path = self.base_repo_path(repo)
         worktree_path = self.worktree_path(repo, issue_number, attempt_id)
-        branch = self.branch_name(repo, issue_number, attempt_id)
+        branch = branch_name or self.branch_name(repo, issue_number, attempt_id)
         clone_url = f"https://github.com/{repo}.git"
 
         self._ensure_base_repo(base_repo_path, clone_url)
-        remote_ref = self._default_remote_ref(base_repo_path)
+        remote_ref = source_ref or self._default_remote_ref(base_repo_path)
         Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
         self._run(
             [

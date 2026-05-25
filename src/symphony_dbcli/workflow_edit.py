@@ -161,11 +161,15 @@ The result must validate with the symphony-dbcli workflow parser.
 Supported workflow conditions:
 - task.type == "code"
 - task.type == "research"
+- pull_request.exists
 - pull_request.is_merged
 - pull_request.has_conflicts
+- pull_request.needs_follow_up
 - ci.has_failures
 - review_comments.present
 - not <any supported condition>
+- <condition> and <condition>
+- <condition> or <condition>
 
 Known primitives:
 {primitives}

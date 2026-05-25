@@ -19,8 +19,10 @@ def test_default_action_registry_covers_default_workflow() -> None:
 def test_action_registry_records_execution_boundaries() -> None:
     draft_pr = DEFAULT_ACTION_REGISTRY.get("github.create_draft_pr")
     fetch_issues = DEFAULT_ACTION_REGISTRY.get("github.fetch_issues")
+    find_issue_prs = DEFAULT_ACTION_REGISTRY.get("github.find_issue_pull_requests")
     pr_comments = DEFAULT_ACTION_REGISTRY.get("github.fetch_pr_review_comments")
     merge_conflicts = DEFAULT_ACTION_REGISTRY.get("github.detect_merge_conflicts")
+    address_feedback = DEFAULT_ACTION_REGISTRY.get("codex.address_pr_feedback")
     push_update = DEFAULT_ACTION_REGISTRY.get("github.push_pr_update")
     noop = DEFAULT_ACTION_REGISTRY.get("workflow.noop")
 
@@ -41,6 +43,11 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert "repos" in fetch_issues.input_fields
     assert "issues" in fetch_issues.output_fields
 
+    assert find_issue_prs is not None
+    assert find_issue_prs.side_effect == "github_read"
+    assert find_issue_prs.output_type == "AssociatedPullRequestList"
+    assert "pull_request_source_ref" in find_issue_prs.output_fields
+
     assert pr_comments is not None
     assert pr_comments.side_effect == "github_read"
     assert pr_comments.automatic_allowed is True
@@ -52,6 +59,12 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert merge_conflicts.side_effect == "github_read"
     assert merge_conflicts.output_type == "PullRequestMergeStatus"
     assert "has_conflicts" in merge_conflicts.output_fields
+
+    assert address_feedback is not None
+    assert address_feedback.side_effect == "codex_worker"
+    assert "failed_checks" in address_feedback.input_fields
+    assert "comments" in address_feedback.input_fields
+    assert "has_conflicts" in address_feedback.input_fields
 
     assert push_update is not None
     assert push_update.side_effect == "github_write"

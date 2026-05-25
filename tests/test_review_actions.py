@@ -5,7 +5,7 @@ from pathlib import Path
 
 from symphony_dbcli.config import default_config
 from symphony_dbcli.github import PullRequest
-from symphony_dbcli.review_actions import ReviewActions
+from symphony_dbcli.review_actions import ReviewActions, issue_link_marker
 from symphony_dbcli.store import IssueSnapshot, Store
 
 
@@ -101,6 +101,7 @@ def test_review_actions_create_draft_pr_from_code_attempt(tmp_path: Path) -> Non
     assert github.pushed_branches == [("dbcli/litecli", str(repo), "symphony/dbcli-litecli-245-attempt-1")]
     assert github.pull_request_title == "Fix #245: Expanded configured log_file paths"
     assert "Fixes https://github.com/dbcli/litecli/issues/245" in github.pull_request_body
+    assert issue_link_marker("dbcli/litecli", 245) in github.pull_request_body
     assert (
         "Expanded configured `log_file` paths before directory checks in litecli/main.py"
         in github.pull_request_body
@@ -145,9 +146,10 @@ def test_review_actions_create_draft_pr_uses_edited_content(tmp_path: Path) -> N
     )
 
     assert github.pull_request_title == "Fix logging path expansion"
-    assert github.pull_request_body == (
+    assert github.pull_request_body.startswith(
         "Fixes https://github.com/dbcli/litecli/issues/245\n\nEdited description."
     )
+    assert issue_link_marker("dbcli/litecli", 245) in github.pull_request_body
 
 
 def test_review_actions_post_edited_github_comment(tmp_path: Path) -> None:

@@ -100,7 +100,13 @@ def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> 
                 "SELECT transition_name, action_name, status FROM workflow_action_runs ORDER BY id ASC"
             )
         )
-    assert primitives.transitions == ["allocate_workspace", "run_setup", "fix_issue", "request_review"]
+    assert primitives.transitions == [
+        "find_issue_pull_requests",
+        "allocate_workspace",
+        "run_setup",
+        "fix_issue",
+        "request_review",
+    ]
     assert instance is not None
     assert instance["current_state"] == "review"
     assert detail is not None
@@ -133,8 +139,141 @@ def test_orchestrator_hands_off_artifacts_between_transitions(tmp_path: Path) ->
     artifacts = store.workflow_artifacts(int(instance["id"]))
     assert artifacts["workspace"] == "/tmp/worktree"
     assert artifacts["allocate_workspace.worktree_path"] == "/tmp/worktree"
-    assert primitives.inputs[1]["worktree_path"] == "/tmp/worktree"
     assert primitives.inputs[2]["worktree_path"] == "/tmp/worktree"
+    assert primitives.inputs[3]["worktree_path"] == "/tmp/worktree"
+
+
+def test_orchestrator_fans_out_pr_checks_and_feeds_combined_follow_up(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+        worktree_path="/tmp/worktree",
+        base_repo_path="/tmp/repo.git",
+        branch="symphony/existing-pr",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="setup_complete",
+        attempt_id=attempt_id,
+    )
+    store.record_workflow_artifacts(
+        instance_id,
+        {
+            "pull_request.exists": True,
+            "pull_request.number": 12,
+        },
+        workflow_version_id=None,
+    )
+    primitives = FakeWorkflowPrimitives(pr_feedback=True)
+
+    Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_attempt(attempt_id)
+
+    instance = store.workflow_instance_by_id(instance_id)
+    artifacts = store.workflow_artifacts(instance_id)
+    gates = store.pending_workflow_gates_for_attempt(attempt_id)
+    with store.connect() as conn:
+        transitions = list(
+            conn.execute(
+                "SELECT transition_name, action_name FROM workflow_transition_events ORDER BY id ASC"
+            )
+        )
+    check_transitions = {
+        "check_pr_ci",
+        "check_pr_comments",
+        "check_pr_mergeability",
+    }
+    assert check_transitions.issubset(set(primitives.transitions))
+    assert "address_pr_feedback" in primitives.transitions
+    assert instance is not None
+    assert instance["current_state"] == "pr_follow_up_complete"
+    assert artifacts["ci.failed_checks"] == [{"name": "tests", "conclusion": "failure"}]
+    assert artifacts["review_comments.comments"] == [{"body": "Please add a regression test."}]
+    assert [row["transition_name"] for row in transitions] == [
+        "initial_pr_checks",
+        "address_pr_feedback",
+    ]
+    assert transitions[0]["action_name"] == "workflow.parallel"
+    assert {row["transition_name"] for row in gates} == {"push_pr_feedback_fix"}
+
+
+def test_orchestrator_does_not_reuse_consumed_parallel_checkpoint(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+        worktree_path="/tmp/worktree",
+        base_repo_path="/tmp/repo.git",
+        branch="symphony/existing-pr",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="pr_refreshed",
+        attempt_id=attempt_id,
+    )
+    store.record_workflow_artifacts(
+        instance_id,
+        {
+            "pull_request.number": 12,
+            "pull_request.is_merged": False,
+        },
+        workflow_version_id=None,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        attempt_id=attempt_id,
+        transition_name="refresh_pr_ci",
+        action_name="github.fetch_ci_status",
+    )
+    store.finish_workflow_action_run(
+        action_run_id,
+        status="succeeded",
+        output_data={"failed_checks": [{"name": "stale"}]},
+    )
+    store.transition_workflow_instance(
+        instance_id,
+        workflow_version_id=None,
+        transition_name="refreshed_pr_checks",
+        action_name="workflow.parallel",
+        trigger="automatic",
+        from_state="pr_refreshed",
+        to_state="pr_checks_complete",
+    )
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE workflow_instances SET current_state = 'pr_refreshed' WHERE id = ?",
+            (instance_id,),
+        )
+    primitives = FakeWorkflowPrimitives(pr_feedback=True)
+
+    Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).run_attempt(attempt_id)
+
+    artifacts = store.workflow_artifacts(instance_id)
+    assert "refresh_pr_ci" in primitives.transitions
+    assert artifacts["ci.failed_checks"] == [{"name": "tests", "conclusion": "failure"}]
 
 
 def test_orchestrator_retries_failed_transition_within_retry_limit(tmp_path: Path) -> None:
@@ -168,6 +307,7 @@ def test_orchestrator_retries_failed_transition_within_retry_limit(tmp_path: Pat
             )
         )
     assert primitives.transitions == [
+        "find_issue_pull_requests",
         "allocate_workspace",
         "run_setup",
         "fix_issue",
@@ -263,11 +403,7 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     attempt = store.attempt_by_id(attempt_id)
     assert primitives.transitions == [
         "create_draft_pr",
-        "refresh_pull_request",
-        "detect_merge_conflicts",
-        "fetch_ci_status",
-        "fetch_pr_review_comments",
-        "wait_for_pr_activity",
+        "wait_created_pr",
     ]
     assert result.current_state == "pr_waiting"
     assert result.stop_reason == "human_gate"
@@ -351,7 +487,7 @@ def test_orchestrator_advances_ready_workflow_instances(tmp_path: Path) -> None:
         issue_number=245,
         task_type="code",
         workflow_version_id=None,
-        initial_state="pr_ready",
+        initial_state="pr_refreshed",
         attempt_id=attempt_id,
     )
     primitives = FakeWorkflowPrimitives()
@@ -364,8 +500,8 @@ def test_orchestrator_advances_ready_workflow_instances(tmp_path: Path) -> None:
     ).advance_ready_workflow_instances(allowed_side_effects={"github_read", "workspace_write"})
 
     attempt = store.attempt_by_id(attempt_id)
-    assert advanced == 2
-    assert primitives.transitions == ["refresh_pull_request", "cleanup_after_merge"]
+    assert advanced == 1
+    assert primitives.transitions == ["cleanup_after_merge"]
     assert attempt is not None
     assert attempt["status"] == "done"
     assert attempt["outcome"] == "done"
@@ -489,6 +625,9 @@ class FakeCleanupGitHub:
     ) -> list[GitHubPullRequestReviewComment]:
         return []
 
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        return []
+
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         return
 
@@ -536,11 +675,12 @@ class FakeCleanupGitHub:
 
 
 class FakeWorkflowPrimitives:
-    def __init__(self, *, fail_once: set[str] | None = None) -> None:
+    def __init__(self, *, fail_once: set[str] | None = None, pr_feedback: bool = False) -> None:
         self.transitions: list[str] = []
         self.inputs: list[dict[str, object]] = []
         self.fail_once = fail_once or set()
         self.failed: set[str] = set()
+        self.pr_feedback = pr_feedback
 
     def fetch_issues(self) -> PrimitiveOutcome:
         return PrimitiveOutcome({"synced": 0})
@@ -551,6 +691,20 @@ class FakeWorkflowPrimitives:
         if context.transition_name in self.fail_once and context.transition_name not in self.failed:
             self.failed.add(context.transition_name)
             raise PrimitiveExecutionError(f"{context.transition_name} failed once")
+        if context.transition_name == "find_issue_pull_requests":
+            return PrimitiveOutcome(
+                {
+                    "has_pull_request": False,
+                    "pull_request_count": 0,
+                    "pull_requests": [],
+                    "pull_request_number": 0,
+                    "pull_request_url": "",
+                    "pull_request_title": "",
+                    "pull_request_head_ref": "",
+                    "pull_request_head_sha": "",
+                    "pull_request_source_ref": "",
+                }
+            )
         if context.transition_name == "allocate_workspace":
             return PrimitiveOutcome(
                 {
@@ -558,6 +712,39 @@ class FakeWorkflowPrimitives:
                     "branch": "symphony/test",
                     "base_repo_path": "/tmp/repo.git",
                     "commit_sha": "abc123",
+                }
+            )
+        if context.transition_name == "create_draft_pr":
+            return PrimitiveOutcome(
+                {
+                    "pull_request_number": 12,
+                    "pull_request_url": "https://github.com/dbcli/litecli/pull/12",
+                    "pull_request_title": "Fix logging path support",
+                    "head_ref": "symphony/existing-pr",
+                    "head_sha": "abc123",
+                }
+            )
+        if self.pr_feedback and context.transition_name in {"check_pr_ci", "refresh_pr_ci"}:
+            return PrimitiveOutcome(
+                {
+                    "failed_checks": [{"name": "tests", "conclusion": "failure"}],
+                    "checks": [{"name": "tests", "conclusion": "failure"}],
+                    "state": "failure",
+                    "conclusion": "failure",
+                }
+            )
+        if self.pr_feedback and context.transition_name in {"check_pr_comments", "refresh_pr_comments"}:
+            return PrimitiveOutcome({"comments": [{"body": "Please add a regression test."}]})
+        if self.pr_feedback and context.transition_name in {
+            "check_pr_mergeability",
+            "refresh_pr_mergeability",
+        }:
+            return PrimitiveOutcome(
+                {
+                    "has_conflicts": False,
+                    "mergeable": True,
+                    "mergeable_state": "clean",
+                    "head_sha": "abc123",
                 }
             )
         return PrimitiveOutcome({"transition": context.transition_name})

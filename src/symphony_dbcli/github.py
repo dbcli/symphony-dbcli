@@ -29,6 +29,9 @@ class PullRequest:
     state: str = ""
     merged_at: str = ""
     head_sha: str = ""
+    head_ref: str = ""
+    head_repo: str = ""
+    body: str = ""
     mergeable: bool | None = None
     mergeable_state: str = ""
 
@@ -188,6 +191,10 @@ class GitHubClient:
             *[_review_comment_from_json(item) for item in _json_objects(reviews) if item.get("body")],
             *[_inline_review_comment_from_json(item) for item in _json_objects(inline_comments)],
         ]
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        data = self._request_json("GET", f"/repos/{repo}/pulls?state={state}&per_page=100")
+        return [_pull_request_from_json(item) for item in _json_objects(data)]
 
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
         self._require_token()
@@ -370,6 +377,9 @@ def _pull_request_from_json(data: dict[str, Any]) -> PullRequest:
         state=str(data.get("state") or ""),
         merged_at=str(data.get("merged_at") or ""),
         head_sha=_head_sha(data),
+        head_ref=_head_ref(data),
+        head_repo=_head_repo(data),
+        body=str(data.get("body") or ""),
         mergeable=_optional_bool(data.get("mergeable")),
         mergeable_state=str(data.get("mergeable_state") or ""),
     )
@@ -507,6 +517,15 @@ def _legacy_status_conclusion(state: str) -> str:
 
 def _head_sha(data: dict[str, Any]) -> str:
     return str(_json_object(data.get("head")).get("sha") or "")
+
+
+def _head_ref(data: dict[str, Any]) -> str:
+    return str(_json_object(data.get("head")).get("ref") or "")
+
+
+def _head_repo(data: dict[str, Any]) -> str:
+    repo = _json_object(_json_object(data.get("head")).get("repo"))
+    return str(repo.get("full_name") or "")
 
 
 def _optional_bool(value: Any) -> bool | None:

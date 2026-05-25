@@ -27,6 +27,24 @@ class WorkflowTransitionMatch:
     transition: WorkflowTransitionConfig
 
 
+@dataclass(frozen=True)
+class WorkflowTransitionBatch:
+    name: str
+    transitions: list[WorkflowTransitionMatch]
+
+    @property
+    def from_state(self) -> str:
+        return self.transitions[0].transition.from_state
+
+    @property
+    def to_state(self) -> str:
+        return self.transitions[0].transition.to_state
+
+    @property
+    def is_parallel(self) -> bool:
+        return len(self.transitions) > 1
+
+
 class WorkflowEngine:
     def __init__(self, workflow: WorkflowDefinitionConfig):
         self.workflow = workflow
@@ -78,6 +96,42 @@ class WorkflowEngine:
                 raise WorkflowEngineError(f"Workflow transition retry limit exceeded: {names}.")
         return matches[0] if matches else None
 
+    def automatic_batch(
+        self,
+        *,
+        from_state: str,
+        context: WorkflowExecutionContext,
+        actions: set[str] | None = None,
+    ) -> WorkflowTransitionBatch | None:
+        exhausted = self.exhausted_transitions(
+            from_state=from_state,
+            trigger="automatic",
+            context=context,
+            actions=actions,
+        )
+        if exhausted:
+            names = ", ".join(match.name for match in exhausted)
+            raise WorkflowEngineError(f"Workflow transition retry limit exceeded: {names}.")
+        matches = self.matching_transitions(
+            from_state=from_state,
+            trigger="automatic",
+            context=context,
+            actions=actions,
+        )
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return WorkflowTransitionBatch(matches[0].name, matches)
+        group_names = {match.transition.parallel_group for match in matches}
+        if len(group_names) == 1 and "" not in group_names:
+            group_name = next(iter(group_names))
+            from_states = {match.transition.from_state for match in matches}
+            to_states = {match.transition.to_state for match in matches}
+            if len(from_states) == 1 and len(to_states) == 1:
+                return WorkflowTransitionBatch(group_name, matches)
+        names = ", ".join(match.name for match in matches)
+        raise WorkflowEngineError(f"Multiple workflow transitions match {from_state}: {names}.")
+
     def exhausted_transitions(
         self,
         *,
@@ -101,6 +155,10 @@ def condition_matches(condition: str, context: WorkflowExecutionContext) -> bool
     normalized = condition.strip()
     if not normalized:
         return True
+    if " or " in normalized:
+        return any(condition_matches(part, context) for part in normalized.split(" or "))
+    if " and " in normalized:
+        return all(condition_matches(part, context) for part in normalized.split(" and "))
     if normalized.startswith("not "):
         return not condition_matches(normalized.removeprefix("not "), context)
     if normalized == 'task.type == "code"':
@@ -112,6 +170,12 @@ def condition_matches(condition: str, context: WorkflowExecutionContext) -> bool
             context,
             "pull_request.is_merged",
             "fetch_pull_request.is_merged",
+        )
+    if normalized == "pull_request.exists":
+        return _truthy_artifact(
+            context,
+            "pull_request.number",
+            "find_issue_pull_requests.has_pull_request",
         )
     if normalized == "pull_request.has_conflicts":
         return _truthy_artifact(
@@ -127,6 +191,12 @@ def condition_matches(condition: str, context: WorkflowExecutionContext) -> bool
             "review_comments.comments",
             "fetch_pr_review_comments.comments",
         )
+    if normalized == "pull_request.needs_follow_up":
+        return (
+            condition_matches("pull_request.has_conflicts", context)
+            or condition_matches("ci.has_failures", context)
+            or condition_matches("review_comments.present", context)
+        )
     raise WorkflowEngineError(f"Unsupported workflow condition: {condition}")
 
 
@@ -141,14 +211,20 @@ def transition_retry_available(
 
 def validate_condition(condition: str) -> bool:
     normalized = condition.strip()
+    if " or " in normalized:
+        return all(validate_condition(part) for part in normalized.split(" or "))
+    if " and " in normalized:
+        return all(validate_condition(part) for part in normalized.split(" and "))
     if normalized.startswith("not "):
         normalized = normalized.removeprefix("not ").strip()
     return normalized in {
         "",
         'task.type == "code"',
         'task.type == "research"',
+        "pull_request.exists",
         "pull_request.is_merged",
         "pull_request.has_conflicts",
+        "pull_request.needs_follow_up",
         "ci.has_failures",
         "review_comments.present",
     }

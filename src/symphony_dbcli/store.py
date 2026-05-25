@@ -13,7 +13,7 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 
@@ -406,6 +406,30 @@ class Store:
                     (instance_id, transition_name),
                 ).fetchone(),
             )
+
+    def workflow_transition_exists_after(
+        self,
+        instance_id: int,
+        transition_names: Iterable[str],
+        completed_at: str,
+    ) -> bool:
+        names = [name for name in transition_names if name]
+        if not names or not completed_at:
+            return False
+        placeholders = ", ".join("?" for _ in names)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT 1
+                FROM workflow_transition_events
+                WHERE workflow_instance_id = ?
+                  AND transition_name IN ({placeholders})
+                  AND created_at >= ?
+                LIMIT 1
+                """,
+                (instance_id, *names, completed_at),
+            ).fetchone()
+        return row is not None
 
     def workflow_action_failure_counts(self, instance_id: int) -> dict[str, int]:
         with self.connect() as conn:
@@ -1160,6 +1184,66 @@ class Store:
                     cleanup_error = ''
                 """,
                 (attempt_id, repo, number, url, title, state, merged_at, utc_now()),
+            )
+
+    def record_issue_pull_request_link(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        pull_request_number: int,
+        pull_request_url: str,
+        pull_request_title: str,
+        state: str,
+        link_source: str,
+        marker: str,
+    ) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO issue_pull_requests(
+                    repo, issue_number, pull_request_number, pull_request_url,
+                    pull_request_title, state, link_source, marker, verified_at,
+                    created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo, issue_number, pull_request_number) DO UPDATE SET
+                    pull_request_url = excluded.pull_request_url,
+                    pull_request_title = excluded.pull_request_title,
+                    state = excluded.state,
+                    link_source = excluded.link_source,
+                    marker = excluded.marker,
+                    verified_at = excluded.verified_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    repo,
+                    issue_number,
+                    pull_request_number,
+                    pull_request_url,
+                    pull_request_title,
+                    state,
+                    link_source,
+                    marker,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+
+    def issue_pull_request_links(self, repo: str, issue_number: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM issue_pull_requests
+                    WHERE repo = ? AND issue_number = ?
+                    ORDER BY verified_at DESC, id DESC
+                    """,
+                    (repo, issue_number),
+                )
             )
 
     def pull_requests_for_attempt(self, attempt_id: int) -> list[sqlite3.Row]:
@@ -2090,6 +2174,24 @@ SCHEMA = [
         UNIQUE(source_attempt_id, target_attempt_id, relationship),
         FOREIGN KEY(source_attempt_id) REFERENCES attempts(id) ON DELETE CASCADE,
         FOREIGN KEY(target_attempt_id) REFERENCES attempts(id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS issue_pull_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        pull_request_number INTEGER NOT NULL,
+        pull_request_url TEXT NOT NULL,
+        pull_request_title TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT '',
+        link_source TEXT NOT NULL,
+        marker TEXT NOT NULL,
+        verified_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(repo, issue_number, pull_request_number),
+        FOREIGN KEY(repo, issue_number) REFERENCES issues(repo, number) ON DELETE CASCADE
     )
     """,
     """

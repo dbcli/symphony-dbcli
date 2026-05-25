@@ -15,7 +15,13 @@ from .github import (
     PullRequest,
     PullRequestMergeStatus,
 )
-from .review_actions import GitHubReviewClient, ReviewActionError, ReviewActions
+from .review_actions import (
+    GitHubReviewClient,
+    ReviewActionError,
+    ReviewActions,
+    body_links_issue,
+    issue_link_marker,
+)
 from .runner import CodexRunner
 from .store import Store
 from .worker_prompt import (
@@ -40,6 +46,8 @@ class PrimitiveGitHubClient(Protocol):
         repo: str,
         pull_request_number: int,
     ) -> list[GitHubPullRequestReviewComment]: ...
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]: ...
 
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
 
@@ -125,6 +133,8 @@ class PrimitiveExecutor:
             return self._fetch_comments(context)
         if context.transition.action == "github.apply_labels":
             return self._apply_labels(context)
+        if context.transition.action == "github.find_issue_pull_requests":
+            return self._find_issue_pull_requests(context)
         if context.transition.action == "github.fetch_pull_request":
             return self._fetch_pull_request(context)
         if context.transition.action == "github.fetch_ci_status":
@@ -146,6 +156,7 @@ class PrimitiveExecutor:
             "codex.fix_issue",
             "codex.address_pr_comments",
             "codex.fix_ci_failures",
+            "codex.address_pr_feedback",
         }:
             return self._run_codex(context)
         if context.transition.action == "github.create_draft_pr":
@@ -194,12 +205,71 @@ class PrimitiveExecutor:
             }
         )
 
+    def _find_issue_pull_requests(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        attempt_id = _required_attempt_id(context)
+        marker = issue_link_marker(context.repo, context.issue_number)
+        by_number: dict[int, PullRequest] = {}
+
+        for row in self.store.issue_pull_request_links(context.repo, context.issue_number):
+            try:
+                pull_request = self.github.pull_request(context.repo, int(row["pull_request_number"]))
+            except GitHubError:
+                continue
+            by_number[pull_request.number] = pull_request
+
+        for pull_request in self.github.list_pull_requests(context.repo, state="open"):
+            if pull_request.head_repo and pull_request.head_repo != context.repo:
+                continue
+            if not body_links_issue(pull_request.body, context.repo, context.issue_number):
+                continue
+            by_number[pull_request.number] = pull_request
+            self.store.record_issue_pull_request_link(
+                repo=context.repo,
+                issue_number=context.issue_number,
+                pull_request_number=pull_request.number,
+                pull_request_url=pull_request.url,
+                pull_request_title=pull_request.title,
+                state=pull_request.state,
+                link_source="description_marker",
+                marker=marker,
+            )
+
+        pull_requests = sorted(by_number.values(), key=lambda item: item.number, reverse=True)
+        if pull_requests:
+            primary = pull_requests[0]
+            self.store.record_pr(
+                attempt_id,
+                repo=context.repo,
+                number=primary.number,
+                url=primary.url,
+                title=primary.title,
+                state=primary.state,
+                merged_at=primary.merged_at,
+            )
+        else:
+            primary = None
+        return PrimitiveOutcome(
+            {
+                "has_pull_request": primary is not None,
+                "pull_request_count": len(pull_requests),
+                "pull_requests": [_pull_request_output(item) for item in pull_requests],
+                "pull_request_number": 0 if primary is None else primary.number,
+                "pull_request_url": "" if primary is None else primary.url,
+                "pull_request_title": "" if primary is None else primary.title,
+                "pull_request_head_ref": "" if primary is None else primary.head_ref,
+                "pull_request_head_sha": "" if primary is None else primary.head_sha,
+                "pull_request_source_ref": "" if primary is None else _source_ref(primary),
+            }
+        )
+
     def _allocate_workspace(self, context: PrimitiveContext) -> PrimitiveOutcome:
         attempt_id = _required_attempt_id(context)
         allocation = WorktreeManager(self.config.workspace).allocate(
             context.repo,
             context.issue_number,
             attempt_id,
+            branch_name=str(context.input_data.get("branch") or ""),
+            source_ref=str(context.input_data.get("source_ref") or ""),
         )
         self.store.update_attempt_workspace(
             attempt_id,
@@ -246,6 +316,7 @@ class PrimitiveExecutor:
                 "merged_at": pull_request.merged_at,
                 "is_merged": pull_request.is_merged,
                 "head_sha": pull_request.head_sha,
+                "head_ref": pull_request.head_ref,
             }
         )
 
@@ -425,6 +496,8 @@ class PrimitiveExecutor:
                 "pull_request_title": pull_request.title,
                 "state": pull_request.state,
                 "merged_at": pull_request.merged_at,
+                "head_ref": pull_request.head_ref,
+                "head_sha": pull_request.head_sha,
             }
         )
 
@@ -528,6 +601,25 @@ def _pull_request_for_cleanup(
     return pull_requests[0]
 
 
+def _pull_request_output(pull_request: PullRequest) -> dict[str, Any]:
+    return {
+        "number": pull_request.number,
+        "url": pull_request.url,
+        "title": pull_request.title,
+        "state": pull_request.state,
+        "merged_at": pull_request.merged_at,
+        "head_sha": pull_request.head_sha,
+        "head_ref": pull_request.head_ref,
+        "head_repo": pull_request.head_repo,
+    }
+
+
+def _source_ref(pull_request: PullRequest) -> str:
+    if not pull_request.head_ref:
+        return ""
+    return f"origin/{pull_request.head_ref}"
+
+
 def _codex_task_context(context: PrimitiveContext) -> str:
     if context.transition.action == "codex.address_pr_comments":
         pull_request_number = _required_int(context.input_data, "pull_request_number")
@@ -551,6 +643,28 @@ def _codex_task_context(context: PrimitiveContext) -> str:
                 _format_records("All checks", checks),
             ]
         ).strip()
+    if context.transition.action == "codex.address_pr_feedback":
+        pull_request_number = _required_int(context.input_data, "pull_request_number")
+        comments = _input_dicts(context.input_data, "comments")
+        failed_checks = _input_dicts(context.input_data, "failed_checks")
+        checks = _input_dicts(context.input_data, "checks")
+        has_conflicts = bool(context.input_data.get("has_conflicts"))
+        mergeable_state = str(context.input_data.get("mergeable_state") or "")
+        conflict_text = (
+            f"Merge conflicts: yes; mergeable_state={mergeable_state}"
+            if has_conflicts
+            else f"Merge conflicts: no; mergeable_state={mergeable_state or 'unknown'}"
+        )
+        return "\n".join(
+            [
+                f"Pull request: https://github.com/{context.repo}/pull/{pull_request_number}",
+                "Address the pull request feedback below in one focused update.",
+                conflict_text,
+                _format_records("Failed checks", failed_checks),
+                _format_records("All checks", checks),
+                _format_records("Review comments", comments),
+            ]
+        ).strip()
     return ""
 
 
@@ -559,6 +673,8 @@ def _codex_result_type(context: PrimitiveContext) -> str:
         return "pr_review_update"
     if context.transition.action == "codex.fix_ci_failures":
         return "ci_fix_summary"
+    if context.transition.action == "codex.address_pr_feedback":
+        return "pr_feedback_update"
     return result_type(context.task_type)
 
 
@@ -567,6 +683,8 @@ def _codex_result_title(context: PrimitiveContext) -> str:
         return "PR Review Update"
     if context.transition.action == "codex.fix_ci_failures":
         return "CI Fix Summary"
+    if context.transition.action == "codex.address_pr_feedback":
+        return "PR Feedback Update"
     return result_title(context.task_type)
 
 

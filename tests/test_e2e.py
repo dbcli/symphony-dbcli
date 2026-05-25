@@ -11,6 +11,7 @@ from symphony_dbcli.e2e import (
     E2EFixtureError,
     _fixture_paths,
     _issue_number_from_url,
+    _pull_request_number_from_url,
     _resolve_scenario,
     _workflow_config,
     run_fixture,
@@ -45,6 +46,17 @@ def test_fixture_scenario_resolves_task_behavior(tmp_path: Path) -> None:
     assert research.task_type == "research"
     assert research.create_pr is False
 
+    associated_pr = _resolve_scenario(
+        E2EFixtureConfig(
+            repo="amjith/symphony-dbcli-e2e-fixture",
+            root=tmp_path,
+            scenario="associated_pr_parallel_checks",
+        )
+    )
+
+    assert associated_pr.task_type == "code"
+    assert associated_pr.create_pr is False
+
     with pytest.raises(E2EFixtureError, match="Unknown e2e fixture scenario"):
         _resolve_scenario(E2EFixtureConfig(root=tmp_path, scenario="unknown"))
 
@@ -56,6 +68,10 @@ def test_issue_number_from_url() -> None:
 def test_issue_number_from_url_rejects_invalid_url() -> None:
     with pytest.raises(E2EFixtureError, match="Could not parse"):
         _issue_number_from_url("https://github.com/amjith/symphony-dbcli-e2e-fixture")
+
+
+def test_pull_request_number_from_url() -> None:
+    assert _pull_request_number_from_url("https://github.com/amjith/symphony-dbcli-e2e-fixture/pull/17") == 17
 
 
 def test_run_fixture_against_github_fixture_repo(tmp_path: Path) -> None:

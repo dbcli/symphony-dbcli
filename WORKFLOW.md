@@ -86,6 +86,11 @@ description = "Issue has been claimed and labeled as working."
 terminal = false
 gate = ""
 
+[workflow.states.associated_pr_checked]
+description = "Durable issue-to-PR bookkeeping has been checked."
+terminal = false
+gate = ""
+
 [workflow.states.workspace_ready]
 description = "An isolated workspace has been prepared."
 terminal = false
@@ -111,35 +116,20 @@ description = "A draft pull request exists and is waiting for merge."
 terminal = false
 gate = ""
 
-[workflow.states.pr_checked]
+[workflow.states.pr_refreshed]
 description = "Latest pull request metadata has been fetched."
 terminal = false
 gate = ""
 
-[workflow.states.merge_checked]
-description = "Mergeability and conflict status have been checked."
+[workflow.states.pr_checks_complete]
+description = "CI, PR comments, and mergeability have been checked."
 terminal = false
 gate = ""
 
-[workflow.states.ci_checked]
-description = "Pull request CI status has been checked."
+[workflow.states.pr_follow_up_complete]
+description = "Codex has addressed pull request feedback and needs human review."
 terminal = false
-gate = ""
-
-[workflow.states.ci_fix_complete]
-description = "Codex has prepared a CI fix that needs human review."
-terminal = false
-gate = "review_ci_fix"
-
-[workflow.states.review_comments_checked]
-description = "Pull request review comments have been fetched."
-terminal = false
-gate = ""
-
-[workflow.states.review_comments_addressed]
-description = "Codex has addressed pull request comments and needs human review."
-terminal = false
-gate = "review_comment_fix"
+gate = "review_pr_feedback"
 
 [workflow.states.pr_waiting]
 description = "Pull request has no immediate Symphony follow-up and is waiting for external activity."
@@ -166,6 +156,7 @@ from_state = "todo"
 to_state = "claimed"
 action = "github.apply_labels"
 trigger = "automatic"
+parallel_group = ""
 description = "Move a dispatchable issue into the working state."
 condition = ""
 gate = ""
@@ -174,24 +165,55 @@ retry_limit = 1
 timeout_seconds = 0
 guidance = ["Keep label changes minimal and explainable.", "Do not alter labels unrelated to Symphony state."]
 
-[workflow.transitions.allocate_workspace]
+[workflow.transitions.find_issue_pull_requests]
 from_state = "claimed"
+to_state = "associated_pr_checked"
+action = "github.find_issue_pull_requests"
+trigger = "automatic"
+parallel_group = ""
+description = "Find pull requests durably associated with this issue."
+condition = ""
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Trust only DB bookkeeping or the exact Symphony issue-link marker in the PR body.", "Ignore incidental issue mentions to avoid false positive associations."]
+
+[workflow.transitions.find_issue_pull_requests.outputs]
+has_pull_request = "artifact.pull_request.exists"
+pull_request_count = "artifact.pull_request.count"
+pull_requests = "artifact.pull_request.associated"
+pull_request_number = "artifact.pull_request.number"
+pull_request_url = "artifact.pull_request.url"
+pull_request_title = "artifact.pull_request.title"
+pull_request_head_ref = "artifact.pull_request.head_ref"
+pull_request_head_sha = "artifact.pull_request.head_sha"
+pull_request_source_ref = "artifact.pull_request.source_ref"
+
+[workflow.transitions.allocate_workspace]
+from_state = "associated_pr_checked"
 to_state = "workspace_ready"
 action = "workspace.allocate"
 trigger = "automatic"
+parallel_group = ""
 description = "Create the per-attempt workspace."
 condition = ""
 gate = ""
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
-guidance = ["Prefer isolated worktrees so concurrent workers do not share a checkout.", "Use deterministic paths and branch names that are easy to inspect."]
+guidance = ["Prefer isolated worktrees so concurrent workers do not share a checkout.", "When an associated PR exists, resume from that PR branch.", "Use deterministic paths and branch names that are easy to inspect."]
+
+[workflow.transitions.allocate_workspace.inputs]
+branch = "artifact.pull_request.head_ref"
+source_ref = "artifact.pull_request.source_ref"
 
 [workflow.transitions.run_setup]
 from_state = "workspace_ready"
 to_state = "setup_complete"
 action = "workspace.run_setup"
 trigger = "automatic"
+parallel_group = ""
 description = "Run configured setup commands before Codex starts."
 condition = ""
 gate = ""
@@ -205,8 +227,9 @@ from_state = "setup_complete"
 to_state = "worker_complete"
 action = "codex.research_issue"
 trigger = "automatic"
+parallel_group = ""
 description = "Use Codex to draft a research or support answer."
-condition = "task.type == \"research\""
+condition = "task.type == \"research\" and not pull_request.exists"
 gate = ""
 on_failure = "failed"
 retry_limit = 1
@@ -218,19 +241,137 @@ from_state = "setup_complete"
 to_state = "worker_complete"
 action = "codex.fix_issue"
 trigger = "automatic"
+parallel_group = ""
 description = "Use Codex to implement a code change."
-condition = "task.type == \"code\""
+condition = "task.type == \"code\" and not pull_request.exists"
 gate = ""
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
 guidance = ["Keep the code change focused on the issue.", "Prefer narrow unit tests before broader integration tests.", "Run a review pass after implementation when the workflow asks for it."]
 
+[workflow.transitions.check_pr_ci]
+from_state = "setup_complete"
+to_state = "pr_checks_complete"
+action = "github.fetch_ci_status"
+trigger = "automatic"
+parallel_group = "initial_pr_checks"
+description = "Fetch current CI status for the associated pull request."
+condition = "pull_request.exists"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Capture both failed checks and the full check list for follow-up workers."]
+
+[workflow.transitions.check_pr_ci.inputs]
+pull_request_number = "artifact.pull_request.number"
+
+[workflow.transitions.check_pr_ci.outputs]
+failed_checks = "artifact.ci.failed_checks"
+checks = "artifact.ci.checks"
+state = "artifact.ci.state"
+conclusion = "artifact.ci.conclusion"
+
+[workflow.transitions.check_pr_comments]
+from_state = "setup_complete"
+to_state = "pr_checks_complete"
+action = "github.fetch_pr_review_comments"
+trigger = "automatic"
+parallel_group = "initial_pr_checks"
+description = "Fetch review-body and inline comments for the associated pull request."
+condition = "pull_request.exists"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Keep review-body comments and inline comments together for the worker."]
+
+[workflow.transitions.check_pr_comments.inputs]
+pull_request_number = "artifact.pull_request.number"
+
+[workflow.transitions.check_pr_comments.outputs]
+comments = "artifact.review_comments.comments"
+
+[workflow.transitions.check_pr_mergeability]
+from_state = "setup_complete"
+to_state = "pr_checks_complete"
+action = "github.detect_merge_conflicts"
+trigger = "automatic"
+parallel_group = "initial_pr_checks"
+description = "Detect merge conflicts for the associated pull request."
+condition = "pull_request.exists"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Treat GitHub mergeability as a snapshot that can change after new commits."]
+
+[workflow.transitions.check_pr_mergeability.inputs]
+pull_request_number = "artifact.pull_request.number"
+
+[workflow.transitions.check_pr_mergeability.outputs]
+has_conflicts = "artifact.pull_request.has_conflicts"
+mergeable = "artifact.pull_request.mergeable"
+mergeable_state = "artifact.pull_request.mergeable_state"
+head_sha = "artifact.pull_request.head_sha"
+
+[workflow.transitions.address_pr_feedback]
+from_state = "pr_checks_complete"
+to_state = "pr_follow_up_complete"
+action = "codex.address_pr_feedback"
+trigger = "automatic"
+parallel_group = ""
+description = "Ask Codex to address PR feedback from CI, comments, and mergeability."
+condition = "pull_request.needs_follow_up"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Address only the PR feedback captured in workflow artifacts.", "Keep the update focused and preserve the original issue intent.", "Prefer the narrowest local test that validates the change."]
+
+[workflow.transitions.address_pr_feedback.inputs]
+pull_request_number = "artifact.pull_request.number"
+failed_checks = "artifact.ci.failed_checks"
+checks = "artifact.ci.checks"
+comments = "artifact.review_comments.comments"
+has_conflicts = "artifact.pull_request.has_conflicts"
+mergeable_state = "artifact.pull_request.mergeable_state"
+
+[workflow.transitions.push_pr_feedback_fix]
+from_state = "pr_follow_up_complete"
+to_state = "pr_waiting"
+action = "github.push_pr_update"
+trigger = "human"
+parallel_group = ""
+description = "Review and push the PR feedback fix to the existing pull request branch."
+condition = ""
+gate = "review_pr_feedback"
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Let the human inspect the follow-up fix before pushing it to GitHub."]
+
+[workflow.transitions.wait_existing_pr]
+from_state = "pr_checks_complete"
+to_state = "pr_waiting"
+action = "workflow.noop"
+trigger = "automatic"
+parallel_group = ""
+description = "Wait when the associated PR has no current Symphony follow-up."
+condition = "not pull_request.needs_follow_up"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Stop automatic work until a human asks Symphony to check the pull request again."]
+
 [workflow.transitions.request_review]
 from_state = "worker_complete"
 to_state = "review"
 action = "github.apply_labels"
 trigger = "automatic"
+parallel_group = ""
 description = "Move completed worker output into human review."
 condition = ""
 gate = ""
@@ -244,6 +385,7 @@ from_state = "review"
 to_state = "done"
 action = "github.post_issue_comment"
 trigger = "human"
+parallel_group = ""
 description = "Post an edited research answer to GitHub."
 condition = "task.type == \"research\""
 gate = "review_answer"
@@ -257,6 +399,7 @@ from_state = "review"
 to_state = "pr_ready"
 action = "github.create_draft_pr"
 trigger = "human"
+parallel_group = ""
 description = "Create a draft pull request after human diff review."
 condition = "task.type == \"code\""
 gate = "review_diff"
@@ -269,195 +412,29 @@ guidance = ["Let the human edit the PR title and description before creation.", 
 pull_request_number = "artifact.pull_request.number"
 pull_request_url = "artifact.pull_request.url"
 pull_request_title = "artifact.pull_request.title"
-
-[workflow.transitions.refresh_pull_request]
-from_state = "pr_ready"
-to_state = "pr_checked"
-action = "github.fetch_pull_request"
-trigger = "automatic"
-description = "Fetch the latest pull request metadata."
-condition = ""
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Use this as the durable pull request snapshot before deciding follow-up work."]
-
-[workflow.transitions.refresh_pull_request.inputs]
-pull_request_number = "artifact.pull_request.number"
-
-[workflow.transitions.refresh_pull_request.outputs]
-is_merged = "artifact.pull_request.is_merged"
+head_ref = "artifact.pull_request.head_ref"
 head_sha = "artifact.pull_request.head_sha"
-state = "artifact.pull_request.state"
 
-[workflow.transitions.cleanup_after_merge]
-from_state = "pr_checked"
-to_state = "done"
-action = "workspace.cleanup_after_merge"
-trigger = "automatic"
-description = "Clean up the workspace after the pull request is merged."
-condition = "pull_request.is_merged"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Clean only workspaces owned by Symphony.", "Do not remove worktrees with uncommitted changes."]
-
-[workflow.transitions.detect_merge_conflicts]
-from_state = "pr_checked"
-to_state = "merge_checked"
-action = "github.detect_merge_conflicts"
-trigger = "automatic"
-description = "Check whether the pull request currently has merge conflicts."
-condition = "not pull_request.is_merged"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Treat GitHub mergeability as a snapshot that can change after new commits."]
-
-[workflow.transitions.detect_merge_conflicts.inputs]
-pull_request_number = "artifact.pull_request.number"
-
-[workflow.transitions.detect_merge_conflicts.outputs]
-has_conflicts = "artifact.pull_request.has_conflicts"
-mergeable = "artifact.pull_request.mergeable"
-mergeable_state = "artifact.pull_request.mergeable_state"
-
-[workflow.transitions.block_on_merge_conflict]
-from_state = "merge_checked"
-to_state = "blocked"
-action = "github.apply_labels"
-trigger = "automatic"
-description = "Block the workflow when the pull request has merge conflicts."
-condition = "pull_request.has_conflicts"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Leave the attempt blocked so a human can decide how to resolve the conflict."]
-
-[workflow.transitions.fetch_ci_status]
-from_state = "merge_checked"
-to_state = "ci_checked"
-action = "github.fetch_ci_status"
-trigger = "automatic"
-description = "Fetch pull request CI status after mergeability is clean."
-condition = "not pull_request.has_conflicts"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Capture both failed checks and the full check list for follow-up workers."]
-
-[workflow.transitions.fetch_ci_status.inputs]
-pull_request_number = "artifact.pull_request.number"
-
-[workflow.transitions.fetch_ci_status.outputs]
-failed_checks = "artifact.ci.failed_checks"
-checks = "artifact.ci.checks"
-state = "artifact.ci.state"
-conclusion = "artifact.ci.conclusion"
-
-[workflow.transitions.fix_ci_failures]
-from_state = "ci_checked"
-to_state = "ci_fix_complete"
-action = "codex.fix_ci_failures"
-trigger = "automatic"
-description = "Ask Codex to fix failing pull request CI."
-condition = "ci.has_failures"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Keep the CI fix focused on the failing checks.", "Prefer the narrowest local test that reproduces the failure."]
-
-[workflow.transitions.fix_ci_failures.inputs]
-pull_request_number = "artifact.pull_request.number"
-failed_checks = "artifact.ci.failed_checks"
-checks = "artifact.ci.checks"
-
-[workflow.transitions.push_ci_fix]
-from_state = "ci_fix_complete"
-to_state = "pr_waiting"
-action = "github.push_pr_update"
-trigger = "human"
-description = "Review and push the CI fix to the existing pull request branch."
-condition = ""
-gate = "review_ci_fix"
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Let the human inspect the CI fix before pushing it to GitHub."]
-
-[workflow.transitions.fetch_pr_review_comments]
-from_state = "ci_checked"
-to_state = "review_comments_checked"
-action = "github.fetch_pr_review_comments"
-trigger = "automatic"
-description = "Fetch review bodies and inline review comments when CI is not failing."
-condition = "not ci.has_failures"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Keep review-body comments and inline comments together for the worker."]
-
-[workflow.transitions.fetch_pr_review_comments.inputs]
-pull_request_number = "artifact.pull_request.number"
-
-[workflow.transitions.fetch_pr_review_comments.outputs]
-comments = "artifact.review_comments.comments"
-
-[workflow.transitions.address_pr_comments]
-from_state = "review_comments_checked"
-to_state = "review_comments_addressed"
-action = "codex.address_pr_comments"
-trigger = "automatic"
-description = "Ask Codex to address pull request review comments."
-condition = "review_comments.present"
-gate = ""
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Address only the review comments provided in the workflow artifact.", "Keep the original issue fix focused."]
-
-[workflow.transitions.address_pr_comments.inputs]
-pull_request_number = "artifact.pull_request.number"
-comments = "artifact.review_comments.comments"
-
-[workflow.transitions.push_review_comment_fix]
-from_state = "review_comments_addressed"
-to_state = "pr_waiting"
-action = "github.push_pr_update"
-trigger = "human"
-description = "Review and push the PR comment fix to the existing branch."
-condition = ""
-gate = "review_comment_fix"
-on_failure = "failed"
-retry_limit = 1
-timeout_seconds = 0
-guidance = ["Let the human inspect the comment fix before pushing it to GitHub."]
-
-[workflow.transitions.wait_for_pr_activity]
-from_state = "review_comments_checked"
+[workflow.transitions.wait_created_pr]
+from_state = "pr_ready"
 to_state = "pr_waiting"
 action = "workflow.noop"
 trigger = "automatic"
-description = "Wait when CI is passing and there are no review comments to address."
-condition = "not review_comments.present"
+parallel_group = ""
+description = "Wait for external PR activity after creating a draft pull request."
+condition = ""
 gate = ""
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
-guidance = ["Stop automatic work until a human asks Symphony to check the pull request again."]
+guidance = ["Do not immediately reprocess a freshly created draft PR.", "Wait for CI, review, or an explicit human check."]
 
 [workflow.transitions.check_pr_again]
 from_state = "pr_waiting"
-to_state = "pr_checked"
+to_state = "pr_refreshed"
 action = "github.fetch_pull_request"
 trigger = "human"
+parallel_group = ""
 description = "Manually check the pull request again for merge, CI, or review changes."
 condition = ""
 gate = "check_pr_again"
@@ -471,14 +448,96 @@ pull_request_number = "artifact.pull_request.number"
 
 [workflow.transitions.check_pr_again.outputs]
 is_merged = "artifact.pull_request.is_merged"
+head_ref = "artifact.pull_request.head_ref"
 head_sha = "artifact.pull_request.head_sha"
 state = "artifact.pull_request.state"
+
+[workflow.transitions.cleanup_after_merge]
+from_state = "pr_refreshed"
+to_state = "done"
+action = "workspace.cleanup_after_merge"
+trigger = "automatic"
+parallel_group = ""
+description = "Clean up the workspace after the pull request is merged."
+condition = "pull_request.is_merged"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Clean only workspaces owned by Symphony.", "Do not remove worktrees with uncommitted changes."]
+
+[workflow.transitions.refresh_pr_ci]
+from_state = "pr_refreshed"
+to_state = "pr_checks_complete"
+action = "github.fetch_ci_status"
+trigger = "automatic"
+parallel_group = "refreshed_pr_checks"
+description = "Refresh CI status for an unmerged pull request."
+condition = "not pull_request.is_merged"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Capture both failed checks and the full check list for follow-up workers."]
+
+[workflow.transitions.refresh_pr_ci.inputs]
+pull_request_number = "artifact.pull_request.number"
+
+[workflow.transitions.refresh_pr_ci.outputs]
+failed_checks = "artifact.ci.failed_checks"
+checks = "artifact.ci.checks"
+state = "artifact.ci.state"
+conclusion = "artifact.ci.conclusion"
+
+[workflow.transitions.refresh_pr_comments]
+from_state = "pr_refreshed"
+to_state = "pr_checks_complete"
+action = "github.fetch_pr_review_comments"
+trigger = "automatic"
+parallel_group = "refreshed_pr_checks"
+description = "Refresh review-body and inline comments for an unmerged pull request."
+condition = "not pull_request.is_merged"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Keep review-body comments and inline comments together for the worker."]
+
+[workflow.transitions.refresh_pr_comments.inputs]
+pull_request_number = "artifact.pull_request.number"
+
+[workflow.transitions.refresh_pr_comments.outputs]
+comments = "artifact.review_comments.comments"
+
+[workflow.transitions.refresh_pr_mergeability]
+from_state = "pr_refreshed"
+to_state = "pr_checks_complete"
+action = "github.detect_merge_conflicts"
+trigger = "automatic"
+parallel_group = "refreshed_pr_checks"
+description = "Refresh mergeability for an unmerged pull request."
+condition = "not pull_request.is_merged"
+gate = ""
+on_failure = "failed"
+retry_limit = 1
+timeout_seconds = 0
+guidance = ["Treat GitHub mergeability as a snapshot that can change after new commits."]
+
+[workflow.transitions.refresh_pr_mergeability.inputs]
+pull_request_number = "artifact.pull_request.number"
+
+[workflow.transitions.refresh_pr_mergeability.outputs]
+has_conflicts = "artifact.pull_request.has_conflicts"
+mergeable = "artifact.pull_request.mergeable"
+mergeable_state = "artifact.pull_request.mergeable_state"
+head_sha = "artifact.pull_request.head_sha"
 
 [workflow.transitions.mark_blocked]
 from_state = "review"
 to_state = "blocked"
 action = "github.apply_labels"
 trigger = "human"
+parallel_group = ""
 description = "Let a human stop progress when review cannot continue."
 condition = ""
 gate = "mark_blocked"

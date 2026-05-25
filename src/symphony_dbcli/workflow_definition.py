@@ -31,6 +31,7 @@ class WorkflowTransitionConfig:
     to_state: str
     action: str
     trigger: TriggerKind = "automatic"
+    parallel_group: str = ""
     description: str = ""
     condition: str = ""
     gate: str = ""
@@ -88,6 +89,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
         states={
             "todo": WorkflowStateConfig("Issue is eligible for Symphony dispatch."),
             "claimed": WorkflowStateConfig("Issue has been claimed and labeled as working."),
+            "associated_pr_checked": WorkflowStateConfig("Durable issue-to-PR bookkeeping has been checked."),
             "workspace_ready": WorkflowStateConfig("An isolated workspace has been prepared."),
             "setup_complete": WorkflowStateConfig("Configured setup steps have completed."),
             "worker_complete": WorkflowStateConfig("Codex has produced a durable worker result."),
@@ -95,16 +97,11 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 "Human review is required before GitHub side effects.", gate="review"
             ),
             "pr_ready": WorkflowStateConfig("A draft pull request exists and is waiting for merge."),
-            "pr_checked": WorkflowStateConfig("Latest pull request metadata has been fetched."),
-            "merge_checked": WorkflowStateConfig("Mergeability and conflict status have been checked."),
-            "ci_checked": WorkflowStateConfig("Pull request CI status has been checked."),
-            "ci_fix_complete": WorkflowStateConfig(
-                "Codex has prepared a CI fix that needs human review.", gate="review_ci_fix"
-            ),
-            "review_comments_checked": WorkflowStateConfig("Pull request review comments have been fetched."),
-            "review_comments_addressed": WorkflowStateConfig(
-                "Codex has addressed pull request comments and needs human review.",
-                gate="review_comment_fix",
+            "pr_refreshed": WorkflowStateConfig("Latest pull request metadata has been fetched."),
+            "pr_checks_complete": WorkflowStateConfig("CI, PR comments, and mergeability have been checked."),
+            "pr_follow_up_complete": WorkflowStateConfig(
+                "Codex has addressed pull request feedback and needs human review.",
+                gate="review_pr_feedback",
             ),
             "pr_waiting": WorkflowStateConfig(
                 "Pull request has no immediate Symphony follow-up and is waiting for external activity.",
@@ -126,14 +123,41 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "Do not alter labels unrelated to Symphony state.",
                 ],
             ),
-            "allocate_workspace": WorkflowTransitionConfig(
+            "find_issue_pull_requests": WorkflowTransitionConfig(
                 from_state="claimed",
+                to_state="associated_pr_checked",
+                action="github.find_issue_pull_requests",
+                description="Find pull requests durably associated with this issue.",
+                retry_limit=1,
+                outputs={
+                    "has_pull_request": "artifact.pull_request.exists",
+                    "pull_request_count": "artifact.pull_request.count",
+                    "pull_requests": "artifact.pull_request.associated",
+                    "pull_request_number": "artifact.pull_request.number",
+                    "pull_request_url": "artifact.pull_request.url",
+                    "pull_request_title": "artifact.pull_request.title",
+                    "pull_request_head_ref": "artifact.pull_request.head_ref",
+                    "pull_request_head_sha": "artifact.pull_request.head_sha",
+                    "pull_request_source_ref": "artifact.pull_request.source_ref",
+                },
+                guidance=[
+                    "Trust only DB bookkeeping or the exact Symphony issue-link marker in the PR body.",
+                    "Ignore incidental issue mentions to avoid false positive associations.",
+                ],
+            ),
+            "allocate_workspace": WorkflowTransitionConfig(
+                from_state="associated_pr_checked",
                 to_state="workspace_ready",
                 action="workspace.allocate",
                 description="Create the per-attempt workspace.",
                 retry_limit=1,
+                inputs={
+                    "branch": "artifact.pull_request.head_ref",
+                    "source_ref": "artifact.pull_request.source_ref",
+                },
                 guidance=[
                     "Prefer isolated worktrees so concurrent workers do not share a checkout.",
+                    "When an associated PR exists, resume from that PR branch.",
                     "Use deterministic paths and branch names that are easy to inspect.",
                 ],
             ),
@@ -153,7 +177,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="worker_complete",
                 action="codex.research_issue",
                 description="Use Codex to draft a research or support answer.",
-                condition='task.type == "research"',
+                condition='task.type == "research" and not pull_request.exists',
                 retry_limit=1,
                 guidance=[
                     "Draft a concise support answer in the user's voice.",
@@ -166,12 +190,108 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="worker_complete",
                 action="codex.fix_issue",
                 description="Use Codex to implement a code change.",
-                condition='task.type == "code"',
+                condition='task.type == "code" and not pull_request.exists',
                 retry_limit=1,
                 guidance=[
                     "Keep the code change focused on the issue.",
                     "Prefer narrow unit tests before broader integration tests.",
                     "Run a review pass after implementation when the workflow asks for it.",
+                ],
+            ),
+            "check_pr_ci": WorkflowTransitionConfig(
+                from_state="setup_complete",
+                to_state="pr_checks_complete",
+                action="github.fetch_ci_status",
+                parallel_group="initial_pr_checks",
+                description="Fetch current CI status for the associated pull request.",
+                condition="pull_request.exists",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={
+                    "failed_checks": "artifact.ci.failed_checks",
+                    "checks": "artifact.ci.checks",
+                    "state": "artifact.ci.state",
+                    "conclusion": "artifact.ci.conclusion",
+                },
+                guidance=[
+                    "Capture both failed checks and the full check list for follow-up workers.",
+                ],
+            ),
+            "check_pr_comments": WorkflowTransitionConfig(
+                from_state="setup_complete",
+                to_state="pr_checks_complete",
+                action="github.fetch_pr_review_comments",
+                parallel_group="initial_pr_checks",
+                description="Fetch review-body and inline comments for the associated pull request.",
+                condition="pull_request.exists",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={"comments": "artifact.review_comments.comments"},
+                guidance=[
+                    "Keep review-body comments and inline comments together for the worker.",
+                ],
+            ),
+            "check_pr_mergeability": WorkflowTransitionConfig(
+                from_state="setup_complete",
+                to_state="pr_checks_complete",
+                action="github.detect_merge_conflicts",
+                parallel_group="initial_pr_checks",
+                description="Detect merge conflicts for the associated pull request.",
+                condition="pull_request.exists",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={
+                    "has_conflicts": "artifact.pull_request.has_conflicts",
+                    "mergeable": "artifact.pull_request.mergeable",
+                    "mergeable_state": "artifact.pull_request.mergeable_state",
+                    "head_sha": "artifact.pull_request.head_sha",
+                },
+                guidance=[
+                    "Treat GitHub mergeability as a snapshot that can change after new commits.",
+                ],
+            ),
+            "address_pr_feedback": WorkflowTransitionConfig(
+                from_state="pr_checks_complete",
+                to_state="pr_follow_up_complete",
+                action="codex.address_pr_feedback",
+                description="Ask Codex to address PR feedback from CI, comments, and mergeability.",
+                condition="pull_request.needs_follow_up",
+                retry_limit=1,
+                inputs={
+                    "pull_request_number": "artifact.pull_request.number",
+                    "failed_checks": "artifact.ci.failed_checks",
+                    "checks": "artifact.ci.checks",
+                    "comments": "artifact.review_comments.comments",
+                    "has_conflicts": "artifact.pull_request.has_conflicts",
+                    "mergeable_state": "artifact.pull_request.mergeable_state",
+                },
+                guidance=[
+                    "Address only the PR feedback captured in workflow artifacts.",
+                    "Keep the update focused and preserve the original issue intent.",
+                    "Prefer the narrowest local test that validates the change.",
+                ],
+            ),
+            "push_pr_feedback_fix": WorkflowTransitionConfig(
+                from_state="pr_follow_up_complete",
+                to_state="pr_waiting",
+                action="github.push_pr_update",
+                trigger="human",
+                gate="review_pr_feedback",
+                description="Review and push the PR feedback fix to the existing pull request branch.",
+                retry_limit=1,
+                guidance=[
+                    "Let the human inspect the follow-up fix before pushing it to GitHub.",
+                ],
+            ),
+            "wait_existing_pr": WorkflowTransitionConfig(
+                from_state="pr_checks_complete",
+                to_state="pr_waiting",
+                action="workflow.noop",
+                description="Wait when the associated PR has no current Symphony follow-up.",
+                condition="not pull_request.needs_follow_up",
+                retry_limit=1,
+                guidance=[
+                    "Stop automatic work until a human asks Symphony to check the pull request again.",
                 ],
             ),
             "request_review": WorkflowTransitionConfig(
@@ -212,30 +332,46 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "pull_request_number": "artifact.pull_request.number",
                     "pull_request_url": "artifact.pull_request.url",
                     "pull_request_title": "artifact.pull_request.title",
+                    "head_ref": "artifact.pull_request.head_ref",
+                    "head_sha": "artifact.pull_request.head_sha",
                 },
                 guidance=[
                     "Let the human edit the PR title and description before creation.",
                     "Keep the PR description clear, succinct, and linked to the GitHub issue.",
                 ],
             ),
-            "refresh_pull_request": WorkflowTransitionConfig(
+            "wait_created_pr": WorkflowTransitionConfig(
                 from_state="pr_ready",
-                to_state="pr_checked",
+                to_state="pr_waiting",
+                action="workflow.noop",
+                description="Wait for external PR activity after creating a draft pull request.",
+                retry_limit=1,
+                guidance=[
+                    "Do not immediately reprocess a freshly created draft PR.",
+                    "Wait for CI, review, or an explicit human check.",
+                ],
+            ),
+            "check_pr_again": WorkflowTransitionConfig(
+                from_state="pr_waiting",
+                to_state="pr_refreshed",
                 action="github.fetch_pull_request",
-                description="Fetch the latest pull request metadata.",
+                trigger="human",
+                gate="check_pr_again",
+                description="Manually check the pull request again for merge, CI, or review changes.",
                 retry_limit=1,
                 inputs={"pull_request_number": "artifact.pull_request.number"},
                 outputs={
                     "is_merged": "artifact.pull_request.is_merged",
+                    "head_ref": "artifact.pull_request.head_ref",
                     "head_sha": "artifact.pull_request.head_sha",
                     "state": "artifact.pull_request.state",
                 },
                 guidance=[
-                    "Use this as the durable pull request snapshot before deciding follow-up work.",
+                    "Use this when GitHub activity has changed and Symphony should reassess the PR.",
                 ],
             ),
             "cleanup_after_merge": WorkflowTransitionConfig(
-                from_state="pr_checked",
+                from_state="pr_refreshed",
                 to_state="done",
                 action="workspace.cleanup_after_merge",
                 description="Clean up the workspace after the pull request is merged.",
@@ -246,40 +382,13 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "Do not remove worktrees with uncommitted changes.",
                 ],
             ),
-            "detect_merge_conflicts": WorkflowTransitionConfig(
-                from_state="pr_checked",
-                to_state="merge_checked",
-                action="github.detect_merge_conflicts",
-                description="Check whether the pull request currently has merge conflicts.",
-                condition="not pull_request.is_merged",
-                retry_limit=1,
-                inputs={"pull_request_number": "artifact.pull_request.number"},
-                outputs={
-                    "has_conflicts": "artifact.pull_request.has_conflicts",
-                    "mergeable": "artifact.pull_request.mergeable",
-                    "mergeable_state": "artifact.pull_request.mergeable_state",
-                },
-                guidance=[
-                    "Treat GitHub mergeability as a snapshot that can change after new commits.",
-                ],
-            ),
-            "block_on_merge_conflict": WorkflowTransitionConfig(
-                from_state="merge_checked",
-                to_state="blocked",
-                action="github.apply_labels",
-                description="Block the workflow when the pull request has merge conflicts.",
-                condition="pull_request.has_conflicts",
-                retry_limit=1,
-                guidance=[
-                    "Leave the attempt blocked so a human can decide how to resolve the conflict.",
-                ],
-            ),
-            "fetch_ci_status": WorkflowTransitionConfig(
-                from_state="merge_checked",
-                to_state="ci_checked",
+            "refresh_pr_ci": WorkflowTransitionConfig(
+                from_state="pr_refreshed",
+                to_state="pr_checks_complete",
                 action="github.fetch_ci_status",
-                description="Fetch pull request CI status after mergeability is clean.",
-                condition="not pull_request.has_conflicts",
+                parallel_group="refreshed_pr_checks",
+                description="Refresh CI status for an unmerged pull request.",
+                condition="not pull_request.is_merged",
                 retry_limit=1,
                 inputs={"pull_request_number": "artifact.pull_request.number"},
                 outputs={
@@ -292,41 +401,13 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "Capture both failed checks and the full check list for follow-up workers.",
                 ],
             ),
-            "fix_ci_failures": WorkflowTransitionConfig(
-                from_state="ci_checked",
-                to_state="ci_fix_complete",
-                action="codex.fix_ci_failures",
-                description="Ask Codex to fix failing pull request CI.",
-                condition="ci.has_failures",
-                retry_limit=1,
-                inputs={
-                    "pull_request_number": "artifact.pull_request.number",
-                    "failed_checks": "artifact.ci.failed_checks",
-                    "checks": "artifact.ci.checks",
-                },
-                guidance=[
-                    "Keep the CI fix focused on the failing checks.",
-                    "Prefer the narrowest local test that reproduces the failure.",
-                ],
-            ),
-            "push_ci_fix": WorkflowTransitionConfig(
-                from_state="ci_fix_complete",
-                to_state="pr_waiting",
-                action="github.push_pr_update",
-                trigger="human",
-                gate="review_ci_fix",
-                description="Review and push the CI fix to the existing pull request branch.",
-                retry_limit=1,
-                guidance=[
-                    "Let the human inspect the CI fix before pushing it to GitHub.",
-                ],
-            ),
-            "fetch_pr_review_comments": WorkflowTransitionConfig(
-                from_state="ci_checked",
-                to_state="review_comments_checked",
+            "refresh_pr_comments": WorkflowTransitionConfig(
+                from_state="pr_refreshed",
+                to_state="pr_checks_complete",
                 action="github.fetch_pr_review_comments",
-                description="Fetch review bodies and inline review comments when CI is not failing.",
-                condition="not ci.has_failures",
+                parallel_group="refreshed_pr_checks",
+                description="Refresh review-body and inline comments for an unmerged pull request.",
+                condition="not pull_request.is_merged",
                 retry_limit=1,
                 inputs={"pull_request_number": "artifact.pull_request.number"},
                 outputs={"comments": "artifact.review_comments.comments"},
@@ -334,61 +415,23 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "Keep review-body comments and inline comments together for the worker.",
                 ],
             ),
-            "address_pr_comments": WorkflowTransitionConfig(
-                from_state="review_comments_checked",
-                to_state="review_comments_addressed",
-                action="codex.address_pr_comments",
-                description="Ask Codex to address pull request review comments.",
-                condition="review_comments.present",
-                retry_limit=1,
-                inputs={
-                    "pull_request_number": "artifact.pull_request.number",
-                    "comments": "artifact.review_comments.comments",
-                },
-                guidance=[
-                    "Address only the review comments provided in the workflow artifact.",
-                    "Keep the original issue fix focused.",
-                ],
-            ),
-            "push_review_comment_fix": WorkflowTransitionConfig(
-                from_state="review_comments_addressed",
-                to_state="pr_waiting",
-                action="github.push_pr_update",
-                trigger="human",
-                gate="review_comment_fix",
-                description="Review and push the PR comment fix to the existing branch.",
-                retry_limit=1,
-                guidance=[
-                    "Let the human inspect the comment fix before pushing it to GitHub.",
-                ],
-            ),
-            "wait_for_pr_activity": WorkflowTransitionConfig(
-                from_state="review_comments_checked",
-                to_state="pr_waiting",
-                action="workflow.noop",
-                description="Wait when CI is passing and there are no review comments to address.",
-                condition="not review_comments.present",
-                retry_limit=1,
-                guidance=[
-                    "Stop automatic work until a human asks Symphony to check the pull request again.",
-                ],
-            ),
-            "check_pr_again": WorkflowTransitionConfig(
-                from_state="pr_waiting",
-                to_state="pr_checked",
-                action="github.fetch_pull_request",
-                trigger="human",
-                gate="check_pr_again",
-                description="Manually check the pull request again for merge, CI, or review changes.",
+            "refresh_pr_mergeability": WorkflowTransitionConfig(
+                from_state="pr_refreshed",
+                to_state="pr_checks_complete",
+                action="github.detect_merge_conflicts",
+                parallel_group="refreshed_pr_checks",
+                description="Refresh mergeability for an unmerged pull request.",
+                condition="not pull_request.is_merged",
                 retry_limit=1,
                 inputs={"pull_request_number": "artifact.pull_request.number"},
                 outputs={
-                    "is_merged": "artifact.pull_request.is_merged",
+                    "has_conflicts": "artifact.pull_request.has_conflicts",
+                    "mergeable": "artifact.pull_request.mergeable",
+                    "mergeable_state": "artifact.pull_request.mergeable_state",
                     "head_sha": "artifact.pull_request.head_sha",
-                    "state": "artifact.pull_request.state",
                 },
                 guidance=[
-                    "Use this when GitHub activity has changed and Symphony should reassess the PR.",
+                    "Treat GitHub mergeability as a snapshot that can change after new commits.",
                 ],
             ),
             "mark_blocked": WorkflowTransitionConfig(
@@ -478,6 +521,7 @@ def validate_workflow_definition(workflow: WorkflowDefinitionConfig) -> list[str
             errors.append(f"workflow state '{state_name}' must set terminal = true.")
     for transition_name, transition in workflow.transitions.items():
         errors.extend(_transition_errors(transition_name, transition, workflow.states, terminal_states))
+    errors.extend(_parallel_group_errors(workflow.transitions))
     errors.extend(_unreachable_state_errors(workflow))
     return errors
 
@@ -527,6 +571,7 @@ def _transition_from_dict(name: str, data: Any) -> WorkflowTransitionConfig:
         to_state=_required_str(table, "to_state", f"workflow.transitions.{name}"),
         action=_required_str(table, "action", f"workflow.transitions.{name}"),
         trigger=_trigger_kind(_str_value(table, "trigger", "automatic")),
+        parallel_group=_str_value(table, "parallel_group", ""),
         description=_str_value(table, "description", ""),
         condition=_str_value(table, "condition", ""),
         gate=_str_value(table, "gate", ""),
@@ -588,6 +633,13 @@ def _transition_errors(
         errors.append(f"workflow.transitions.{name}.trigger must be 'automatic' or 'human'.")
     if transition.trigger == "human" and not transition.gate:
         errors.append(f"workflow.transitions.{name}.gate is required for human transitions.")
+    if transition.parallel_group:
+        if not NAME_RE.match(transition.parallel_group):
+            errors.append(f"workflow.transitions.{name}.parallel_group must use a valid workflow name.")
+        if transition.trigger != "automatic":
+            errors.append(
+                f"workflow.transitions.{name}.parallel_group is only supported for automatic transitions."
+            )
     if transition.from_state in terminal_states:
         errors.append(f"workflow.transitions.{name}.from_state must not be terminal.")
     if transition.retry_limit < 0:
@@ -610,6 +662,25 @@ def _mapping_errors(
         f"workflow.transitions.{transition_name}.{mapping_name}.{field} is not valid for this primitive."
         for field in unknown
     ]
+
+
+def _parallel_group_errors(transitions: dict[str, WorkflowTransitionConfig]) -> list[str]:
+    errors: list[str] = []
+    grouped: dict[str, list[tuple[str, WorkflowTransitionConfig]]] = {}
+    for name, transition in transitions.items():
+        if transition.parallel_group:
+            grouped.setdefault(transition.parallel_group, []).append((name, transition))
+    for group, members in grouped.items():
+        if len(members) < 2:
+            errors.append(f"workflow parallel_group '{group}' must include at least two transitions.")
+            continue
+        from_states = {transition.from_state for _, transition in members}
+        to_states = {transition.to_state for _, transition in members}
+        if len(from_states) != 1 or len(to_states) != 1:
+            errors.append(
+                f"workflow parallel_group '{group}' transitions must share the same from_state and to_state."
+            )
+    return errors
 
 
 def _unreachable_state_errors(workflow: WorkflowDefinitionConfig) -> list[str]:

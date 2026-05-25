@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -35,6 +36,8 @@ from .workflow_engine import (
     WorkflowEngine,
     WorkflowEngineError,
     WorkflowExecutionContext,
+    WorkflowTransitionBatch,
+    WorkflowTransitionMatch,
     transition_retry_available,
 )
 from .worktree import WorktreeError, WorktreeManager
@@ -56,6 +59,8 @@ class OrchestratorGitHubClient(Protocol):
         repo: str,
         pull_request_number: int,
     ) -> list[GitHubPullRequestReviewComment]: ...
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]: ...
 
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None: ...
 
@@ -94,6 +99,21 @@ class WorkflowAdvanceResult:
     current_state: str
     ran_actions: int
     stop_reason: str
+
+
+@dataclass(frozen=True)
+class WorkflowActionExecution:
+    action: WorkflowActionRuntime | None
+    match: WorkflowTransitionMatch
+    output: dict[str, Any]
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class WorkflowParallelBatchResult:
+    completed: bool
+    ran_actions: int
+    outputs: dict[str, dict[str, Any]]
 
 
 def load_and_record_workflow(
@@ -323,7 +343,10 @@ class Orchestrator:
         worker_id = str(attempt["worker_id"] or f"worker-{attempt_id}-{uuid.uuid4().hex[:8]}")
         instance_id = self._workflow_instance_id_for_attempt(
             attempt,
-            initial_state=self._transition_from_state("allocate_workspace", fallback="claimed"),
+            initial_state=self._transition_from_state(
+                "find_issue_pull_requests",
+                fallback=self._transition_from_state("allocate_workspace", fallback="claimed"),
+            ),
         )
         self.store.start_attempt(
             attempt_id,
@@ -342,7 +365,13 @@ class Orchestrator:
         try:
             result = self._advance_workflow_instance(
                 instance_id,
-                allowed_side_effects={"workspace_write", "codex_worker", "github_write", "none"},
+                allowed_side_effects={
+                    "github_read",
+                    "workspace_write",
+                    "codex_worker",
+                    "github_write",
+                    "none",
+                },
             )
             if result.current_state in self.config.workflow.terminal_states:
                 self.store.finish_attempt(attempt_id, result.current_state, result.current_state)
@@ -458,65 +487,208 @@ class Orchestrator:
                 return WorkflowAdvanceResult(current_state, ran_actions, "terminal")
             context = self._workflow_context(instance)
             try:
-                match = engine.single_transition(
+                batch = engine.automatic_batch(
                     from_state=current_state,
-                    trigger="automatic",
                     context=context,
                 )
             except WorkflowEngineError as exc:
                 raise OrchestratorError(str(exc)) from exc
-            if match is None:
+            if batch is None:
                 opened = self._open_human_gates(instance_id, current_state, context)
                 return WorkflowAdvanceResult(
                     current_state,
                     ran_actions,
                     "human_gate" if opened else "no_transition",
                 )
+            if not self._batch_side_effects_allowed(batch, allowed_side_effects):
+                return WorkflowAdvanceResult(current_state, ran_actions, "side_effect_not_allowed")
+            if batch.is_parallel:
+                result = self._run_parallel_batch(instance, batch)
+                ran_actions += result.ran_actions
+                if not result.completed:
+                    continue
+                self._transition_parallel_batch(instance, batch, result.outputs)
+                continue
+            match = batch.transitions[0]
+            if self._run_single_automatic_transition(instance, match):
+                ran_actions += 1
+
+    def _batch_side_effects_allowed(
+        self,
+        batch: WorkflowTransitionBatch,
+        allowed_side_effects: set[PrimitiveSideEffect] | None,
+    ) -> bool:
+        if allowed_side_effects is None:
+            return True
+        for match in batch.transitions:
             primitive = DEFAULT_ACTION_REGISTRY.get(match.transition.action)
             if primitive is None:
                 raise OrchestratorError(f"Unknown primitive: {match.transition.action}")
-            if allowed_side_effects is not None and primitive.side_effect not in allowed_side_effects:
-                return WorkflowAdvanceResult(current_state, ran_actions, "side_effect_not_allowed")
-            checkpoint = self._succeeded_workflow_action(instance, match.name, match.transition)
+            if primitive.side_effect not in allowed_side_effects:
+                return False
+        return True
+
+    def _run_single_automatic_transition(
+        self,
+        instance: sqlite3.Row,
+        match: WorkflowTransitionMatch,
+    ) -> bool:
+        checkpoint = self._succeeded_workflow_action(instance, match.name, match.transition)
+        if checkpoint is not None:
+            checkpoint_action, output = checkpoint
+            self._transition_workflow_action(
+                checkpoint_action,
+                status=self._workflow_status_for_state(match.transition.to_state),
+                data=output,
+            )
+            self._record_workflow_artifacts(checkpoint_action, match.transition, output)
+            return False
+        action_input = self._workflow_action_input(instance, transition=match.transition)
+        action = self._start_workflow_action(
+            int(instance["id"]),
+            attempt_id=_optional_int(instance["attempt_id"]),
+            transition_name=match.name,
+            input_data=action_input,
+        )
+        try:
+            outcome = self.primitives.execute(
+                self._primitive_context(
+                    instance,
+                    match.name,
+                    match.transition,
+                    input_data=action_input,
+                )
+            )
+        except PrimitiveExecutionError as exc:
+            self._finish_workflow_action(action, "failed", output_data=exc.output, error=str(exc))
+            return False
+        except Exception as exc:
+            self._finish_workflow_action(action, "failed", error=str(exc))
+            return False
+        self._finish_workflow_action(action, "succeeded", output_data=outcome.output)
+        self._transition_workflow_action(
+            action,
+            status=self._workflow_status_for_state(match.transition.to_state),
+            data=outcome.output,
+        )
+        self._record_workflow_artifacts(action, match.transition, outcome.output)
+        return True
+
+    def _run_parallel_batch(
+        self,
+        instance: sqlite3.Row,
+        batch: WorkflowTransitionBatch,
+    ) -> WorkflowParallelBatchResult:
+        outputs: dict[str, dict[str, Any]] = {}
+        pending: list[tuple[WorkflowTransitionMatch, WorkflowActionRuntime | None, dict[str, Any]]] = []
+        for match in batch.transitions:
+            checkpoint = self._succeeded_workflow_action(
+                instance,
+                match.name,
+                match.transition,
+                consuming_transition_names=[match.name, batch.name],
+            )
             if checkpoint is not None:
                 checkpoint_action, output = checkpoint
-                self._transition_workflow_action(
-                    checkpoint_action,
-                    status=self._workflow_status_for_state(match.transition.to_state),
-                    data=output,
-                )
                 self._record_workflow_artifacts(checkpoint_action, match.transition, output)
+                outputs[match.name] = output
                 continue
             action_input = self._workflow_action_input(instance, transition=match.transition)
             action = self._start_workflow_action(
-                instance_id,
+                int(instance["id"]),
                 attempt_id=_optional_int(instance["attempt_id"]),
                 transition_name=match.name,
                 input_data=action_input,
             )
-            try:
-                outcome = self.primitives.execute(
-                    self._primitive_context(
-                        instance,
-                        match.name,
-                        match.transition,
-                        input_data=action_input,
+            pending.append((match, action, action_input))
+
+        failures = 0
+        ran_actions = 0
+        with ThreadPoolExecutor(max_workers=max(len(pending), 1)) as executor:
+            futures = {
+                executor.submit(
+                    self._execute_workflow_action, instance, match, action, action_input
+                ): match.name
+                for match, action, action_input in pending
+            }
+            for future in as_completed(futures):
+                execution = future.result()
+                if execution.error:
+                    failures += 1
+                    self._finish_workflow_action(
+                        execution.action,
+                        "failed",
+                        output_data=execution.output,
+                        error=execution.error,
                     )
+                    continue
+                ran_actions += 1
+                outputs[execution.match.name] = execution.output
+                self._finish_workflow_action(execution.action, "succeeded", output_data=execution.output)
+                self._record_workflow_artifacts(
+                    execution.action,
+                    execution.match.transition,
+                    execution.output,
                 )
-            except PrimitiveExecutionError as exc:
-                self._finish_workflow_action(action, "failed", output_data=exc.output, error=str(exc))
-                continue
-            except Exception as exc:
-                self._finish_workflow_action(action, "failed", error=str(exc))
-                continue
-            self._finish_workflow_action(action, "succeeded", output_data=outcome.output)
-            self._transition_workflow_action(
-                action,
-                status=self._workflow_status_for_state(match.transition.to_state),
-                data=outcome.output,
+        return WorkflowParallelBatchResult(
+            completed=failures == 0 and len(outputs) == len(batch.transitions),
+            ran_actions=ran_actions,
+            outputs=outputs,
+        )
+
+    def _execute_workflow_action(
+        self,
+        instance: sqlite3.Row,
+        match: WorkflowTransitionMatch,
+        action: WorkflowActionRuntime | None,
+        action_input: dict[str, Any],
+    ) -> WorkflowActionExecution:
+        try:
+            outcome = self.primitives.execute(
+                self._primitive_context(
+                    instance,
+                    match.name,
+                    match.transition,
+                    input_data=action_input,
+                )
             )
-            self._record_workflow_artifacts(action, match.transition, outcome.output)
-            ran_actions += 1
+        except PrimitiveExecutionError as exc:
+            return WorkflowActionExecution(action, match, exc.output, str(exc))
+        except Exception as exc:
+            return WorkflowActionExecution(action, match, {}, str(exc))
+        return WorkflowActionExecution(action, match, outcome.output)
+
+    def _transition_parallel_batch(
+        self,
+        instance: sqlite3.Row,
+        batch: WorkflowTransitionBatch,
+        outputs: dict[str, dict[str, Any]],
+    ) -> None:
+        now_state = str(instance["current_state"])
+        status = self._workflow_status_for_state(batch.to_state)
+        try:
+            self.store.transition_workflow_instance(
+                int(instance["id"]),
+                workflow_version_id=self.workflow_version_id,
+                transition_name=batch.name,
+                action_name="workflow.parallel",
+                trigger="automatic",
+                from_state=now_state,
+                to_state=batch.to_state,
+                status=status,
+                data={"parallel_group": batch.name, "outputs": outputs},
+            )
+        except ValueError as exc:
+            attempt_id = _optional_int(instance["attempt_id"])
+            if attempt_id is not None:
+                self.store.record_error(
+                    attempt_id,
+                    phase="workflow",
+                    error_type="WorkflowRuntimeError",
+                    message=str(exc),
+                    recoverable=True,
+                )
+            raise OrchestratorError(str(exc)) from exc
 
     def _workflow_context(self, instance: sqlite3.Row) -> WorkflowExecutionContext:
         return WorkflowExecutionContext(
@@ -760,9 +932,19 @@ class Orchestrator:
         instance: sqlite3.Row,
         transition_name: str,
         transition: WorkflowTransitionConfig,
+        *,
+        consuming_transition_names: list[str] | None = None,
     ) -> tuple[WorkflowActionRuntime, dict[str, Any]] | None:
         row = self.store.latest_succeeded_workflow_action_run(int(instance["id"]), transition_name)
         if not row:
+            return None
+        completed_at = str(row["completed_at"] or "")
+        transition_names = consuming_transition_names or [transition_name]
+        if self.store.workflow_transition_exists_after(
+            int(instance["id"]),
+            transition_names,
+            completed_at,
+        ):
             return None
         return (
             WorkflowActionRuntime(

@@ -512,13 +512,25 @@ those primitives are composed into automatic transitions and human-gated steps.
   workflow now fetches PR metadata, detects merge conflicts, checks CI, feeds
   failing checks to Codex, fetches review/inline comments together, feeds review
   comments to Codex, and uses human gates before pushing follow-up fixes.
+- [x] Add durable issue-to-PR association and parallel PR health checks.
+  When an issue is picked up, Symphony first finds associated PRs using
+  database bookkeeping plus an exact hidden PR-description marker of the form
+  `symphony-dbcli:issue-link=<issue-url>`. Incidental issue mentions are not
+  trusted. If a PR is found, the workflow allocates the PR branch, then fans out
+  CI status, review/inline comments, and mergeability checks in parallel. The
+  fan-in step stores all outputs as workflow artifacts and either launches one
+  combined Codex PR-feedback task or waits behind the next human gate when
+  nothing needs action.
 - [x] Add fixture workflows under the e2e harness for fast iteration: code
   happy path, research answer review, research-to-code follow-up, PR review
   comments addressed by Codex, and CI failure fixed by Codex.
   Progress: the e2e harness exposes named scenarios for each fixture workflow
   shape so local and GitHub-backed runs can select them quickly from the CLI;
   follow-up scenarios queue code tasks or run the relevant Codex PR/CI
-  primitive after the draft PR path.
+  primitive after the draft PR path. It also includes
+  `associated_pr_parallel_checks`, which pre-creates a marker-linked PR and
+  review comment so the full PR-discovery, parallel-check, and combined
+  PR-feedback path can be exercised against the fixture repository.
 - [x] Add end-to-end tests that execute workflow files against
   `amjith/symphony-dbcli-e2e-fixture` and assert state transitions, stored
   artifacts, labels, comments, draft PRs, and cleanup behavior.

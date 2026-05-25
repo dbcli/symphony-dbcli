@@ -33,6 +33,9 @@ class GitHubReviewClient(Protocol):
     def push_branch(self, *, repo: str, worktree_path: str, branch: str) -> None: ...
 
 
+ISSUE_LINK_MARKER_PREFIX = "symphony-dbcli:issue-link="
+
+
 @dataclass(frozen=True)
 class PostedComment:
     url: str
@@ -118,7 +121,7 @@ class ReviewActions:
         result_body = str(result["body"]) if result else ""
         content = build_draft_pr_content(repo, issue_number, result_body)
         pr_title = title.strip() or content.title
-        pr_body = body.strip() or content.body
+        pr_body = ensure_issue_link_marker(body.strip() or content.body, repo, issue_number)
         pr = self.github.create_pull_request(
             repo=repo,
             title=pr_title,
@@ -135,6 +138,16 @@ class ReviewActions:
             pr.title,
             state=pr.state,
             merged_at=pr.merged_at,
+        )
+        self.store.record_issue_pull_request_link(
+            repo=repo,
+            issue_number=issue_number,
+            pull_request_number=pr.number,
+            pull_request_url=pr.url,
+            pull_request_title=pr.title,
+            state=pr.state,
+            link_source="created_by_symphony",
+            marker=issue_link_marker(repo, issue_number),
         )
         self.store.update_attempt_outcome(attempt_id, "draft_pr_created")
         self.store.record_timeline_event(
@@ -282,6 +295,8 @@ def build_draft_pr_content(repo: str, issue_number: int, worker_result: str) -> 
         "## Issue",
         "",
         f"Fixes {issue_url}",
+        "",
+        issue_link_marker(repo, issue_number),
     ]
     if verification_lines:
         body_parts.extend(
@@ -301,6 +316,21 @@ def build_draft_pr_content(repo: str, issue_number: int, worker_result: str) -> 
 
 def build_draft_pr_body(repo: str, issue_number: int, worker_result: str) -> str:
     return build_draft_pr_content(repo, issue_number, worker_result).body
+
+
+def issue_link_marker(repo: str, issue_number: int) -> str:
+    return f"<!-- {ISSUE_LINK_MARKER_PREFIX}https://github.com/{repo}/issues/{issue_number} -->"
+
+
+def ensure_issue_link_marker(body: str, repo: str, issue_number: int) -> str:
+    marker = issue_link_marker(repo, issue_number)
+    if marker in body:
+        return body
+    return body.rstrip() + "\n\n" + marker + "\n"
+
+
+def body_links_issue(body: str, repo: str, issue_number: int) -> bool:
+    return issue_link_marker(repo, issue_number) in body
 
 
 def _summary_lines_from_worker_result(worker_result: str) -> list[str]:

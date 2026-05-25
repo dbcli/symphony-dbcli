@@ -104,6 +104,30 @@ def default_action_registry() -> ActionRegistry:
             output_fields=frozenset({"dry_run", "labels_added", "labels_removed"}),
         ),
         PrimitiveSpec(
+            name="github.find_issue_pull_requests",
+            input_type="GitHubIssueReference",
+            output_type="AssociatedPullRequestList",
+            side_effect="github_read",
+            idempotency_strategy="issue_snapshot",
+            automatic_allowed=True,
+            human_gate_allowed=False,
+            description="Find pull requests durably associated with an issue by DB link or exact PR body marker.",
+            input_fields=frozenset({"attempt_id", "repo", "issue_number"}),
+            output_fields=frozenset(
+                {
+                    "has_pull_request",
+                    "pull_request_count",
+                    "pull_requests",
+                    "pull_request_number",
+                    "pull_request_url",
+                    "pull_request_title",
+                    "pull_request_head_ref",
+                    "pull_request_head_sha",
+                    "pull_request_source_ref",
+                }
+            ),
+        ),
+        PrimitiveSpec(
             name="github.create_draft_pr",
             input_type="DraftPullRequestRequest",
             output_type="PullRequestSnapshot",
@@ -122,6 +146,8 @@ def default_action_registry() -> ActionRegistry:
                     "pull_request_title",
                     "state",
                     "merged_at",
+                    "head_ref",
+                    "head_sha",
                 }
             ),
         ),
@@ -177,6 +203,7 @@ def default_action_registry() -> ActionRegistry:
                     "merged_at",
                     "is_merged",
                     "head_sha",
+                    "head_ref",
                 }
             ),
         ),
@@ -297,6 +324,33 @@ def default_action_registry() -> ActionRegistry:
             ),
         ),
         PrimitiveSpec(
+            name="codex.address_pr_feedback",
+            input_type="CodexPullRequestFeedbackTask",
+            output_type="WorkerResult",
+            side_effect="codex_worker",
+            idempotency_strategy="attempt_transition",
+            automatic_allowed=True,
+            human_gate_allowed=True,
+            description="Ask Codex to address combined PR feedback from CI, comments, and merge conflicts.",
+            input_fields=frozenset(
+                {
+                    "attempt_id",
+                    "repo",
+                    "issue_number",
+                    "worktree_path",
+                    "pull_request_number",
+                    "failed_checks",
+                    "checks",
+                    "comments",
+                    "has_conflicts",
+                    "mergeable_state",
+                }
+            ),
+            output_fields=frozenset(
+                {"thread_id", "turn_count", "duration_ms", "message_chars", "result_type"}
+            ),
+        ),
+        PrimitiveSpec(
             name="workspace.allocate",
             input_type="WorkspaceAllocationRequest",
             output_type="WorkspaceAllocationResult",
@@ -305,7 +359,7 @@ def default_action_registry() -> ActionRegistry:
             automatic_allowed=True,
             human_gate_allowed=False,
             description="Allocate an isolated worktree or clone for an attempt.",
-            input_fields=frozenset({"repo", "issue_number", "attempt_id"}),
+            input_fields=frozenset({"repo", "issue_number", "attempt_id", "branch", "source_ref"}),
             output_fields=frozenset({"base_repo_path", "worktree_path", "branch", "commit_sha"}),
         ),
         PrimitiveSpec(
