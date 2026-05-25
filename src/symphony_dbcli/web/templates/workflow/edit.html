@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="panel">
+  <form class="stacked-form" method="post" action="/workflow/edit">
+    <label for="workflow-request">Change Request</label>
+    <textarea id="workflow-request" name="request" rows="5"></textarea>
+    <button type="submit">Generate Proposal</button>
+  </form>
+</section>
+{% endblock %}
+

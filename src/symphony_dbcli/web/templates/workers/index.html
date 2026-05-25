@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="panel">
+  <div class="runtime-grid">
+    <div>
+      <span class="kicker">Automatic dispatch</span>
+      <strong>{{ "On" if runtime.start_queued_work_automatically else "Off" }}</strong>
+    </div>
+    <div>
+      <span class="kicker">Workspace</span>
+      <strong>{{ runtime.workspace_strategy }}</strong>
+    </div>
+    <div>
+      <span class="kicker">Root</span>
+      <code>{{ runtime.workspace_root }}</code>
+    </div>
+  </div>
+</section>
+{% endblock %}
+

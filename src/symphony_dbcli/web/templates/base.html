@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }} · Symphony DBCLI</title>
+  <link rel="stylesheet" href="/web-static/web.css" />
+  <script src="/web-static/web.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/board">Symphony DBCLI</a>
+    <nav class="main-nav" aria-label="Dashboard">
+      {% for item in nav_items %}
+      <a class="{{ 'is-active' if item.key == active else '' }}" href="{{ item.href }}">{{ item.label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="runtime-strip" aria-label="Runtime">
+      <span>{{ runtime.profile }}</span>
+      <span>{{ "dry run" if runtime.dry_run else "live" }}</span>
+    </div>
+  </header>
+  <main class="app-shell">
+    <div class="page-title">
+      <h1>{{ title }}</h1>
+      {% block page_actions %}{% endblock %}
+    </div>
+    {% block body %}{% endblock %}
+  </main>
+</body>
+</html>
+

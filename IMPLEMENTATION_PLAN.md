@@ -576,13 +576,14 @@ Core decisions recorded in the design:
 
 Implementation checklist:
 
-- [ ] Add FastAPI application scaffolding alongside the current dashboard.
-- [ ] Split FastAPI routers by dashboard hierarchy: board, sources, work
+- [x] Add FastAPI application scaffolding alongside the current dashboard.
+- [x] Split FastAPI routers by dashboard hierarchy: board, sources, work
   items, workers, workflow, ask, settings, and narrowly scoped JSON APIs.
 - [ ] Add SQLAlchemy 2.0 models and session/repository boundaries for new
   source/work-item data.
-- [ ] Add Alembic migration setup and migrate new schema changes through
-  Alembic.
+- [x] Add Alembic migration scaffolding.
+- [ ] Add Alembic revisions for new source/work-item schema changes as those
+  models are introduced.
 - [ ] Add HTMX and SortableJS assets for server-rendered interactive kanban
   behavior.
 - [ ] Add SQLite tables for `sources`, `source_sync_runs`, and `source_items`.
@@ -618,6 +619,14 @@ Implementation checklist:
   workflow execution.
 - [ ] Add a GitHub-backed e2e scenario for source sync through kanban activation
   and PR review/fix workflow.
+
+Progress notes:
+
+- 2026-05-24: Installed FastAPI, Uvicorn, SQLAlchemy, Alembic,
+  python-multipart, and httpx with `uv`. Added a typed FastAPI app factory,
+  route modules that match the dashboard hierarchy, separate CSS/JS assets,
+  a `serve-web` CLI command, SQLAlchemy base/session helpers, Alembic
+  scaffolding, and fast route tests.
 
 ## Durable Cross-Project Spec
 

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block page_actions %}
+<button type="button">Sync Sources</button>
+{% endblock %}
+{% block body %}
+<section class="board" aria-label="Work board">
+  {% for column in ["backlog", "todo", "in progress", "in review", "done"] %}
+  <div class="board-column">
+    <div class="column-header">
+      <h2>{{ column|title }}</h2>
+      <span>0</span>
+    </div>
+    <div class="empty-state">No items</div>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}
+

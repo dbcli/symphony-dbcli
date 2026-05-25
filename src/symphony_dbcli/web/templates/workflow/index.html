@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block page_actions %}
+<a class="button-link" href="/workflow/edit">Edit</a>
+{% endblock %}
+{% block body %}
+<section class="panel">
+  <dl class="settings-list">
+    <div>
+      <dt>Workflow File</dt>
+      <dd><code>{{ workflow_path }}</code></dd>
+    </div>
+    <div>
+      <dt>Workspace</dt>
+      <dd>{{ runtime.workspace_strategy }}</dd>
+    </div>
+  </dl>
+</section>
+{% endblock %}
+

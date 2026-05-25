@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="panel">
+  <form class="ask-form" method="get" action="/ask">
+    <label for="question">Question</label>
+    <div class="inline-form">
+      <input id="question" type="search" name="q" placeholder="Ask about workers, tasks, timing, or workflow state" />
+      <button type="submit">Ask</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
+

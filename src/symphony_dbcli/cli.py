@@ -94,6 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--no-poll", action="store_true", help="Only run the dashboard")
     serve.set_defaults(func=cmd_serve)
 
+    serve_web = subcommands.add_parser("serve-web", help="Run the FastAPI dashboard")
+    serve_web.set_defaults(func=cmd_serve_web)
+
     worker = subcommands.add_parser("worker", help="Worker commands")
     worker_sub = worker.add_subparsers(required=True)
     run = worker_sub.add_parser("run", help="Run one issue worker")
@@ -406,6 +409,20 @@ def cmd_serve(args: argparse.Namespace) -> int:
         thread = threading.Thread(target=_poll_loop, args=(args, store, dashboard_state), daemon=True)
         thread.start()
     serve_dashboard(store, config.dashboard.host, config.dashboard.port, state=dashboard_state)
+    return 0
+
+
+def cmd_serve_web(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from .web.app import create_app
+
+    config, _, store = _load_config_store_and_record(
+        args.workflow,
+        profile=_runtime_profile(args),
+    )
+    app = create_app(config, store, workflow_path=args.workflow)
+    uvicorn.run(app, host=config.dashboard.host, port=config.dashboard.port)
     return 0
 
 

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="panel">
+  <dl class="settings-list">
+    <div>
+      <dt>Profile</dt>
+      <dd>{{ runtime.profile }}</dd>
+    </div>
+    <div>
+      <dt>Dry Run</dt>
+      <dd>{{ "On" if runtime.dry_run else "Off" }}</dd>
+    </div>
+    <div>
+      <dt>Database</dt>
+      <dd><code>{{ runtime.database_path }}</code></dd>
+    </div>
+    <div>
+      <dt>Workflow</dt>
+      <dd><code>{{ workflow_path }}</code></dd>
+    </div>
+  </dl>
+</section>
+{% endblock %}
+
