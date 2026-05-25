@@ -517,6 +517,14 @@ class PrimitiveExecutor:
             )
         except ReviewActionError as exc:
             raise PrimitiveExecutionError(str(exc)) from exc
+        if context.work_item_id is not None:
+            self.work_items.record_created_pull_request(
+                work_item_id=context.work_item_id,
+                number=pull_request.number,
+                url=pull_request.url,
+                title=pull_request.title,
+                body=issue_link_marker(context.repo, context.issue_number),
+            )
         return PrimitiveOutcome(
             {
                 "pull_request_number": pull_request.number,
@@ -738,11 +746,13 @@ def _source_ref(pull_request: PullRequest) -> str:
 
 
 def _codex_task_context(context: PrimitiveContext) -> str:
+    work_item_context = _work_item_task_context(context)
     if context.transition.action == "codex.address_pr_comments":
         pull_request_number = _required_int(context.input_data, "pull_request_number")
         comments = _input_dicts(context.input_data, "comments")
         return "\n".join(
             [
+                work_item_context,
                 f"Pull request: https://github.com/{context.repo}/pull/{pull_request_number}",
                 "Address the unresolved review comments below and keep the existing issue fix focused.",
                 _format_records("Review comments", comments),
@@ -754,6 +764,7 @@ def _codex_task_context(context: PrimitiveContext) -> str:
         checks = _input_dicts(context.input_data, "checks")
         return "\n".join(
             [
+                work_item_context,
                 f"Pull request: https://github.com/{context.repo}/pull/{pull_request_number}",
                 "Inspect the failing CI checks below, fix the issue, and rerun the narrowest relevant tests.",
                 _format_records("Failed checks", failed_checks),
@@ -774,6 +785,7 @@ def _codex_task_context(context: PrimitiveContext) -> str:
         )
         return "\n".join(
             [
+                work_item_context,
                 f"Pull request: https://github.com/{context.repo}/pull/{pull_request_number}",
                 "Address the pull request feedback below in one focused update.",
                 conflict_text,
@@ -786,11 +798,23 @@ def _codex_task_context(context: PrimitiveContext) -> str:
         user_hint = str(context.input_data.get("user_hint") or context.user_hint).strip()
         return "\n".join(
             [
+                work_item_context,
                 "Perform the requested operational task and return a durable summary.",
                 f"Operator hint: {user_hint or 'none provided'}",
             ]
         ).strip()
-    return ""
+    return work_item_context
+
+
+def _work_item_task_context(context: PrimitiveContext) -> str:
+    lines: list[str] = []
+    if context.work_item_id is not None:
+        lines.append(f"Work item: #{context.work_item_id}")
+    if context.user_hint:
+        lines.append(f"Operator hint: {context.user_hint}")
+    if context.rerun_reasons:
+        lines.append("Rerun reasons: " + ", ".join(context.rerun_reasons))
+    return "\n".join(lines)
 
 
 def _codex_result_type(context: PrimitiveContext) -> str:

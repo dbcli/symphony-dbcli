@@ -14,6 +14,7 @@ from typing import Any, Protocol, cast
 
 from .actions import DEFAULT_ACTION_REGISTRY, PrimitiveSideEffect
 from .config import WorkflowConfig, WorkflowError, parse_workflow
+from .db import create_db_engine, create_session_factory
 from .github import (
     GitHubCiStatus,
     GitHubClient,
@@ -23,6 +24,7 @@ from .github import (
     PullRequest,
     PullRequestMergeStatus,
 )
+from .models import create_model_tables
 from .primitive_executor import (
     PrimitiveContext,
     PrimitiveExecutionError,
@@ -30,6 +32,7 @@ from .primitive_executor import (
     WorkflowPrimitiveExecutor,
 )
 from .store import IssueSnapshot, Store
+from .work_items import WorkItemRepository, WorkItemRunClaim
 from .worker_prompt import build_worker_prompt as build_worker_prompt
 from .workflow_definition import WorkflowTransitionConfig
 from .workflow_engine import (
@@ -172,11 +175,35 @@ class Orchestrator:
         self.workflow_version_id = workflow_version_id
         self.github = github or GitHubClient(config.github)
         self.primitives = primitives or PrimitiveExecutor(config, store, github=self.github)
+        engine = create_db_engine(store.path)
+        create_model_tables(engine)
+        self.work_items = WorkItemRepository(create_session_factory(engine))
 
     def poll_once(self) -> int:
+        if self.work_items.has_sources():
+            return int(
+                self.primitives.execute(
+                    PrimitiveContext(
+                        instance_id=0,
+                        transition_name="source.sync_all",
+                        transition=WorkflowTransitionConfig(
+                            from_state="poll",
+                            to_state="poll",
+                            action="source.sync_all",
+                        ),
+                        repo="",
+                        issue_number=0,
+                        task_type="",
+                        issue_title="",
+                    )
+                ).output["synced"]
+            )
         return int(self.primitives.fetch_issues().output["synced"])
 
     def claim_next(self) -> int | None:
+        work_item_attempt_id = self._claim_next_work_item()
+        if work_item_attempt_id is not None:
+            return work_item_attempt_id
         eligible = self.store.eligible_issues(self.config.labels.todo, self.config.labels.blocked, limit=1)
         if not eligible:
             return None
@@ -187,6 +214,20 @@ class Orchestrator:
         counts = self.store.active_attempt_counts()
         if counts.get("*", 0) >= self.config.workers.max_global:
             return 0
+        while counts.get("*", 0) < self.config.workers.max_global:
+            blocked_repos = {
+                repo
+                for repo, count in counts.items()
+                if repo != "*" and count >= self.config.workers.max_per_repo
+            }
+            attempt_id = self._claim_next_work_item(blocked_repos=blocked_repos)
+            if attempt_id is None:
+                break
+            attempt = self.store.attempt_by_id(attempt_id)
+            repo = "" if attempt is None else str(attempt["repo"])
+            counts[repo] = counts.get(repo, 0) + 1
+            counts["*"] = counts.get("*", 0) + 1
+            claimed += 1
         for issue in self.store.eligible_issues(
             self.config.labels.todo,
             self.config.labels.blocked,
@@ -309,6 +350,58 @@ class Orchestrator:
             raise
         return attempt_id
 
+    def _claim_next_work_item(self, *, blocked_repos: set[str] | None = None) -> int | None:
+        run = self.work_items.next_queued_run(blocked_repos=blocked_repos)
+        if run is None:
+            return None
+        return self._claim_work_item_run(run)
+
+    def _claim_work_item_run(self, run: WorkItemRunClaim) -> int:
+        self.store.upsert_issue(
+            IssueSnapshot(
+                repo=run.repo,
+                number=run.issue_number,
+                title=run.title,
+                url=run.source_url,
+                state="open",
+                labels=[],
+                task_type=run.task_type,
+            )
+        )
+        attempt_id = self.store.create_attempt(
+            repo=run.repo,
+            issue_number=run.issue_number,
+            task_type=run.task_type,
+            workflow_version_id=self.workflow_version_id,
+            status="queued",
+            work_item_id=run.work_item_id,
+            work_item_run_id=run.id,
+        )
+        instance_id = self.store.create_workflow_instance(
+            repo=run.repo,
+            issue_number=run.issue_number,
+            task_type=run.task_type,
+            workflow_version_id=self.workflow_version_id,
+            initial_state=self._transition_from_state(
+                "find_issue_pull_requests",
+                fallback=self._transition_from_state("allocate_workspace", fallback="claimed"),
+            ),
+            attempt_id=attempt_id,
+            work_item_id=run.work_item_id,
+            work_item_run_id=run.id,
+        )
+        assigned = self.work_items.assign_run_attempt(
+            run_id=run.id,
+            attempt_id=attempt_id,
+            workflow_instance_id=instance_id,
+        )
+        self.store.record_workflow_artifacts(
+            instance_id,
+            assigned.workflow_artifacts(),
+            workflow_version_id=self.workflow_version_id,
+        )
+        return attempt_id
+
     def run_issue(self, repo: str, issue_number: int, *, task_type: str | None = None) -> int:
         issue = self.store.issue_detail(repo, issue_number)
         if not issue:
@@ -354,6 +447,7 @@ class Orchestrator:
             pid=os.getpid(),
             max_runtime_seconds=self.config.workers.max_runtime_seconds,
         )
+        self.work_items.start_attempt_run(attempt_id)
         heartbeat = WorkerHeartbeat(
             self.store,
             worker_id,
@@ -375,9 +469,19 @@ class Orchestrator:
             )
             if result.current_state in self.config.workflow.terminal_states:
                 self.store.finish_attempt(attempt_id, result.current_state, result.current_state)
+                self.work_items.finish_attempt_run(
+                    attempt_id,
+                    status=result.current_state,
+                    outcome=result.current_state,
+                )
                 return attempt_id
             if result.stop_reason == "human_gate":
                 self.store.finish_attempt(attempt_id, "review", "needs_review")
+                self.work_items.finish_attempt_run(
+                    attempt_id,
+                    status="review",
+                    outcome="needs_review",
+                )
                 return attempt_id
             raise OrchestratorError(
                 f"Workflow stopped in state '{result.current_state}' with reason '{result.stop_reason}'."
@@ -393,6 +497,7 @@ class Orchestrator:
                 log_excerpt=traceback.format_exc(limit=8),
             )
             self.store.finish_attempt(attempt_id, "failed", "failed")
+            self.work_items.finish_attempt_run(attempt_id, status="failed", outcome="failed")
             raise
         finally:
             heartbeat.stop()
@@ -753,6 +858,8 @@ class Orchestrator:
             "issue.number": int(instance["issue_number"]),
             "task.type": str(instance["task_type"]),
         }
+        work_item_values = self._work_item_context_values(instance)
+        values.update(work_item_values)
         attempt_id = _optional_int(instance["attempt_id"])
         if attempt_id is None:
             return values
@@ -783,6 +890,7 @@ class Orchestrator:
         attempt = self.store.attempt_by_id(attempt_id) if attempt_id is not None else None
         issue = self.store.issue_detail(repo, issue_number)
         issue_title = repo if not issue else str(issue["issue"]["title"])
+        work_item_values = self._work_item_context_values(instance)
         return PrimitiveContext(
             instance_id=int(instance["id"]),
             transition_name=transition_name,
@@ -792,12 +900,29 @@ class Orchestrator:
             task_type=str(instance["task_type"]),
             issue_title=issue_title,
             attempt_id=attempt_id,
+            source_id=_optional_int(work_item_values.get("source.id")),
+            source_item_id=_optional_int(work_item_values.get("source_item.id")),
+            work_item_id=_optional_int(instance["work_item_id"]),
+            active_pr_source_item_id=_optional_int(work_item_values.get("pull_request.source_item_id")),
+            user_hint=str(work_item_values.get("work_item.user_hint") or ""),
+            rerun_reasons=_string_list(work_item_values.get("work_item.rerun_reasons")),
             base_repo_path="" if not attempt else str(attempt["base_repo_path"] or ""),
             worktree_path="" if not attempt else str(attempt["worktree_path"] or ""),
             branch="" if not attempt else str(attempt["branch"] or ""),
             commit_sha="" if not attempt else str(attempt["commit_sha"] or ""),
             input_data=input_data or {},
         )
+
+    def _work_item_context_values(self, instance: sqlite3.Row) -> dict[str, Any]:
+        work_item_id = _optional_int(instance["work_item_id"])
+        if work_item_id is None:
+            return {}
+        artifacts = self.store.workflow_artifacts(int(instance["id"]))
+        return {
+            key: value
+            for key, value in artifacts.items()
+            if key.startswith(("work_item.", "source.", "source_item.", "linked_issue.", "pull_request."))
+        }
 
     def _workflow_status_for_state(self, state: str) -> str:
         if state in self.config.workflow.terminal_states:
@@ -1073,3 +1198,15 @@ def _optional_int(value: object) -> int | None:
     if isinstance(value, str):
         return None
     raise TypeError(f"Expected integer-compatible value, got {type(value).__name__}.")
+
+
+def _string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, tuple):
+        return [str(item) for item in value]
+    if isinstance(value, str) and value:
+        return [value]
+    return []

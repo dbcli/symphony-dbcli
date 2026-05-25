@@ -78,7 +78,7 @@ class WorktreeManager:
         clone_url = f"https://github.com/{repo}.git"
 
         self._ensure_base_repo(base_repo_path, clone_url)
-        remote_ref = source_ref or self._default_remote_ref(base_repo_path)
+        remote_ref = self._resolve_source_ref(base_repo_path, source_ref)
         Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
         self._run(
             [
@@ -256,6 +256,32 @@ class WorktreeManager:
             if exists.returncode == 0:
                 return candidate
         raise WorktreeError(f"Could not find a default branch for {base_repo_path}.")
+
+    def _resolve_source_ref(self, base_repo_path: Path, source_ref: str) -> str:
+        if not source_ref:
+            return self._default_remote_ref(base_repo_path)
+        candidates = [source_ref]
+        if source_ref.startswith("origin/"):
+            candidates.append(source_ref.removeprefix("origin/"))
+        for candidate in candidates:
+            if self._ref_exists(base_repo_path, candidate):
+                return candidate
+        if source_ref.startswith("origin/"):
+            branch = source_ref.removeprefix("origin/")
+            self._run(
+                ["git", "--git-dir", str(base_repo_path), "fetch", "origin", f"{branch}:refs/heads/{branch}"],
+                check=False,
+            )
+            if self._ref_exists(base_repo_path, branch):
+                return branch
+        raise WorktreeError(f"Could not resolve source ref {source_ref!r} in {base_repo_path}.")
+
+    def _ref_exists(self, base_repo_path: Path, ref: str) -> bool:
+        result = self._run(
+            ["git", "--git-dir", str(base_repo_path), "rev-parse", "--verify", ref],
+            check=False,
+        )
+        return result.returncode == 0
 
     def _ensure_managed_worktree(self, path: Path) -> None:
         root = Path(self.config.root).resolve()

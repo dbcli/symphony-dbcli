@@ -607,13 +607,13 @@ Implementation checklist:
 - [x] Default issue-with-linked-PR and PR cards to review/fix mode.
 - [x] Implement in-review-to-in-progress reason selection with multi-select
   reasons.
-- [ ] Pivot orchestrator runtime identity to `work_item_id`.
-- [ ] Adapt workflow artifacts and input resolution to expose linked issue,
+- [x] Pivot orchestrator runtime identity to `work_item_id`.
+- [x] Adapt workflow artifacts and input resolution to expose linked issue,
   active PR, user hint, and rerun reasons.
 - [x] Add source/work-item primitives such as `source.sync`,
   `work_item.activate`, `work_item.move`, and `work_item.select_active_pr`.
 - [x] Add `codex.operations_task` and operation-summary dashboard views.
-- [ ] Update PR creation to link work item, issue, and PR in SQLite and in the
+- [x] Update PR creation to link work item, issue, and PR in SQLite and in the
   PR body marker.
 - [x] Add grouped issue/PR cards with an expandable detail view and active PR
   selector.
@@ -624,10 +624,10 @@ Implementation checklist:
 - [x] Add fast local tests for source sync, backlog-to-todo activation, and
   kanban state transitions.
 - [x] Add fast local tests for grouped cards and active PR selection.
-- [ ] Add fast local tests for work item workflow execution.
+- [x] Add fast local tests for work item workflow execution.
 - [x] Add a GitHub-backed e2e smoke scenario for source sync through kanban
   activation.
-- [ ] Extend the GitHub-backed e2e scenario through PR review/fix workflow.
+- [x] Extend the GitHub-backed e2e scenario through PR review/fix workflow.
 
 Progress notes:
 
@@ -678,6 +678,14 @@ Progress notes:
 - 2026-05-25: Added the `codex.operations_task` primitive, operations summary
   result typing, and an Operations dashboard page that lists operation work-item
   runs with links back to their work item detail pages.
+- 2026-05-25: Pivoted orchestration to claim queued `work_item_runs` before
+  legacy label-backed issues. Claims now create linked attempts and workflow
+  instances with `work_item_id`, preserve legacy attempt/worker metrics, record
+  work-item context as workflow artifacts, feed user hints and rerun reasons to
+  Codex, and move work items to review/done from worker outcomes. Draft PR
+  creation now records the Symphony issue/PR link in source tables and work-item
+  links, and the e2e harness includes a GitHub-backed associated-PR review/fix
+  scenario.
 
 ## Durable Cross-Project Spec
 

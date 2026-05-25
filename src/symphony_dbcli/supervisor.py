@@ -13,7 +13,10 @@ from typing import Protocol
 
 from .clock import parse_utc
 from .config import WorkflowConfig
+from .db import create_db_engine, create_session_factory
+from .models import create_model_tables
 from .store import Store
+from .work_items import WorkItemRepository
 
 
 class WorkerProcess(Protocol):
@@ -51,6 +54,9 @@ class WorkerSupervisor:
         self.profile = profile
         self.process_factory = process_factory or _default_process_factory
         self.processes: dict[str, WorkerProcess] = {}
+        engine = create_db_engine(store.path)
+        create_model_tables(engine)
+        self.work_items = WorkItemRepository(create_session_factory(engine))
 
     def reconcile(self, config: WorkflowConfig, workflow_version_id: int | None) -> DispatchResult:
         crashed = 0
@@ -126,6 +132,7 @@ class WorkerSupervisor:
                 worker_id,
                 max_runtime_seconds=config.workers.max_runtime_seconds,
             )
+            self.work_items.start_attempt_run(attempt_id)
             command = self._worker_command(attempt_id)
             try:
                 process = self.process_factory(command)
@@ -138,6 +145,7 @@ class WorkerSupervisor:
                     recoverable=False,
                 )
                 self.store.finish_attempt(attempt_id, "failed", "spawn_failed")
+                self.work_items.finish_attempt_run(attempt_id, status="failed", outcome="spawn_failed")
                 continue
             self.store.update_worker_pid(worker_id, process.pid)
             self.store.record_timeline_event(
@@ -189,6 +197,7 @@ class WorkerSupervisor:
         )
         if should_retry:
             self.store.requeue_attempt_for_retry(attempt_id, reason=reason)
+            self.work_items.requeue_attempt_run(attempt_id, reason=reason)
             self.store.record_timeline_event(
                 attempt_id,
                 phase="queue",
@@ -198,6 +207,7 @@ class WorkerSupervisor:
             )
         else:
             self.store.finish_attempt(attempt_id, "failed", reason)
+            self.work_items.finish_attempt_run(attempt_id, status="failed", outcome=reason)
             instance = self.store.workflow_instance_for_attempt(attempt_id)
             if instance and str(instance["status"]) == "active":
                 self.store.fail_workflow_instance(

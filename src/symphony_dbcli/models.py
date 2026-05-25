@@ -158,6 +158,8 @@ class WorkItemRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     work_item_id: Mapped[int] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), nullable=False)
+    attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    workflow_instance_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

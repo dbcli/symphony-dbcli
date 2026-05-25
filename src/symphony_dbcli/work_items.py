@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .clock import utc_now
 from .db import SessionFactory
-from .models import SourceItem, SourceItemLink, WorkItem, WorkItemLink, WorkItemRun, WorkItemStateEvent
+from .models import (
+    Source,
+    SourceItem,
+    SourceItemLink,
+    WorkItem,
+    WorkItemLink,
+    WorkItemRun,
+    WorkItemStateEvent,
+)
 
 KANBAN_STATES = ("todo", "in_progress", "in_review", "done")
 TASK_TYPES = frozenset({"research", "code", "operations"})
@@ -98,9 +107,76 @@ class OperationRunView:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class WorkItemRunClaim:
+    id: int
+    work_item_id: int
+    source_id: int
+    repo: str
+    task_type: str
+    title: str
+    user_hint: str
+    rerun_reasons: list[str]
+    primary_source_item_id: int
+    source_kind: str
+    source_number: int
+    source_url: str
+    active_pr_source_item_id: int | None
+    active_pr_number: int | None
+    active_pr_url: str
+    active_pr_title: str
+
+    @property
+    def issue_number(self) -> int:
+        return self.source_number
+
+    @property
+    def source_label(self) -> str:
+        return "PR" if self.source_kind == "pull_request" else "Issue"
+
+    def workflow_artifacts(self) -> dict[str, object]:
+        artifacts: dict[str, object] = {
+            "work_item.id": self.work_item_id,
+            "work_item.run_id": self.id,
+            "work_item.user_hint": self.user_hint,
+            "work_item.rerun_reasons": self.rerun_reasons,
+            "source.id": self.source_id,
+            "source.repo": self.repo,
+            "source_item.id": self.primary_source_item_id,
+            "source_item.kind": self.source_kind,
+            "source_item.number": self.source_number,
+            "source_item.url": self.source_url,
+            "source_item.title": self.title,
+        }
+        if self.source_kind == "issue":
+            artifacts.update(
+                {
+                    "linked_issue.source_item_id": self.primary_source_item_id,
+                    "linked_issue.number": self.source_number,
+                    "linked_issue.url": self.source_url,
+                    "linked_issue.title": self.title,
+                }
+            )
+        if self.active_pr_number is not None:
+            artifacts.update(
+                {
+                    "pull_request.exists": True,
+                    "pull_request.source_item_id": self.active_pr_source_item_id,
+                    "pull_request.number": self.active_pr_number,
+                    "pull_request.url": self.active_pr_url,
+                    "pull_request.title": self.active_pr_title,
+                }
+            )
+        return artifacts
+
+
 class WorkItemRepository:
     def __init__(self, session_factory: SessionFactory):
         self._session_factory = session_factory
+
+    def has_sources(self) -> bool:
+        with self._session_factory() as session:
+            return session.scalar(select(Source.id).limit(1)) is not None
 
     def activate_source_item(self, activation: WorkItemActivation) -> WorkItemView:
         task_type = _validated_task_type(activation.task_type)
@@ -240,6 +316,131 @@ class WorkItemRepository:
                 for run, work_item in rows
             ]
 
+    def next_queued_run(self, *, blocked_repos: set[str] | None = None) -> WorkItemRunClaim | None:
+        with self._session_factory() as session:
+            conditions = [
+                WorkItemRun.status == "queued",
+                WorkItem.disposition == "active",
+                WorkItem.state.in_(("todo", "in_progress")),
+            ]
+            if blocked_repos:
+                conditions.append(Source.repo.not_in(blocked_repos))
+            row = session.execute(
+                select(WorkItemRun, WorkItem, SourceItem, Source)
+                .join(WorkItem, WorkItemRun.work_item_id == WorkItem.id)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .join(Source, WorkItem.source_id == Source.id)
+                .where(*conditions)
+                .order_by(WorkItemRun.created_at.asc(), WorkItemRun.id.asc())
+                .limit(1)
+            ).one_or_none()
+            if row is None:
+                return None
+            run, work_item, source_item, source = row
+            active_pr = (
+                session.get(SourceItem, work_item.active_pr_source_item_id)
+                if work_item.active_pr_source_item_id
+                else None
+            )
+            return _work_item_run_claim(run, work_item, source_item, source, active_pr)
+
+    def assign_run_attempt(
+        self,
+        *,
+        run_id: int,
+        attempt_id: int,
+        workflow_instance_id: int,
+    ) -> WorkItemRunClaim:
+        now = utc_now()
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItemRun, WorkItem, SourceItem, Source)
+                .join(WorkItem, WorkItemRun.work_item_id == WorkItem.id)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .join(Source, WorkItem.source_id == Source.id)
+                .where(WorkItemRun.id == run_id)
+            ).one_or_none()
+            if row is None:
+                raise WorkItemError("Work item run not found.")
+            run, work_item, source_item, source = row
+            previous_state = work_item.state
+            run.attempt_id = attempt_id
+            run.workflow_instance_id = workflow_instance_id
+            run.updated_at = now
+            work_item.state = "in_progress"
+            work_item.updated_at = now
+            if previous_state != "in_progress":
+                session.add(
+                    WorkItemStateEvent(
+                        work_item_id=work_item.id,
+                        from_state=previous_state,
+                        to_state="in_progress",
+                        reasons_json=run.reasons_json,
+                        note=run.user_hint,
+                        created_at=now,
+                    )
+                )
+            session.commit()
+            active_pr = (
+                session.get(SourceItem, work_item.active_pr_source_item_id)
+                if work_item.active_pr_source_item_id
+                else None
+            )
+            return _work_item_run_claim(run, work_item, source_item, source, active_pr)
+
+    def start_attempt_run(self, attempt_id: int) -> None:
+        now = utc_now()
+        with self._session_factory() as session:
+            run = session.scalar(select(WorkItemRun).where(WorkItemRun.attempt_id == attempt_id))
+            if run is None:
+                return
+            run.status = "running"
+            run.started_at = run.started_at or now
+            run.updated_at = now
+            session.commit()
+
+    def requeue_attempt_run(self, attempt_id: int, *, reason: str) -> None:
+        now = utc_now()
+        with self._session_factory() as session:
+            run = session.scalar(select(WorkItemRun).where(WorkItemRun.attempt_id == attempt_id))
+            if run is None:
+                return
+            run.status = "queued"
+            run.updated_at = now
+            session.commit()
+
+    def finish_attempt_run(self, attempt_id: int, *, status: str, outcome: str) -> None:
+        now = utc_now()
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItemRun, WorkItem)
+                .join(WorkItem, WorkItemRun.work_item_id == WorkItem.id)
+                .where(WorkItemRun.attempt_id == attempt_id)
+            ).one_or_none()
+            if row is None:
+                return
+            run, work_item = row
+            previous_state = work_item.state
+            target_state = _target_state_for_attempt_status(status)
+            run.status = _run_status_for_attempt_status(status)
+            run.completed_at = now
+            run.updated_at = now
+            work_item.state = target_state
+            work_item.outcome = outcome
+            work_item.updated_at = now
+            if previous_state != target_state:
+                session.add(
+                    WorkItemStateEvent(
+                        work_item_id=work_item.id,
+                        from_state=previous_state,
+                        to_state=target_state,
+                        reasons_json=run.reasons_json,
+                        note=outcome,
+                        created_at=now,
+                    )
+                )
+            session.commit()
+
     def detail(self, work_item_id: int) -> WorkItemView | None:
         with self._session_factory() as session:
             row = session.execute(
@@ -367,6 +568,77 @@ class WorkItemRepository:
             session.refresh(work_item)
             return _work_item_view(work_item, primary_source_item)
 
+    def record_created_pull_request(
+        self,
+        *,
+        work_item_id: int,
+        number: int,
+        url: str,
+        title: str,
+        body: str,
+    ) -> WorkItemView | None:
+        now = utc_now()
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItem, SourceItem)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .where(WorkItem.id == work_item_id)
+            ).one_or_none()
+            if row is None:
+                return None
+            work_item, primary_source_item = row
+            existing = session.scalar(
+                select(SourceItem).where(
+                    SourceItem.source_id == work_item.source_id,
+                    SourceItem.kind == "pull_request",
+                    SourceItem.number == number,
+                )
+            )
+            pull_request = existing or SourceItem(
+                source_id=work_item.source_id,
+                kind="pull_request",
+                number=number,
+                title=title,
+                url=url,
+                state="open",
+                author="symphony",
+                labels_json="[]",
+                body=body,
+                github_updated_at=now,
+                synced_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            if existing is None:
+                session.add(pull_request)
+                session.flush()
+            else:
+                pull_request.title = title
+                pull_request.url = url
+                pull_request.state = "open"
+                pull_request.body = body
+                pull_request.github_updated_at = now
+                pull_request.synced_at = now
+                pull_request.updated_at = now
+            _ensure_work_item_link(session, work_item.id, pull_request.id, "linked_pr", now)
+            _ensure_work_item_link(session, work_item.id, pull_request.id, "active_pr", now)
+            work_item.active_pr_source_item_id = pull_request.id
+            work_item.updated_at = now
+            if primary_source_item.kind == "issue":
+                _ensure_source_item_link(
+                    session,
+                    source_id=work_item.source_id,
+                    source_item_id=primary_source_item.id,
+                    linked_source_item_id=pull_request.id,
+                    relationship="issue_pr",
+                    link_source="created_by_symphony",
+                    marker=body,
+                    now=now,
+                )
+            session.commit()
+            session.refresh(work_item)
+            return _work_item_view(work_item, primary_source_item)
+
     def move_work_item(self, move: WorkItemMove) -> WorkItemView:
         target_state = _validated_state(move.target_state)
         reasons = _validated_reasons(move.reasons)
@@ -456,6 +728,33 @@ def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemVie
     )
 
 
+def _work_item_run_claim(
+    run: WorkItemRun,
+    work_item: WorkItem,
+    source_item: SourceItem,
+    source: Source,
+    active_pr: SourceItem | None,
+) -> WorkItemRunClaim:
+    return WorkItemRunClaim(
+        id=run.id,
+        work_item_id=work_item.id,
+        source_id=work_item.source_id,
+        repo=source.repo,
+        task_type=run.task_type,
+        title=work_item.title,
+        user_hint=run.user_hint,
+        rerun_reasons=cast(list[str], json.loads(run.reasons_json)),
+        primary_source_item_id=work_item.primary_source_item_id,
+        source_kind=source_item.kind,
+        source_number=source_item.number,
+        source_url=source_item.url,
+        active_pr_source_item_id=None if active_pr is None else active_pr.id,
+        active_pr_number=None if active_pr is None else active_pr.number,
+        active_pr_url="" if active_pr is None else active_pr.url,
+        active_pr_title="" if active_pr is None else active_pr.title,
+    )
+
+
 def reasons_json(reasons: list[str]) -> str:
     return json.dumps(reasons, sort_keys=True)
 
@@ -511,3 +810,53 @@ def _ensure_work_item_link(
                 created_at=now,
             )
         )
+
+
+def _ensure_source_item_link(
+    session: Session,
+    *,
+    source_id: int,
+    source_item_id: int,
+    linked_source_item_id: int,
+    relationship: str,
+    link_source: str,
+    marker: str,
+    now: str,
+) -> None:
+    existing = session.scalar(
+        select(SourceItemLink).where(
+            SourceItemLink.source_item_id == source_item_id,
+            SourceItemLink.linked_source_item_id == linked_source_item_id,
+            SourceItemLink.relationship == relationship,
+        )
+    )
+    if existing:
+        existing.link_source = link_source
+        existing.marker = marker
+        existing.verified_at = now
+        return
+    session.add(
+        SourceItemLink(
+            source_id=source_id,
+            source_item_id=source_item_id,
+            linked_source_item_id=linked_source_item_id,
+            relationship=relationship,
+            link_source=link_source,
+            marker=marker,
+            verified_at=now,
+        )
+    )
+
+
+def _target_state_for_attempt_status(status: str) -> str:
+    if status == "done":
+        return "done"
+    return "in_review"
+
+
+def _run_status_for_attempt_status(status: str) -> str:
+    if status == "review":
+        return "needs_review"
+    if status == "done":
+        return "succeeded"
+    return status

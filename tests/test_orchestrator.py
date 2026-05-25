@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from symphony_dbcli.config import WorkflowConfig, WorkspaceConfig, default_config
+from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import (
     GitHubCheckRun,
     GitHubCiStatus,
@@ -14,9 +15,12 @@ from symphony_dbcli.github import (
     PullRequest,
     PullRequestMergeStatus,
 )
+from symphony_dbcli.models import WorkItem, WorkItemRun, create_model_tables
 from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutionError, PrimitiveOutcome
+from symphony_dbcli.sources import SourceCreate, SourceItemUpsert, SourceRepository
 from symphony_dbcli.store import IssueSnapshot, Store
+from symphony_dbcli.work_items import WorkItemActivation, WorkItemRepository
 
 
 def test_code_follow_up_prompt_includes_research_context() -> None:
@@ -113,6 +117,68 @@ def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> 
     assert detail["attempt"]["status"] == "review"
     assert [row["transition_name"] for row in action_runs] == primitives.transitions
     assert {row["transition_name"] for row in gates} == {"create_draft_pr", "mark_blocked"}
+
+
+def test_orchestrator_claims_and_runs_work_item_from_kanban_queue(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    source_repo, work_item_repo = _source_work_item_repositories(tmp_path)
+    source = source_repo.create_source(SourceCreate(repo="dbcli/litecli"))
+    source_repo.upsert_source_items(
+        source_id=source.id,
+        items=[
+            SourceItemUpsert(
+                kind="issue",
+                number=245,
+                title="Logging support question",
+                url="https://github.com/dbcli/litecli/issues/245",
+                state="open",
+                author="amjith",
+                labels=[],
+                body="The log_file option does not expand ~.",
+                github_updated_at="2026-05-24T11:00:00Z",
+            )
+        ],
+    )
+    source_item = source_repo.backlog_source_items(source.id)[0]
+    work_item = work_item_repo.activate_source_item(
+        WorkItemActivation(
+            source_item_id=source_item.id,
+            task_type="code",
+            user_hint="Prefer a unit test.",
+        )
+    )
+    primitives = FakeWorkflowPrimitives()
+    orchestrator = Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    )
+
+    attempt_id = orchestrator.claim_next()
+    assert attempt_id is not None
+    orchestrator.run_attempt(attempt_id)
+
+    attempt = store.attempt_by_id(attempt_id)
+    instance = store.workflow_instance_for_work_item(work_item.id)
+    artifacts = store.workflow_artifacts(0 if instance is None else int(instance["id"]))
+    saved_work_item, run = _work_item_and_run(tmp_path, work_item.id)
+    assert attempt is not None
+    assert int(attempt["work_item_id"]) == work_item.id
+    assert int(attempt["work_item_run_id"]) == run.id
+    assert instance is not None
+    assert int(instance["work_item_id"]) == work_item.id
+    assert int(instance["work_item_run_id"]) == run.id
+    assert artifacts["work_item.id"] == work_item.id
+    assert artifacts["work_item.user_hint"] == "Prefer a unit test."
+    assert artifacts["source_item.number"] == 245
+    assert artifacts["linked_issue.number"] == 245
+    assert primitives.contexts[0].work_item_id == work_item.id
+    assert primitives.contexts[0].user_hint == "Prefer a unit test."
+    assert saved_work_item.state == "in_review"
+    assert run.status == "needs_review"
+    assert run.attempt_id == attempt_id
 
 
 def test_orchestrator_hands_off_artifacts_between_transitions(tmp_path: Path) -> None:
@@ -678,6 +744,7 @@ class FakeWorkflowPrimitives:
     def __init__(self, *, fail_once: set[str] | None = None, pr_feedback: bool = False) -> None:
         self.transitions: list[str] = []
         self.inputs: list[dict[str, object]] = []
+        self.contexts: list[PrimitiveContext] = []
         self.fail_once = fail_once or set()
         self.failed: set[str] = set()
         self.pr_feedback = pr_feedback
@@ -688,6 +755,7 @@ class FakeWorkflowPrimitives:
     def execute(self, context: PrimitiveContext) -> PrimitiveOutcome:
         self.transitions.append(context.transition_name)
         self.inputs.append(dict(context.input_data))
+        self.contexts.append(context)
         if context.transition_name in self.fail_once and context.transition_name not in self.failed:
             self.failed.add(context.transition_name)
             raise PrimitiveExecutionError(f"{context.transition_name} failed once")
@@ -791,6 +859,21 @@ def _seed_store(tmp_path: Path) -> Store:
         )
     )
     return store
+
+
+def _source_work_item_repositories(tmp_path: Path) -> tuple[SourceRepository, WorkItemRepository]:
+    engine = create_db_engine(str(tmp_path / "symphony.db"))
+    create_model_tables(engine)
+    session_factory = create_session_factory(engine)
+    return SourceRepository(session_factory), WorkItemRepository(session_factory)
+
+
+def _work_item_and_run(tmp_path: Path, work_item_id: int) -> tuple[WorkItem, WorkItemRun]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        work_item = session.get_one(WorkItem, work_item_id)
+        run = session.get_one(WorkItemRun, 1)
+        return work_item, run
 
 
 def _git(path: Path, *args: str) -> None:

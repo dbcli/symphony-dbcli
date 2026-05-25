@@ -3,7 +3,9 @@ from __future__ import annotations
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from sqlalchemy import select
 
 from symphony_dbcli.config import CodexConfig, PolicyConfig, WorkflowConfig, WorkspaceConfig, default_config
 from symphony_dbcli.github import (
@@ -15,10 +17,12 @@ from symphony_dbcli.github import (
     PullRequest,
     PullRequestMergeStatus,
 )
+from symphony_dbcli.models import SourceItemLink, WorkItem, WorkItemLink
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
 from symphony_dbcli.review_actions import issue_link_marker
-from symphony_dbcli.sources import SourceCreate
+from symphony_dbcli.sources import SourceCreate, SourceItemUpsert
 from symphony_dbcli.store import Store
+from symphony_dbcli.work_items import WorkItemActivation
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
 
 
@@ -98,6 +102,65 @@ def test_work_item_primitives_activate_and_move_work(tmp_path: Path) -> None:
     assert activated["state"] == "todo"
     assert activated["active_pr_source_item_id"] == source_item.linked_items[0].id
     assert moved["state"] == "in_progress"
+
+
+def test_create_draft_pr_links_work_item_issue_and_pr_source_items(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.upsert_issue(
+        FakePrimitiveGitHub().issue("dbcli/litecli", 245).snapshot(default_config().labels, "code")
+    )
+    config = replace(default_config(), policy=PolicyConfig(dry_run=False))
+    executor = PrimitiveExecutor(
+        config,
+        store,
+        github=FakePrimitiveGitHub(),
+        review_actions=cast(Any, FakeReviewActions()),
+    )
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+    executor.sources.upsert_source_items(
+        source_id=source.id,
+        items=[
+            SourceItemUpsert(
+                kind="issue",
+                number=245,
+                title="Logging path support",
+                url="https://github.com/dbcli/litecli/issues/245",
+                state="open",
+                author="amjith",
+                labels=[],
+                body="The log_file option does not expand ~.",
+                github_updated_at="2026-05-24T11:00:00Z",
+            )
+        ],
+    )
+    source_item = executor.sources.backlog_source_items(source.id)[0]
+    work_item = executor.work_items.activate_source_item(
+        WorkItemActivation(source_item_id=source_item.id, task_type="code")
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+        work_item_id=work_item.id,
+    )
+
+    output = executor.execute(
+        _context(
+            "github.create_draft_pr",
+            attempt_id=attempt_id,
+            work_item_id=work_item.id,
+        )
+    ).output
+
+    source_links, saved_work_item, work_item_links = _source_work_item_links(executor)
+    assert output["pull_request_number"] == 12
+    assert saved_work_item.active_pr_source_item_id is not None
+    assert {link.relationship for link in source_links} == {"issue_pr"}
+    assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
+    assert source_links[0].link_source == "created_by_symphony"
+    assert issue_link_marker("dbcli/litecli", 245) in source_links[0].marker
 
 
 def test_fetch_pull_request_records_attempt_pr(tmp_path: Path) -> None:
@@ -644,10 +707,23 @@ class FakePrimitiveGitHub:
         self.pushed_branches.append(branch)
 
 
+class FakeReviewActions:
+    def create_draft_pr(self, attempt_id: int, *, title: str = "", body: str = "") -> PullRequest:
+        return PullRequest(
+            number=12,
+            url="https://github.com/dbcli/litecli/pull/12",
+            title=title or "Fix logging path support",
+            state="open",
+            head_ref="symphony/test",
+            head_sha="abc123",
+        )
+
+
 def _context(
     action: str,
     *,
     attempt_id: int | None = None,
+    work_item_id: int | None = None,
     worktree_path: str = "",
     input_data: dict[str, Any] | None = None,
 ) -> PrimitiveContext:
@@ -664,6 +740,7 @@ def _context(
         task_type="code",
         issue_title="Logging path support",
         attempt_id=attempt_id,
+        work_item_id=work_item_id,
         worktree_path=worktree_path,
         input_data=input_data or {},
     )
@@ -719,3 +796,13 @@ def _config_with_fake_codex(tmp_path: Path, prompt_path: Path, message: str) -> 
 def _git(path: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
     return result.stdout.strip()
+
+
+def _source_work_item_links(
+    executor: PrimitiveExecutor,
+) -> tuple[list[SourceItemLink], WorkItem, list[WorkItemLink]]:
+    with executor.work_items._session_factory() as session:
+        source_links = list(session.scalars(select(SourceItemLink).order_by(SourceItemLink.id.asc())))
+        work_item = session.scalars(select(WorkItem)).one()
+        work_item_links = list(session.scalars(select(WorkItemLink).order_by(WorkItemLink.id.asc())))
+    return source_links, work_item, work_item_links

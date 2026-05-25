@@ -91,3 +91,20 @@ def test_run_fixture_against_github_fixture_repo(tmp_path: Path) -> None:
     assert result.workflow_path.exists()
     assert result.database_path.exists()
     assert result.worktree_path
+
+
+def test_run_fixture_associated_pr_review_against_github_fixture_repo(tmp_path: Path) -> None:
+    if not os.environ.get("SYMPHONY_RUN_GITHUB_E2E"):
+        pytest.skip("set SYMPHONY_RUN_GITHUB_E2E=1 to run the GitHub-backed fixture")
+
+    result = run_fixture(
+        E2EFixtureConfig(
+            repo=DEFAULT_FIXTURE_REPO,
+            root=tmp_path,
+            scenario="associated_pr_parallel_checks",
+        )
+    )
+
+    assert result.issue_url.startswith(f"https://github.com/{DEFAULT_FIXTURE_REPO}/issues/")
+    assert result.pull_request_url.startswith(f"https://github.com/{DEFAULT_FIXTURE_REPO}/pull/")
+    assert result.worktree_path

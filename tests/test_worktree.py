@@ -25,6 +25,24 @@ def test_default_remote_ref_accepts_bare_clone_head(tmp_path: Path) -> None:
     assert manager._default_remote_ref(base_repo) == "main"
 
 
+def test_source_ref_resolves_origin_branch_in_bare_clone(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    bare = tmp_path / "repo.git"
+    source.mkdir()
+    _git(source, "init", "--initial-branch=main")
+    (source / "README.md").write_text("start\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    _git(source, "checkout", "-b", "symphony/existing-pr")
+    (source / "README.md").write_text("branch\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "branch")
+    subprocess.run(["git", "clone", "--bare", str(source), str(bare)], check=True, capture_output=True)
+    manager = WorktreeManager(WorkspaceConfig(root="/worktrees", bare_repos_root="/repos"))
+
+    assert manager._resolve_source_ref(bare, "origin/symphony/existing-pr") == "symphony/existing-pr"
+
+
 def test_remove_worktree_removes_clean_managed_worktree(tmp_path: Path) -> None:
     source = tmp_path / "source"
     bare = tmp_path / "repos" / "repo.git"

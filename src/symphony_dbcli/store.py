@@ -13,7 +13,7 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 
@@ -156,18 +156,32 @@ class Store:
         workflow_version_id: int | None,
         initial_state: str,
         attempt_id: int | None = None,
+        work_item_id: int | None = None,
+        work_item_run_id: int | None = None,
     ) -> int:
         now = utc_now()
         with self.connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO workflow_instances(
-                    workflow_version_id, repo, issue_number, attempt_id, task_type,
+                    workflow_version_id, repo, issue_number, attempt_id, work_item_id,
+                    work_item_run_id, task_type,
                     current_state, status, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
                 """,
-                (workflow_version_id, repo, issue_number, attempt_id, task_type, initial_state, now, now),
+                (
+                    workflow_version_id,
+                    repo,
+                    issue_number,
+                    attempt_id,
+                    work_item_id,
+                    work_item_run_id,
+                    task_type,
+                    initial_state,
+                    now,
+                    now,
+                ),
             )
             return _lastrowid(cursor)
 
@@ -207,6 +221,22 @@ class Store:
                     LIMIT 1
                     """,
                     (attempt_id,),
+                ).fetchone(),
+            )
+
+    def workflow_instance_for_work_item(self, work_item_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM workflow_instances
+                    WHERE work_item_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (work_item_id,),
                 ).fetchone(),
             )
 
@@ -830,23 +860,28 @@ class Store:
         status: str = "queued",
         parent_attempt_id: int | None = None,
         retry_count: int = 0,
+        work_item_id: int | None = None,
+        work_item_run_id: int | None = None,
     ) -> int:
         now = utc_now()
         with self.connect() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO attempts(
-                    repo, issue_number, task_type, workflow_version_id, status,
+                    repo, issue_number, task_type, workflow_version_id, work_item_id,
+                    work_item_run_id, status,
                     base_repo_path, worktree_path, branch, parent_attempt_id, retry_count,
                     queued_at, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     repo,
                     issue_number,
                     task_type,
                     workflow_version_id,
+                    work_item_id,
+                    work_item_run_id,
                     status,
                     base_repo_path,
                     worktree_path,
@@ -1846,6 +1881,10 @@ def _lastrowid(cursor: sqlite3.Cursor) -> int:
 def _migrate(conn: sqlite3.Connection) -> None:
     _add_column(conn, "attempts", "parent_attempt_id", "INTEGER")
     _add_column(conn, "attempts", "retry_count", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(conn, "attempts", "work_item_id", "INTEGER")
+    _add_column(conn, "attempts", "work_item_run_id", "INTEGER")
+    _add_column(conn, "workflow_instances", "work_item_id", "INTEGER")
+    _add_column(conn, "workflow_instances", "work_item_run_id", "INTEGER")
     _add_column(conn, "workers", "pid", "INTEGER")
     _add_column(conn, "workers", "heartbeat_at", "TEXT")
     _add_column(conn, "workers", "deadline_at", "TEXT")
@@ -1936,6 +1975,8 @@ SCHEMA = [
         task_type TEXT NOT NULL,
         workflow_version_id INTEGER,
         worker_id TEXT,
+        work_item_id INTEGER,
+        work_item_run_id INTEGER,
         status TEXT NOT NULL,
         outcome TEXT NOT NULL DEFAULT '',
         current_phase TEXT NOT NULL DEFAULT '',
@@ -1965,6 +2006,8 @@ SCHEMA = [
         repo TEXT NOT NULL,
         issue_number INTEGER NOT NULL,
         attempt_id INTEGER,
+        work_item_id INTEGER,
+        work_item_run_id INTEGER,
         task_type TEXT NOT NULL,
         current_state TEXT NOT NULL,
         status TEXT NOT NULL,

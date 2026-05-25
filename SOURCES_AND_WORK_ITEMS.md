@@ -828,14 +828,14 @@ Likely new primitives:
 - [x] Default issue-with-linked-PR and PR cards to review/fix mode.
 - [x] Implement in-review-to-in-progress reason selector with multi-select
   reasons.
-- [ ] Pivot orchestrator runtime identity from issue/attempt to work item.
-- [ ] Preserve existing attempt/worker history while introducing
+- [x] Pivot orchestrator runtime identity from issue/attempt to work item.
+- [x] Preserve existing attempt/worker history while introducing
   `work_item_runs`.
-- [ ] Adapt workflow context resolution to expose work item, linked issue,
+- [x] Adapt workflow context resolution to expose work item, linked issue,
   active PR, user hint, and rerun reasons as artifacts.
 - [x] Add work-item-aware source refresh primitives.
 - [x] Add operations task primitive and dashboard view for operation summaries.
-- [ ] Update PR creation to strongly link work item, issue, and PR in SQLite
+- [x] Update PR creation to strongly link work item, issue, and PR in SQLite
   and PR body marker.
 - [x] Group linked issue/PR cards in the board and add expandable detail view.
 - [x] Support multiple linked PRs with one active PR selector.
@@ -847,7 +847,7 @@ Likely new primitives:
 - [x] Build fast local tests for source sync, backlog-to-todo activation, and
   kanban state transitions.
 - [x] Build fast local tests for grouped cards and active PR selection.
-- [ ] Build fast local tests for work item workflow execution.
+- [x] Build fast local tests for work item workflow execution.
 - [x] Add GitHub-backed e2e smoke scenario for source sync through kanban
   activation.
-- [ ] Extend the GitHub-backed e2e scenario through PR review/fix workflow.
+- [x] Extend the GitHub-backed e2e scenario through PR review/fix workflow.
