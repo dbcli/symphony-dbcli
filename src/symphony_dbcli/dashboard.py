@@ -19,7 +19,14 @@ from .config import WorkflowConfig, WorkflowError, default_config, render_workfl
 from .orchestrator import Orchestrator, OrchestratorError
 from .review_actions import DraftPullRequestContent, build_draft_pr_content
 from .store import Store
-from .workflow_edit import WorkflowEditProposal, parsed_config, propose_workflow_edit, validate_workflow_edit
+from .workflow_edit import (
+    CodexWorkflowEditModel,
+    WorkflowEditProposal,
+    parsed_config,
+    propose_workflow_edit,
+    propose_workflow_edit_with_model,
+    validate_workflow_edit,
+)
 from .workflow_visualization import WorkflowFlowchartView
 
 
@@ -449,11 +456,19 @@ def _handler_factory(store: Store, state: DashboardState) -> type[BaseHTTPReques
             action = params.get("action", ["preview"])[0]
             request = params.get("request", [""])[0]
             proposed_content = params.get("proposed_content", [""])[0]
-            proposal = (
-                validate_workflow_edit(current, proposed_content, request)
-                if proposed_content
-                else propose_workflow_edit(current, request)
-            )
+            if action == "generate":
+                workflow_dir = Path(state.workflow_path()).resolve().parent
+                proposal = propose_workflow_edit_with_model(
+                    current,
+                    request,
+                    model=CodexWorkflowEditModel(state.config(), workflow_dir),
+                )
+            else:
+                proposal = (
+                    validate_workflow_edit(current, proposed_content, request)
+                    if proposed_content
+                    else propose_workflow_edit(current, request)
+                )
             if action == "apply" and proposal.valid:
                 try:
                     config = parsed_config(proposal.proposed_content)

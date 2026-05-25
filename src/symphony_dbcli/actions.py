@@ -45,6 +45,17 @@ class ActionRegistry:
 def default_action_registry() -> ActionRegistry:
     specs = [
         PrimitiveSpec(
+            name="workflow.noop",
+            input_type="WorkflowNoop",
+            output_type="WorkflowNoopResult",
+            side_effect="none",
+            idempotency_strategy="attempt_transition",
+            automatic_allowed=True,
+            human_gate_allowed=True,
+            description="Advance workflow state without external side effects.",
+            output_fields=frozenset({"message"}),
+        ),
+        PrimitiveSpec(
             name="github.fetch_issues",
             input_type="GitHubIssueQuery",
             output_type="IssueSnapshotList",
@@ -127,13 +138,34 @@ def default_action_registry() -> ActionRegistry:
             output_fields=frozenset({"comment_id", "comment_url", "attempt_id", "repo", "issue_number"}),
         ),
         PrimitiveSpec(
+            name="github.push_pr_update",
+            input_type="PullRequestUpdateRequest",
+            output_type="PullRequestUpdateResult",
+            side_effect="github_write",
+            idempotency_strategy="pull_request",
+            automatic_allowed=True,
+            human_gate_allowed=True,
+            description="Commit local follow-up changes and push them to an existing pull request branch.",
+            input_fields=frozenset({"attempt_id", "repo", "issue_number", "worktree_path", "branch"}),
+            output_fields=frozenset(
+                {
+                    "pull_request_number",
+                    "pull_request_url",
+                    "pull_request_title",
+                    "branch",
+                    "commit_sha",
+                    "pushed",
+                }
+            ),
+        ),
+        PrimitiveSpec(
             name="github.fetch_pull_request",
             input_type="PullRequestReference",
             output_type="PullRequestSnapshot",
             side_effect="github_read",
             idempotency_strategy="pull_request",
             automatic_allowed=True,
-            human_gate_allowed=False,
+            human_gate_allowed=True,
             description="Fetch pull request metadata for review, merge, and cleanup decisions.",
             input_fields=frozenset({"repo", "pull_request_number"}),
             output_fields=frozenset(

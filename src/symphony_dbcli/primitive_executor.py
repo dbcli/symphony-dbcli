@@ -117,6 +117,8 @@ class PrimitiveExecutor:
         return PrimitiveOutcome({"synced": synced})
 
     def execute(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        if context.transition.action == "workflow.noop":
+            return self._noop(context)
         if context.transition.action == "github.fetch_issue":
             return self._fetch_issue(context)
         if context.transition.action == "github.fetch_comments":
@@ -148,9 +150,14 @@ class PrimitiveExecutor:
             return self._run_codex(context)
         if context.transition.action == "github.create_draft_pr":
             return self._create_draft_pr(context)
+        if context.transition.action == "github.push_pr_update":
+            return self._push_pr_update(context)
         if context.transition.action == "github.post_issue_comment":
             return self._post_issue_comment(context)
         raise PrimitiveExecutionError(f"Primitive {context.transition.action} is not implemented.")
+
+    def _noop(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        return PrimitiveOutcome({"message": context.transition.description or context.transition_name})
 
     def _fetch_issue(self, context: PrimitiveContext) -> PrimitiveOutcome:
         issue = self.github.issue(context.repo, context.issue_number)
@@ -418,6 +425,27 @@ class PrimitiveExecutor:
                 "pull_request_title": pull_request.title,
                 "state": pull_request.state,
                 "merged_at": pull_request.merged_at,
+            }
+        )
+
+    def _push_pr_update(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        if self.config.policy.dry_run:
+            raise PrimitiveExecutionError(
+                "policy.dry_run is true; refusing to push a GitHub pull request update."
+            )
+        attempt_id = _required_attempt_id(context)
+        try:
+            update = self.review_actions.push_pr_update(attempt_id)
+        except ReviewActionError as exc:
+            raise PrimitiveExecutionError(str(exc)) from exc
+        return PrimitiveOutcome(
+            {
+                "pull_request_number": update.number,
+                "pull_request_url": update.url,
+                "pull_request_title": update.title,
+                "branch": update.branch,
+                "commit_sha": update.commit_sha,
+                "pushed": update.pushed,
             }
         )
 

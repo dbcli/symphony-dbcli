@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from symphony_dbcli.config import CodexConfig, WorkflowConfig, WorkspaceConfig, default_config
+from symphony_dbcli.config import CodexConfig, PolicyConfig, WorkflowConfig, WorkspaceConfig, default_config
 from symphony_dbcli.github import (
     GitHubCheckRun,
     GitHubCiStatus,
@@ -153,6 +153,60 @@ def test_detect_merge_conflicts_returns_mergeability(tmp_path: Path) -> None:
     assert output["mergeable"] is False
     assert output["mergeable_state"] == "dirty"
     assert output["has_conflicts"] is True
+
+
+def test_noop_returns_transition_message(tmp_path: Path) -> None:
+    executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=FakePrimitiveGitHub())
+
+    output = executor.execute(_context("workflow.noop")).output
+
+    assert output == {"message": "workflow.noop"}
+
+
+def test_push_pr_update_commits_and_pushes_existing_pr_branch(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    _git(worktree, "init")
+    (worktree / "README.md").write_text("start\n", encoding="utf-8")
+    _git(worktree, "add", "README.md")
+    _git(worktree, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    base_sha = _git(worktree, "rev-parse", "HEAD")
+    (worktree / "README.md").write_text("fixed\n", encoding="utf-8")
+    store = _store(tmp_path)
+    attempt_id = _seed_issue_attempt(store, worktree)
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(tmp_path / "repo.git"),
+        worktree_path=str(worktree),
+        branch="symphony/test",
+        commit_sha=base_sha,
+    )
+    store.record_pr(
+        attempt_id,
+        repo="dbcli/litecli",
+        number=12,
+        url="https://github.com/dbcli/litecli/pull/12",
+        title="Fix logging path support",
+    )
+    github = FakePrimitiveGitHub()
+    config = replace(default_config(), policy=PolicyConfig(dry_run=False))
+    executor = PrimitiveExecutor(config, store, github=github)
+
+    output = executor.execute(
+        _context(
+            "github.push_pr_update",
+            attempt_id=attempt_id,
+            worktree_path=str(worktree),
+        )
+    ).output
+
+    attempt = store.attempt_by_id(attempt_id)
+    assert output["pull_request_number"] == 12
+    assert output["pushed"] is True
+    assert output["commit_sha"] != base_sha
+    assert github.pushed_branches == ["symphony/test"]
+    assert attempt is not None
+    assert attempt["commit_sha"] == output["commit_sha"]
 
 
 def test_address_pr_comments_runs_codex_with_review_context(tmp_path: Path) -> None:
@@ -311,6 +365,9 @@ def test_cleanup_after_merge_removes_managed_worktree(tmp_path: Path) -> None:
 
 
 class FakePrimitiveGitHub:
+    def __init__(self) -> None:
+        self.pushed_branches: list[str] = []
+
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
         return [self.issue(repo, 245)]
 
@@ -417,6 +474,9 @@ class FakePrimitiveGitHub:
             failed_checks=[failed_check],
             checks=[failed_check],
         )
+
+    def push_branch(self, *, repo: str, worktree_path: str, branch: str) -> None:
+        self.pushed_branches.append(branch)
 
 
 def _context(

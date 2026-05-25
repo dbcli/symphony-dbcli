@@ -95,6 +95,21 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 "Human review is required before GitHub side effects.", gate="review"
             ),
             "pr_ready": WorkflowStateConfig("A draft pull request exists and is waiting for merge."),
+            "pr_checked": WorkflowStateConfig("Latest pull request metadata has been fetched."),
+            "merge_checked": WorkflowStateConfig("Mergeability and conflict status have been checked."),
+            "ci_checked": WorkflowStateConfig("Pull request CI status has been checked."),
+            "ci_fix_complete": WorkflowStateConfig(
+                "Codex has prepared a CI fix that needs human review.", gate="review_ci_fix"
+            ),
+            "review_comments_checked": WorkflowStateConfig("Pull request review comments have been fetched."),
+            "review_comments_addressed": WorkflowStateConfig(
+                "Codex has addressed pull request comments and needs human review.",
+                gate="review_comment_fix",
+            ),
+            "pr_waiting": WorkflowStateConfig(
+                "Pull request has no immediate Symphony follow-up and is waiting for external activity.",
+                gate="check_pr_again",
+            ),
             "done": WorkflowStateConfig("Workflow completed successfully.", terminal=True),
             "failed": WorkflowStateConfig("Workflow failed and requires inspection.", terminal=True),
             "blocked": WorkflowStateConfig("Workflow is blocked by a human decision.", terminal=True),
@@ -193,13 +208,34 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 description="Create a draft pull request after human diff review.",
                 condition='task.type == "code"',
                 retry_limit=1,
+                outputs={
+                    "pull_request_number": "artifact.pull_request.number",
+                    "pull_request_url": "artifact.pull_request.url",
+                    "pull_request_title": "artifact.pull_request.title",
+                },
                 guidance=[
                     "Let the human edit the PR title and description before creation.",
                     "Keep the PR description clear, succinct, and linked to the GitHub issue.",
                 ],
             ),
-            "cleanup_after_merge": WorkflowTransitionConfig(
+            "refresh_pull_request": WorkflowTransitionConfig(
                 from_state="pr_ready",
+                to_state="pr_checked",
+                action="github.fetch_pull_request",
+                description="Fetch the latest pull request metadata.",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={
+                    "is_merged": "artifact.pull_request.is_merged",
+                    "head_sha": "artifact.pull_request.head_sha",
+                    "state": "artifact.pull_request.state",
+                },
+                guidance=[
+                    "Use this as the durable pull request snapshot before deciding follow-up work.",
+                ],
+            ),
+            "cleanup_after_merge": WorkflowTransitionConfig(
+                from_state="pr_checked",
                 to_state="done",
                 action="workspace.cleanup_after_merge",
                 description="Clean up the workspace after the pull request is merged.",
@@ -208,6 +244,151 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 guidance=[
                     "Clean only workspaces owned by Symphony.",
                     "Do not remove worktrees with uncommitted changes.",
+                ],
+            ),
+            "detect_merge_conflicts": WorkflowTransitionConfig(
+                from_state="pr_checked",
+                to_state="merge_checked",
+                action="github.detect_merge_conflicts",
+                description="Check whether the pull request currently has merge conflicts.",
+                condition="not pull_request.is_merged",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={
+                    "has_conflicts": "artifact.pull_request.has_conflicts",
+                    "mergeable": "artifact.pull_request.mergeable",
+                    "mergeable_state": "artifact.pull_request.mergeable_state",
+                },
+                guidance=[
+                    "Treat GitHub mergeability as a snapshot that can change after new commits.",
+                ],
+            ),
+            "block_on_merge_conflict": WorkflowTransitionConfig(
+                from_state="merge_checked",
+                to_state="blocked",
+                action="github.apply_labels",
+                description="Block the workflow when the pull request has merge conflicts.",
+                condition="pull_request.has_conflicts",
+                retry_limit=1,
+                guidance=[
+                    "Leave the attempt blocked so a human can decide how to resolve the conflict.",
+                ],
+            ),
+            "fetch_ci_status": WorkflowTransitionConfig(
+                from_state="merge_checked",
+                to_state="ci_checked",
+                action="github.fetch_ci_status",
+                description="Fetch pull request CI status after mergeability is clean.",
+                condition="not pull_request.has_conflicts",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={
+                    "failed_checks": "artifact.ci.failed_checks",
+                    "checks": "artifact.ci.checks",
+                    "state": "artifact.ci.state",
+                    "conclusion": "artifact.ci.conclusion",
+                },
+                guidance=[
+                    "Capture both failed checks and the full check list for follow-up workers.",
+                ],
+            ),
+            "fix_ci_failures": WorkflowTransitionConfig(
+                from_state="ci_checked",
+                to_state="ci_fix_complete",
+                action="codex.fix_ci_failures",
+                description="Ask Codex to fix failing pull request CI.",
+                condition="ci.has_failures",
+                retry_limit=1,
+                inputs={
+                    "pull_request_number": "artifact.pull_request.number",
+                    "failed_checks": "artifact.ci.failed_checks",
+                    "checks": "artifact.ci.checks",
+                },
+                guidance=[
+                    "Keep the CI fix focused on the failing checks.",
+                    "Prefer the narrowest local test that reproduces the failure.",
+                ],
+            ),
+            "push_ci_fix": WorkflowTransitionConfig(
+                from_state="ci_fix_complete",
+                to_state="pr_waiting",
+                action="github.push_pr_update",
+                trigger="human",
+                gate="review_ci_fix",
+                description="Review and push the CI fix to the existing pull request branch.",
+                retry_limit=1,
+                guidance=[
+                    "Let the human inspect the CI fix before pushing it to GitHub.",
+                ],
+            ),
+            "fetch_pr_review_comments": WorkflowTransitionConfig(
+                from_state="ci_checked",
+                to_state="review_comments_checked",
+                action="github.fetch_pr_review_comments",
+                description="Fetch review bodies and inline review comments when CI is not failing.",
+                condition="not ci.has_failures",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={"comments": "artifact.review_comments.comments"},
+                guidance=[
+                    "Keep review-body comments and inline comments together for the worker.",
+                ],
+            ),
+            "address_pr_comments": WorkflowTransitionConfig(
+                from_state="review_comments_checked",
+                to_state="review_comments_addressed",
+                action="codex.address_pr_comments",
+                description="Ask Codex to address pull request review comments.",
+                condition="review_comments.present",
+                retry_limit=1,
+                inputs={
+                    "pull_request_number": "artifact.pull_request.number",
+                    "comments": "artifact.review_comments.comments",
+                },
+                guidance=[
+                    "Address only the review comments provided in the workflow artifact.",
+                    "Keep the original issue fix focused.",
+                ],
+            ),
+            "push_review_comment_fix": WorkflowTransitionConfig(
+                from_state="review_comments_addressed",
+                to_state="pr_waiting",
+                action="github.push_pr_update",
+                trigger="human",
+                gate="review_comment_fix",
+                description="Review and push the PR comment fix to the existing branch.",
+                retry_limit=1,
+                guidance=[
+                    "Let the human inspect the comment fix before pushing it to GitHub.",
+                ],
+            ),
+            "wait_for_pr_activity": WorkflowTransitionConfig(
+                from_state="review_comments_checked",
+                to_state="pr_waiting",
+                action="workflow.noop",
+                description="Wait when CI is passing and there are no review comments to address.",
+                condition="not review_comments.present",
+                retry_limit=1,
+                guidance=[
+                    "Stop automatic work until a human asks Symphony to check the pull request again.",
+                ],
+            ),
+            "check_pr_again": WorkflowTransitionConfig(
+                from_state="pr_waiting",
+                to_state="pr_checked",
+                action="github.fetch_pull_request",
+                trigger="human",
+                gate="check_pr_again",
+                description="Manually check the pull request again for merge, CI, or review changes.",
+                retry_limit=1,
+                inputs={"pull_request_number": "artifact.pull_request.number"},
+                outputs={
+                    "is_merged": "artifact.pull_request.is_merged",
+                    "head_sha": "artifact.pull_request.head_sha",
+                    "state": "artifact.pull_request.state",
+                },
+                guidance=[
+                    "Use this when GitHub activity has changed and Symphony should reassess the PR.",
                 ],
             ),
             "mark_blocked": WorkflowTransitionConfig(

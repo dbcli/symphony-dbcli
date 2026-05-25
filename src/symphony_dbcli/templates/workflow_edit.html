@@ -95,6 +95,7 @@
       <textarea name="proposed_content" rows="28">{{ proposal.proposed_content }}</textarea>
     </label>
     <div class="form-actions">
+      <button type="submit" name="action" value="generate">Generate Proposal</button>
       <button type="submit" name="action" value="preview">Preview</button>
       <button type="submit" name="action" value="apply" {% if not proposal.valid %}disabled{% endif %}>Apply</button>
     </div>

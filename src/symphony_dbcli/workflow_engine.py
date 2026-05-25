@@ -17,6 +17,7 @@ class WorkflowEngineError(RuntimeError):
 class WorkflowExecutionContext:
     task_type: str
     pull_request_is_merged: bool = False
+    artifacts: Mapping[str, object] = field(default_factory=dict)
     transition_failure_counts: Mapping[str, int] = field(default_factory=dict)
 
 
@@ -100,12 +101,32 @@ def condition_matches(condition: str, context: WorkflowExecutionContext) -> bool
     normalized = condition.strip()
     if not normalized:
         return True
+    if normalized.startswith("not "):
+        return not condition_matches(normalized.removeprefix("not "), context)
     if normalized == 'task.type == "code"':
         return context.task_type == "code"
     if normalized == 'task.type == "research"':
         return context.task_type == "research"
     if normalized == "pull_request.is_merged":
-        return context.pull_request_is_merged
+        return context.pull_request_is_merged or _truthy_artifact(
+            context,
+            "pull_request.is_merged",
+            "fetch_pull_request.is_merged",
+        )
+    if normalized == "pull_request.has_conflicts":
+        return _truthy_artifact(
+            context,
+            "pull_request.has_conflicts",
+            "detect_merge_conflicts.has_conflicts",
+        )
+    if normalized == "ci.has_failures":
+        return _truthy_artifact(context, "ci.failed_checks", "fetch_ci_status.failed_checks")
+    if normalized == "review_comments.present":
+        return _truthy_artifact(
+            context,
+            "review_comments.comments",
+            "fetch_pr_review_comments.comments",
+        )
     raise WorkflowEngineError(f"Unsupported workflow condition: {condition}")
 
 
@@ -120,9 +141,21 @@ def transition_retry_available(
 
 def validate_condition(condition: str) -> bool:
     normalized = condition.strip()
+    if normalized.startswith("not "):
+        normalized = normalized.removeprefix("not ").strip()
     return normalized in {
         "",
         'task.type == "code"',
         'task.type == "research"',
         "pull_request.is_merged",
+        "pull_request.has_conflicts",
+        "ci.has_failures",
+        "review_comments.present",
     }
+
+
+def _truthy_artifact(context: WorkflowExecutionContext, *names: str) -> bool:
+    for name in names:
+        if name in context.artifacts:
+            return bool(context.artifacts[name])
+    return False

@@ -486,9 +486,9 @@ those primitives are composed into automatic transitions and human-gated steps.
   should show the proposed `WORKFLOW.md` diff, validate it, and apply it
   without leaving the dashboard.
   Progress: the dashboard now has a workflow edit page that accepts a
-  plain-language change note, produces a validated `WORKFLOW.md` proposal and
-  diff, allows direct editing of the proposed file, and records applied edits in
-  SQLite.
+  plain-language change note, asks Codex to produce a full `WORKFLOW.md`
+  proposal, shows the validated diff, allows direct editing of the proposed
+  file, and records applied edits in SQLite.
 - [x] Upgrade Ask Symphony into a hybrid query system. Keep the current
   deterministic SQLite fast paths for common questions about issue timing,
   turns, errors, worker status, workflow versions, and pending gates; add an
@@ -508,7 +508,10 @@ those primitives are composed into automatic transitions and human-gated steps.
   and clean up the worktree after PR merge.
   Progress: the default workflow is encoded in `WORKFLOW.md` and the runtime
   executes the claim, workspace, Codex, review, PR/comment, and cleanup path via
-  workflow transitions and primitives.
+  workflow transitions and primitives. After draft PR creation, the default
+  workflow now fetches PR metadata, detects merge conflicts, checks CI, feeds
+  failing checks to Codex, fetches review/inline comments together, feeds review
+  comments to Codex, and uses human gates before pushing follow-up fixes.
 - [x] Add fixture workflows under the e2e harness for fast iteration: code
   happy path, research answer review, research-to-code follow-up, PR review
   comments addressed by Codex, and CI failure fixed by Codex.

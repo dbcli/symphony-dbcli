@@ -21,6 +21,8 @@ def test_action_registry_records_execution_boundaries() -> None:
     fetch_issues = DEFAULT_ACTION_REGISTRY.get("github.fetch_issues")
     pr_comments = DEFAULT_ACTION_REGISTRY.get("github.fetch_pr_review_comments")
     merge_conflicts = DEFAULT_ACTION_REGISTRY.get("github.detect_merge_conflicts")
+    push_update = DEFAULT_ACTION_REGISTRY.get("github.push_pr_update")
+    noop = DEFAULT_ACTION_REGISTRY.get("workflow.noop")
 
     assert draft_pr is not None
     assert draft_pr.side_effect == "github_write"
@@ -50,3 +52,12 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert merge_conflicts.side_effect == "github_read"
     assert merge_conflicts.output_type == "PullRequestMergeStatus"
     assert "has_conflicts" in merge_conflicts.output_fields
+
+    assert push_update is not None
+    assert push_update.side_effect == "github_write"
+    assert push_update.human_gate_allowed is True
+    assert "commit_sha" in push_update.output_fields
+
+    assert noop is not None
+    assert noop.side_effect == "none"
+    assert noop.automatic_allowed is True

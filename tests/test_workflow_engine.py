@@ -53,6 +53,21 @@ def test_condition_matching_rejects_unknown_conditions() -> None:
         condition_matches("issue.priority == high", WorkflowExecutionContext(task_type="code"))
 
 
+def test_condition_matching_reads_workflow_artifacts() -> None:
+    context = WorkflowExecutionContext(
+        task_type="code",
+        artifacts={
+            "ci.failed_checks": [{"name": "tests"}],
+            "pull_request.has_conflicts": False,
+            "review_comments.comments": [],
+        },
+    )
+
+    assert condition_matches("ci.has_failures", context) is True
+    assert condition_matches("not pull_request.has_conflicts", context) is True
+    assert condition_matches("review_comments.present", context) is False
+
+
 def test_workflow_engine_blocks_transition_after_retry_limit() -> None:
     workflow = default_config().workflow
     engine = WorkflowEngine(workflow)

@@ -261,16 +261,26 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     instance = store.workflow_instance_by_id(instance_id)
     gate = store.workflow_gate_by_id(gate_id)
     attempt = store.attempt_by_id(attempt_id)
-    assert primitives.transitions == ["create_draft_pr"]
-    assert result.current_state == "pr_ready"
-    assert result.stop_reason == "no_transition"
+    assert primitives.transitions == [
+        "create_draft_pr",
+        "refresh_pull_request",
+        "detect_merge_conflicts",
+        "fetch_ci_status",
+        "fetch_pr_review_comments",
+        "wait_for_pr_activity",
+    ]
+    assert result.current_state == "pr_waiting"
+    assert result.stop_reason == "human_gate"
     assert instance is not None
-    assert instance["current_state"] == "pr_ready"
+    assert instance["current_state"] == "pr_waiting"
     assert gate is not None
     assert gate["status"] == "resolved"
     assert gate["decision"] == "approved"
     assert attempt is not None
     assert attempt["outcome"] == "draft_pr_created"
+    assert {row["transition_name"] for row in store.pending_workflow_gates_for_attempt(attempt_id)} == {
+        "check_pr_again"
+    }
 
 
 def test_orchestrator_runs_mark_blocked_human_gate(tmp_path: Path) -> None:
@@ -351,11 +361,11 @@ def test_orchestrator_advances_ready_workflow_instances(tmp_path: Path) -> None:
         store,
         github=FakeCleanupGitHub(),
         primitives=primitives,
-    ).advance_ready_workflow_instances(allowed_side_effects={"workspace_write"})
+    ).advance_ready_workflow_instances(allowed_side_effects={"github_read", "workspace_write"})
 
     attempt = store.attempt_by_id(attempt_id)
-    assert advanced == 1
-    assert primitives.transitions == ["cleanup_after_merge"]
+    assert advanced == 2
+    assert primitives.transitions == ["refresh_pull_request", "cleanup_after_merge"]
     assert attempt is not None
     assert attempt["status"] == "done"
     assert attempt["outcome"] == "done"

@@ -282,7 +282,7 @@ class Orchestrator:
         try:
             self._advance_workflow_instance(
                 instance_id,
-                allowed_side_effects={"github_write"},
+                allowed_side_effects={"github_write", "none"},
             )
         except Exception as exc:
             self._fail_workflow_instance(instance_id, str(exc))
@@ -342,7 +342,7 @@ class Orchestrator:
         try:
             result = self._advance_workflow_instance(
                 instance_id,
-                allowed_side_effects={"workspace_write", "codex_worker", "github_write"},
+                allowed_side_effects={"workspace_write", "codex_worker", "github_write", "none"},
             )
             if result.current_state in self.config.workflow.terminal_states:
                 self.store.finish_attempt(attempt_id, result.current_state, result.current_state)
@@ -438,7 +438,7 @@ class Orchestrator:
             self.store.update_attempt_outcome(attempt_id, "draft_pr_created")
         return self._advance_workflow_instance(
             int(instance["id"]),
-            allowed_side_effects={"github_read", "github_write", "workspace_write", "codex_worker"},
+            allowed_side_effects={"github_read", "github_write", "workspace_write", "codex_worker", "none"},
         )
 
     def _advance_workflow_instance(
@@ -466,7 +466,7 @@ class Orchestrator:
             except WorkflowEngineError as exc:
                 raise OrchestratorError(str(exc)) from exc
             if match is None:
-                opened = self._open_human_gates(instance_id, current_state, context.task_type)
+                opened = self._open_human_gates(instance_id, current_state, context)
                 return WorkflowAdvanceResult(
                     current_state,
                     ran_actions,
@@ -522,6 +522,7 @@ class Orchestrator:
         return WorkflowExecutionContext(
             task_type=str(instance["task_type"]),
             pull_request_is_merged=self._pull_request_is_merged(_optional_int(instance["attempt_id"])),
+            artifacts=self.store.workflow_artifacts(int(instance["id"])),
             transition_failure_counts=self.store.workflow_action_failure_counts(int(instance["id"])),
         )
 
@@ -787,12 +788,17 @@ class Orchestrator:
         except ValueError:
             return
 
-    def _open_human_gates(self, instance_id: int, state: str, task_type: str) -> int:
+    def _open_human_gates(
+        self,
+        instance_id: int,
+        state: str,
+        context: WorkflowExecutionContext,
+    ) -> int:
         try:
             matches = WorkflowEngine(self.config.workflow).matching_transitions(
                 from_state=state,
                 trigger="human",
-                context=WorkflowExecutionContext(task_type=task_type),
+                context=context,
             )
         except WorkflowEngineError:
             return 0

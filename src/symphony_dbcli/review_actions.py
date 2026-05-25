@@ -47,6 +47,16 @@ class DraftPullRequestContent:
     body: str
 
 
+@dataclass(frozen=True)
+class PullRequestBranchUpdate:
+    number: int
+    url: str
+    title: str
+    branch: str
+    commit_sha: str
+    pushed: bool
+
+
 class ReviewActions:
     def __init__(
         self,
@@ -81,7 +91,14 @@ class ReviewActions:
             raise ReviewActionError("Attempt does not have a complete worktree, branch, and base commit.")
 
         worktree = GitWorktree(worktree_path)
-        commit_sha = self._ensure_commit(attempt_id, repo, issue_number, worktree, base_commit)
+        commit_sha = self._ensure_commit(
+            attempt_id,
+            repo,
+            issue_number,
+            worktree,
+            base_commit,
+            require_changes=True,
+        )
         self.store.update_attempt_workspace(
             attempt_id,
             base_repo_path=str(attempt["base_repo_path"]),
@@ -129,6 +146,67 @@ class ReviewActions:
         )
         return pr
 
+    def push_pr_update(self, attempt_id: int) -> PullRequestBranchUpdate:
+        attempt = self.store.attempt_by_id(attempt_id)
+        if not attempt:
+            raise ReviewActionError(f"Attempt {attempt_id} does not exist.")
+        if str(attempt["task_type"]) != "code":
+            raise ReviewActionError("Only code attempts can update pull request branches.")
+        existing = self.store.pull_requests_for_attempt(attempt_id)
+        if not existing:
+            raise ReviewActionError("Attempt does not have an existing pull request.")
+
+        repo = str(attempt["repo"])
+        issue_number = int(attempt["issue_number"])
+        worktree_path = str(attempt["worktree_path"])
+        branch = str(attempt["branch"])
+        base_commit = str(attempt["commit_sha"] or "")
+        if not worktree_path or not branch or not base_commit:
+            raise ReviewActionError("Attempt does not have a complete worktree, branch, and base commit.")
+
+        pull_request = existing[0]
+        commit_sha = self._ensure_commit(
+            attempt_id,
+            repo,
+            issue_number,
+            GitWorktree(worktree_path),
+            base_commit,
+            require_changes=False,
+        )
+        if not commit_sha:
+            return PullRequestBranchUpdate(
+                number=int(pull_request["number"]),
+                url=str(pull_request["url"]),
+                title=str(pull_request["title"]),
+                branch=branch,
+                commit_sha=base_commit,
+                pushed=False,
+            )
+
+        self.store.update_attempt_workspace(
+            attempt_id,
+            base_repo_path=str(attempt["base_repo_path"]),
+            worktree_path=worktree_path,
+            branch=branch,
+            commit_sha=commit_sha,
+        )
+        self.github.push_branch(repo=repo, worktree_path=worktree_path, branch=branch)
+        self.store.record_timeline_event(
+            attempt_id,
+            phase="github",
+            event_type="pr_branch_updated",
+            message=branch,
+            data={"pull_request": int(pull_request["number"]), "commit_sha": commit_sha},
+        )
+        return PullRequestBranchUpdate(
+            number=int(pull_request["number"]),
+            url=str(pull_request["url"]),
+            title=str(pull_request["title"]),
+            branch=branch,
+            commit_sha=commit_sha,
+            pushed=True,
+        )
+
     def post_comment(self, comment_id: int, body: str) -> PostedComment:
         cleaned_body = body.strip()
         if not cleaned_body:
@@ -164,6 +242,8 @@ class ReviewActions:
         issue_number: int,
         worktree: GitWorktree,
         base_commit: str,
+        *,
+        require_changes: bool,
     ) -> str:
         if worktree.has_changes():
             self.store.record_timeline_event(attempt_id, phase="git", event_type="commit_started")
@@ -185,6 +265,8 @@ class ReviewActions:
                 message=commit_sha,
             )
             return commit_sha
+        if not require_changes:
+            return ""
         raise ReviewActionError("No code changes were found in this attempt worktree.")
 
 
