@@ -69,27 +69,6 @@ def test_serve_web_runs_fastapi_without_runtime(tmp_path: Path, monkeypatch: pyt
     assert calls["run_runtime"] is False
 
 
-def test_serve_legacy_keeps_old_dashboard_explicit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workflow_path = _workflow(tmp_path)
-    calls: dict[str, object] = {}
-
-    def fake_serve_dashboard(store: Store, host: str, port: int, *, state: object) -> None:
-        calls["store_path"] = store.path
-        calls["host"] = host
-        calls["port"] = port
-
-    monkeypatch.setattr(cli, "serve_dashboard", fake_serve_dashboard)
-
-    result = cli.main(["--workflow", str(workflow_path), "serve-legacy", "--no-poll"])
-
-    assert result == 0
-    assert calls["store_path"] == str(tmp_path / "symphony.db")
-    assert calls["host"] == "127.0.0.1"
-
-
 def _workflow(tmp_path: Path) -> Path:
     workflow_path = tmp_path / "WORKFLOW.md"
     config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))

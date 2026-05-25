@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -20,16 +18,14 @@ from .config import (
     validate_config,
     write_workflow,
 )
-from .dashboard import DashboardState, serve_dashboard
 from .db import create_db_engine
 from .e2e import DEFAULT_FIXTURE_REPO, E2EFixtureConfig, fixture_scenarios, run_fixture
 from .env import load_local_env, parse_env_file
 from .github import GitHubClient
 from .github_app import default_manifest, write_manifest_form
 from .models import create_model_tables
-from .orchestrator import Orchestrator, WorkflowWatcher, load_and_record_workflow
+from .orchestrator import Orchestrator, load_and_record_workflow
 from .store import Store
-from .supervisor import WorkerSupervisor
 from .worktree import WorktreeManager
 
 
@@ -97,10 +93,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_web = subcommands.add_parser("serve-web", help="Run the FastAPI dashboard without workers")
     serve_web.set_defaults(func=cmd_serve_web)
-
-    serve_legacy = subcommands.add_parser("serve-legacy", help="Run the legacy dashboard and polling loop")
-    serve_legacy.add_argument("--no-poll", action="store_true", help="Only run the legacy dashboard")
-    serve_legacy.set_defaults(func=cmd_serve_legacy)
 
     worker = subcommands.add_parser("worker", help="Worker commands")
     worker_sub = worker.add_subparsers(required=True)
@@ -413,19 +405,6 @@ def cmd_serve_web(args: argparse.Namespace) -> int:
     return _run_fastapi(args, run_runtime=False)
 
 
-def cmd_serve_legacy(args: argparse.Namespace) -> int:
-    config, _, store = _load_config_store_and_record(
-        args.workflow,
-        profile=_runtime_profile(args),
-    )
-    dashboard_state = DashboardState(config, workflow_path=args.workflow)
-    if not args.no_poll:
-        thread = threading.Thread(target=_poll_loop, args=(args, store, dashboard_state), daemon=True)
-        thread.start()
-    serve_dashboard(store, config.dashboard.host, config.dashboard.port, state=dashboard_state)
-    return 0
-
-
 def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
     import uvicorn
 
@@ -438,32 +417,6 @@ def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
     app = create_app(config, store, workflow_path=args.workflow, run_runtime=run_runtime)
     uvicorn.run(app, host=config.dashboard.host, port=config.dashboard.port)
     return 0
-
-
-def _poll_loop(args: argparse.Namespace, store: Store, dashboard_state: DashboardState) -> None:
-    watcher = WorkflowWatcher(store, args.workflow, profile=_runtime_profile(args))
-    supervisor = WorkerSupervisor(store, workflow_path=args.workflow, profile=_runtime_profile(args))
-    interval = 60
-    while True:
-        try:
-            config, version_id, _changed = watcher.reload_if_changed()
-            dashboard_state.update_config(config)
-            interval = config.workers.poll_interval_seconds
-            orchestrator = Orchestrator(config, store, version_id)
-            supervisor.reconcile(config, version_id)
-            orchestrator.poll_once()
-            try:
-                orchestrator.cleanup_merged_pull_request_worktrees()
-            except Exception as exc:
-                print(f"worktree cleanup error: {exc}", file=sys.stderr)
-            orchestrator.advance_ready_workflow_instances(
-                allowed_side_effects={"github_read", "github_write", "workspace_write"}
-            )
-            orchestrator.claim_available()
-            supervisor.start_queued(config)
-        except Exception as exc:  # Keep the dashboard alive.
-            print(f"poll loop error: {exc}", file=sys.stderr)
-        time.sleep(interval)
 
 
 def _load_config_store_and_record(

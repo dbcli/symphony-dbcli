@@ -26,8 +26,7 @@ credentials before workers can label issues. Workers save research answers and
 code summaries as local review drafts instead of posting comments or opening
 pull requests automatically.
 `serve-web` is available for dashboard-only debugging without starting workers.
-`serve-legacy` keeps the old custom HTTP server available as an explicit
-fallback; normal local iteration should use `serve`.
+Normal local iteration should use `serve`.
 
 ## Worker Lifecycle
 

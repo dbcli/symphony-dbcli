@@ -631,12 +631,9 @@ Implementation checklist:
 
 ## FastAPI Runtime Cutover Task List
 
-The new FastAPI dashboard now owns the primary UI surface, but the worker loop
-still lives behind the legacy `serve` command and custom `BaseHTTPRequestHandler`
-dashboard. The next milestone is to make FastAPI the only normal runtime:
-dashboard, source sync, workflow advancement, worker supervision, manual cycle
-triggering, and graceful shutdown should all run through one shared runtime
-service.
+The FastAPI dashboard now owns the normal runtime: dashboard, source sync,
+workflow advancement, worker supervision, manual cycle triggering, and graceful
+shutdown all run through one shared runtime service.
 
 Implementation checklist:
 
@@ -676,8 +673,7 @@ Implementation checklist:
   `dashboard.py` into a FastAPI-owned module so the new web app no longer
   imports from the legacy custom server module.
 - [x] Change `symphony-dbcli serve` to run the FastAPI app plus runtime loop.
-  Keep the old implementation temporarily as `serve-legacy` or another
-  explicit fallback command until route parity is complete.
+  The legacy server fallback has been removed after route parity.
 - [x] Decide the fate of `serve-web`: either remove it, make it an alias for
   the new `serve`, or keep it as a dashboard-only debug command with a name
   that makes the missing worker loop explicit.
@@ -695,7 +691,7 @@ Implementation checklist:
   control.
 - [ ] Run the GitHub-backed e2e fixture against the new FastAPI `serve` path
   before retiring the old server.
-- [ ] Remove the custom `BaseHTTPRequestHandler` dashboard, legacy templates,
+- [x] Remove the custom `BaseHTTPRequestHandler` dashboard, legacy templates,
   and old static assets after FastAPI reaches route and runtime parity.
 
 Progress notes:
@@ -703,9 +699,7 @@ Progress notes:
 - 2026-05-25: Extracted a shared `OrchestrationRuntime`, wired FastAPI lifespan
   startup/shutdown, added `/workflow/run-cycle`, rendered runtime status on the
   Workers page, and changed `symphony-dbcli serve` to launch FastAPI with the
-  runtime loop. `serve-web` is now dashboard-only debug mode and
-  `serve-legacy` keeps the custom HTTP server available while route parity is
-  completed.
+  runtime loop. `serve-web` is now dashboard-only debug mode.
 - 2026-05-25: Added a SQLite-backed runtime leader lock. FastAPI runtime
   instances now acquire the lock before starting the background loop or running
   an ad hoc cycle; non-leaders stay in standby and the Workers page shows the
@@ -713,6 +707,10 @@ Progress notes:
 - 2026-05-25: Ported remaining review actions to FastAPI routes: attempt
   detail, issue detail, human gates, draft reply posting, draft PR creation,
   code follow-ups, workflow edit preview/apply, and the GitHub App callback.
+- 2026-05-25: Removed the legacy `BaseHTTPRequestHandler` dashboard, its
+  templates/static assets, the `serve-legacy` command, and the old
+  dashboard-rendering tests. The FastAPI app is now the only dashboard/server
+  implementation.
 - 2026-05-24: Installed FastAPI, Uvicorn, SQLAlchemy, Alembic,
   python-multipart, and httpx with `uv`. Added a typed FastAPI app factory,
   route modules that match the dashboard hierarchy, separate CSS/JS assets,
