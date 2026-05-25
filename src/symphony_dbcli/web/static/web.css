@@ -680,6 +680,15 @@ h2 {
   display: inline-block;
 }
 
+.legend-diamond {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #6c7a8d;
+  background: #f7fbff;
+  transform: rotate(45deg);
+}
+
 .legend-line {
   width: 22px;
   border-top: 2px solid #8491a3;
@@ -779,27 +788,44 @@ h2 {
   fill: #b4791f;
 }
 
-.workflow-flow-node rect {
+.workflow-flow-node rect,
+.workflow-flow-node polygon {
   fill: var(--surface);
   stroke: var(--line);
   stroke-width: 1.5;
 }
 
-.workflow-flow-node.is-initial rect {
+.workflow-flow-node.is-decision polygon {
+  fill: #f7fbff;
+  stroke: #6c7a8d;
+  stroke-width: 1.8;
+}
+
+:root[data-theme="dark"] .workflow-flow-node.is-decision polygon,
+:root[data-theme="dark"] .legend-diamond {
+  background: #25313c;
+  fill: #25313c;
+}
+
+.workflow-flow-node.is-initial rect,
+.workflow-flow-node.is-initial polygon {
   stroke: var(--accent);
   stroke-width: 2.5;
 }
 
-.workflow-flow-node.is-terminal rect {
+.workflow-flow-node.is-terminal rect,
+.workflow-flow-node.is-terminal polygon {
   fill: var(--surface-subtle);
   stroke: #98a2b3;
 }
 
-.workflow-flow-node.has-gate rect {
+.workflow-flow-node.has-gate rect,
+.workflow-flow-node.has-gate polygon {
   stroke: #b4791f;
 }
 
-.workflow-flow-node.has-active rect {
+.workflow-flow-node.has-active rect,
+.workflow-flow-node.has-active polygon {
   fill: var(--accent-soft);
 }
 

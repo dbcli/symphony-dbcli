@@ -26,28 +26,30 @@ credentials before workers can label issues. Workers save research answers and
 code summaries as local review drafts instead of posting comments or opening
 pull requests automatically.
 `serve-web` is available for dashboard-only debugging without starting workers.
-`serve-legacy` keeps the old custom HTTP server available while the cutover is
-finished.
+`serve-legacy` keeps the old custom HTTP server available as an explicit
+fallback; normal local iteration should use `serve`.
 
 ## Worker Lifecycle
 
 `serve` runs the FastAPI dashboard and the full local orchestration loop:
 
-1. Reload and record `WORKFLOW.md` when it changes.
-2. Sync configured sources into the SQLite-backed board.
-3. Advance ready workflow instances and claim queued work items.
-4. Spawn worker subprocesses automatically.
-5. Record worker ids, PIDs, heartbeats, deadlines, attempts, turns, errors, and outcomes in SQLite.
-6. Mark crashed or timed-out workers as failed and queue a retry when `workers.retry_limit` allows it.
+1. Acquire a SQLite-backed runtime leader lock so only one process dispatches workers.
+2. Reload and record `WORKFLOW.md` when it changes.
+3. Sync configured sources into the SQLite-backed board.
+4. Advance ready workflow instances and claim queued work items.
+5. Spawn worker subprocesses automatically.
+6. Record worker ids, PIDs, heartbeats, deadlines, attempts, turns, errors, and outcomes in SQLite.
+7. Mark crashed or timed-out workers as failed and queue a retry when `workers.retry_limit` allows it.
 
 Worker lifecycle settings live in `WORKFLOW.md` under `[workers]`, including
 `poll_interval_seconds`, `heartbeat_interval_seconds`,
 `heartbeat_timeout_seconds`, `max_runtime_seconds`, `retry_limit`, and
 `shutdown_grace_seconds`.
 
-The pre-alpha runtime assumes a single FastAPI/Uvicorn process. Do not run
-multiple Uvicorn workers yet; that will require a DB-backed leader lock so only
-one process owns orchestration.
+The pre-alpha runtime is designed for one FastAPI/Uvicorn process locally. A
+SQLite leader lock prevents duplicate worker dispatch if another process starts,
+but production multi-worker deployment still needs more soak testing before it
+should be treated as hardened.
 
 ## Reviewing Results
 

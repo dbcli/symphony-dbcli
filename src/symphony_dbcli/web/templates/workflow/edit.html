@@ -45,28 +45,36 @@
             d="{{ edge.path }}"
             marker-end="url(#{{ 'workflow-edit-arrow-human' if edge.trigger == 'human' else 'workflow-edit-arrow' }})"
           ></path>
-          <text x="{{ edge.label_x }}" y="{{ edge.label_y }}">{{ edge.name }}</text>
+          {% for line in edge.label_lines %}
+          <text x="{{ edge.label_x }}" y="{{ edge.label_y + (loop.index0 * 13) }}">{{ line }}</text>
+          {% endfor %}
         </g>
         {% endfor %}
         {% for node in workflow_chart.nodes %}
         <g
-          class="workflow-flow-node {{ 'is-initial' if node.name == workflow_chart.initial_state else '' }} {{ 'is-terminal' if node.terminal else '' }} {{ 'has-gate' if node.gate else '' }} {{ 'has-active' if node.active_count else '' }}"
+          class="workflow-flow-node is-{{ node.shape }} {{ 'is-initial' if node.name == workflow_chart.initial_state else '' }} {{ 'is-terminal' if node.terminal else '' }} {{ 'has-gate' if node.gate else '' }} {{ 'has-active' if node.active_count else '' }}"
           transform="translate({{ node.x }} {{ node.y }})"
         >
           <title>{{ node.description }}</title>
+          {% if node.shape == "decision" %}
+          <polygon points="{{ node.width // 2 }},0 {{ node.width }},{{ node.height // 2 }} {{ node.width // 2 }},{{ node.height }} 0,{{ node.height // 2 }}"></polygon>
+          {% else %}
           <rect width="{{ node.width }}" height="{{ node.height }}" rx="8"></rect>
-          <text class="workflow-flow-node-title" x="12" y="23">{{ node.name }}</text>
+          {% endif %}
+          <text class="workflow-flow-node-title" x="{{ node.width // 2 if node.shape == 'decision' else 12 }}" y="23" text-anchor="{{ 'middle' if node.shape == 'decision' else 'start' }}">{{ node.name }}</text>
           {% if node.description_lines %}
           {% for line in node.description_lines %}
-          <text class="workflow-flow-node-desc" x="12" y="{{ 45 + (loop.index0 * 14) }}">{{ line }}</text>
+          <text class="workflow-flow-node-desc" x="{{ node.width // 2 if node.shape == 'decision' else 12 }}" y="{{ 45 + (loop.index0 * 14) }}" text-anchor="{{ 'middle' if node.shape == 'decision' else 'start' }}">{{ line }}</text>
           {% endfor %}
           {% else %}
-          <text class="workflow-flow-node-desc" x="12" y="45">-</text>
+          <text class="workflow-flow-node-desc" x="{{ node.width // 2 if node.shape == 'decision' else 12 }}" y="45" text-anchor="{{ 'middle' if node.shape == 'decision' else 'start' }}">-</text>
           {% endif %}
           {% if node.gate %}
-          <text class="workflow-flow-node-meta" x="12" y="80">gate: {{ node.gate }}</text>
+          <text class="workflow-flow-node-meta" x="{{ node.width // 2 if node.shape == 'decision' else 12 }}" y="80" text-anchor="{{ 'middle' if node.shape == 'decision' else 'start' }}">gate: {{ node.gate }}</text>
           {% elif node.terminal %}
-          <text class="workflow-flow-node-meta" x="12" y="80">terminal</text>
+          <text class="workflow-flow-node-meta" x="{{ node.width // 2 if node.shape == 'decision' else 12 }}" y="80" text-anchor="{{ 'middle' if node.shape == 'decision' else 'start' }}">terminal</text>
+          {% elif node.shape == "decision" %}
+          <text class="workflow-flow-node-meta" x="{{ node.width // 2 }}" y="80" text-anchor="middle">condition</text>
           {% elif node.name == workflow_chart.initial_state %}
           <text class="workflow-flow-node-meta" x="12" y="80">initial</text>
           {% endif %}

@@ -9,6 +9,7 @@ from .workflow_definition import WorkflowDefinitionConfig, WorkflowTransitionCon
 
 type NamedTransition = tuple[str, WorkflowTransitionConfig]
 type FlowOrientation = Literal["horizontal", "vertical"]
+type FlowNodeShape = Literal["state", "decision", "terminal"]
 
 
 _NODE_WIDTH = 190
@@ -21,6 +22,8 @@ _VERTICAL_COLUMN_GAP = 48
 _VERTICAL_ROW_GAP = 72
 _DESCRIPTION_LINE_LIMIT = 29
 _DESCRIPTION_LINE_COUNT = 2
+_EDGE_LABEL_LINE_LIMIT = 34
+_EDGE_LABEL_LINE_COUNT = 2
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,7 @@ class WorkflowFlowNodeView:
     description: str
     description_lines: tuple[str, ...]
     terminal: bool
+    shape: FlowNodeShape
     gate: str
     active_count: int
     x: int
@@ -70,6 +74,7 @@ class WorkflowFlowEdgeView:
     trigger: str
     condition: str
     gate: str
+    label_lines: tuple[str, ...]
     path: str
     label_x: int
     label_y: int
@@ -165,6 +170,7 @@ def _nodes(
     orientation: FlowOrientation,
 ) -> list[WorkflowFlowNodeView]:
     nodes: list[WorkflowFlowNodeView] = []
+    decision_states = _decision_states(workflow)
     for depth, state_names in sorted(columns.items()):
         for offset, state_name in enumerate(state_names):
             state = workflow.states[state_name]
@@ -175,6 +181,7 @@ def _nodes(
                     description=state.description,
                     description_lines=_description_lines(state.description),
                     terminal=state.terminal,
+                    shape=_node_shape(state_name, state.terminal, decision_states),
                     gate=state.gate,
                     active_count=state_counts.get(state_name, 0),
                     x=x,
@@ -235,6 +242,7 @@ def _edge_view(
         trigger=transition.trigger,
         condition=transition.condition,
         gate=transition.gate,
+        label_lines=_edge_label_lines(name, transition),
         path=path,
         label_x=label_x,
         label_y=label_y,
@@ -308,15 +316,40 @@ def _canvas_size(columns: Mapping[int, list[str]], orientation: FlowOrientation)
 
 
 def _description_lines(text: str) -> tuple[str, ...]:
+    return _wrapped_lines(text, width=_DESCRIPTION_LINE_LIMIT, max_lines=_DESCRIPTION_LINE_COUNT)
+
+
+def _edge_label_lines(name: str, transition: WorkflowTransitionConfig) -> tuple[str, ...]:
+    label = transition.condition or transition.gate or transition.action or name
+    return _wrapped_lines(label, width=_EDGE_LABEL_LINE_LIMIT, max_lines=_EDGE_LABEL_LINE_COUNT)
+
+
+def _wrapped_lines(text: str, *, width: int, max_lines: int) -> tuple[str, ...]:
     value = " ".join(text.split())
     if not value:
         return ()
     return tuple(
         wrap(
             value,
-            width=_DESCRIPTION_LINE_LIMIT,
-            max_lines=_DESCRIPTION_LINE_COUNT,
+            width=width,
+            max_lines=max_lines,
             placeholder="...",
             break_long_words=False,
         )
     )
+
+
+def _decision_states(workflow: WorkflowDefinitionConfig) -> set[str]:
+    return {
+        state_name
+        for state_name, transitions in _transitions_by_state(workflow.transitions).items()
+        if any(transition.condition for _, transition in transitions)
+    }
+
+
+def _node_shape(state_name: str, terminal: bool, decision_states: set[str]) -> FlowNodeShape:
+    if terminal:
+        return "terminal"
+    if state_name in decision_states:
+        return "decision"
+    return "state"

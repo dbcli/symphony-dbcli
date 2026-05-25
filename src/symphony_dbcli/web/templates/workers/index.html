@@ -44,7 +44,7 @@
   <section class="panel">
     <div class="section-heading">
       <h2>Runtime</h2>
-      <span class="status-pill {{ 'is-ok' if runtime_status.runtime_attached else 'is-warning' }}">
+      <span class="status-pill {{ 'is-ok' if runtime_status.leader else 'is-warning' }}">
         {{ runtime_status.runtime_label }}
       </span>
     </div>
@@ -55,6 +55,7 @@
       <div><span class="kicker">Loop</span><strong>{{ runtime_status.loop_label }}</strong></div>
       <div><span class="kicker">Polling</span><strong>{{ runtime_status.polling_label }}</strong></div>
       <div><span class="kicker">Current Cycle</span><strong>{{ runtime_status.cycle_label }}</strong></div>
+      <div><span class="kicker">Leader Lock</span><strong>{{ runtime_status.lock_owner if runtime_status.lock_owner else "none" }}</strong></div>
       <div><span class="kicker">Poll Interval</span><strong>{{ runtime_status.poll_interval_seconds }}s</strong></div>
       <div>
         <span class="kicker">Next Poll</span>

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import socket
 import sqlite3
 import sys
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -105,6 +108,8 @@ class RuntimeStatus:
     queued_attempts: int
     running_attempts: int
     workers: list[RuntimeWorkerView]
+    leader: bool = True
+    lock_owner: str = ""
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,8 @@ class OrchestrationRuntime:
         watcher: RuntimeWorkflowWatcher | None = None,
         supervisor: RuntimeSupervisor | None = None,
         orchestrator_factory: OrchestratorFactory | None = None,
+        lock_name: str = "orchestration",
+        owner_id: str | None = None,
     ):
         self.store = store
         self.workflow_path = workflow_path
@@ -172,6 +179,8 @@ class OrchestrationRuntime:
             profile=profile,
         )
         self.orchestrator_factory = orchestrator_factory or _default_orchestrator_factory
+        self.lock_name = lock_name
+        self.owner_id = owner_id or f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._cycle_lock = threading.Lock()
@@ -181,6 +190,8 @@ class OrchestrationRuntime:
         self._last_cycle: RuntimeCycleResult | None = None
         self._current_config: WorkflowConfig | None = config
         self._current_version_id: int | None = None
+        self._leader = False
+        self._lock_owner = ""
 
     @property
     def current_config(self) -> WorkflowConfig | None:
@@ -196,6 +207,9 @@ class OrchestrationRuntime:
         with self._state_lock:
             if self._running:
                 return
+        if not self._ensure_runtime_lock():
+            return
+        with self._state_lock:
             self._running = True
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="symphony-runtime", daemon=True)
@@ -209,16 +223,23 @@ class OrchestrationRuntime:
         config, _version_id = self._runtime_context()
         if config is not None:
             self.supervisor.terminate_tracked(config)
+        self.store.release_runtime_lock(self.lock_name, self.owner_id)
         with self._state_lock:
             self._running = False
             self._next_poll_at = None
+            self._leader = False
 
     def run_cycle(self, *, trigger: str = "manual") -> RuntimeCycleResult:
+        if not self._ensure_runtime_lock():
+            result = RuntimeCycleResult.skipped_cycle(trigger, "runtime lock is held by another process")
+            self._set_last_cycle(result)
+            return result
         if not self._cycle_lock.acquire(blocking=False):
             result = RuntimeCycleResult.busy(trigger)
             self._set_last_cycle(result)
             return result
         started_at = _utc_now()
+        release_after_cycle = not self.is_running()
         try:
             config, version_id, workflow_changed = self.watcher.reload_if_changed()
             self._set_runtime_context(config, version_id)
@@ -255,6 +276,9 @@ class OrchestrationRuntime:
             print(f"runtime cycle error: {exc}", file=sys.stderr)
         finally:
             self._cycle_lock.release()
+            if release_after_cycle:
+                self.store.release_runtime_lock(self.lock_name, self.owner_id)
+                self._set_leader(False, "")
         self._set_last_cycle(result)
         return result
 
@@ -264,6 +288,8 @@ class OrchestrationRuntime:
             running = self._running
             next_poll_at = self._next_poll_at
             last_cycle = self._last_cycle
+            leader = self._leader
+            lock_owner = self._lock_owner
         poll_interval_seconds = config.workers.poll_interval_seconds if config else 0
         profile = config.profile.active if config else self.profile or ""
         summary = self.store.dashboard_summary()
@@ -279,6 +305,8 @@ class OrchestrationRuntime:
             queued_attempts=int(summary["queued_attempts"]),
             running_attempts=int(summary["running_attempts"]),
             workers=[_worker_view(row) for row in self.store.running_workers()],
+            leader=leader,
+            lock_owner=lock_owner,
         )
 
     def _loop(self) -> None:
@@ -289,7 +317,16 @@ class OrchestrationRuntime:
             self._set_next_poll(interval)
             if result.status == "failed":
                 interval = max(interval, 5)
+            if not self._refresh_runtime_lock():
+                with self._state_lock:
+                    self._running = False
+                    self._leader = False
+                break
             self._stop.wait(interval)
+
+    def is_running(self) -> bool:
+        with self._state_lock:
+            return self._running
 
     def _cleanup_worktrees(self, orchestrator: RuntimeOrchestrator) -> WorktreeCleanupSummary:
         try:
@@ -316,6 +353,33 @@ class OrchestrationRuntime:
         with self._state_lock:
             return self._current_config, self._current_version_id
 
+    def _ensure_runtime_lock(self) -> bool:
+        config = self.current_config
+        ttl_seconds = _lock_ttl_seconds(config)
+        acquired = self.store.acquire_runtime_lock(self.lock_name, self.owner_id, ttl_seconds=ttl_seconds)
+        if acquired:
+            self._set_leader(True, self.owner_id)
+            return True
+        row = self.store.runtime_lock(self.lock_name)
+        self._set_leader(False, "" if row is None else str(row["owner"]))
+        return False
+
+    def _refresh_runtime_lock(self) -> bool:
+        config = self.current_config
+        refreshed = self.store.refresh_runtime_lock(
+            self.lock_name,
+            self.owner_id,
+            ttl_seconds=_lock_ttl_seconds(config),
+        )
+        if refreshed:
+            self._set_leader(True, self.owner_id)
+        return refreshed
+
+    def _set_leader(self, leader: bool, lock_owner: str) -> None:
+        with self._state_lock:
+            self._leader = leader
+            self._lock_owner = lock_owner
+
 
 def disabled_runtime_status(config: WorkflowConfig) -> RuntimeStatus:
     return RuntimeStatus(
@@ -330,6 +394,7 @@ def disabled_runtime_status(config: WorkflowConfig) -> RuntimeStatus:
         queued_attempts=0,
         running_attempts=0,
         workers=[],
+        leader=False,
     )
 
 
@@ -343,6 +408,12 @@ def _default_orchestrator_factory(
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _lock_ttl_seconds(config: WorkflowConfig | None) -> int:
+    if config is None:
+        return 60
+    return max(config.workers.poll_interval_seconds * 2, 60)
 
 
 def _worker_view(row: sqlite3.Row) -> RuntimeWorkerView:

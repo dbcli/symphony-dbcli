@@ -100,6 +100,30 @@ def test_runtime_stop_terminates_tracked_workers_after_cycle(tmp_path: Path) -> 
     assert runtime.status().running is False
 
 
+def test_runtime_start_stays_standby_when_leader_lock_is_held(tmp_path: Path) -> None:
+    config, store = _config_and_store(tmp_path)
+    assert store.acquire_runtime_lock("orchestration", "other-process", ttl_seconds=60)
+    runtime = OrchestrationRuntime(
+        config=config,
+        store=store,
+        workflow_path="WORKFLOW.md",
+        watcher=FakeWatcher(config, []),
+        supervisor=FakeSupervisor([]),
+        orchestrator_factory=lambda cfg, st, version_id: FakeOrchestrator([]),
+        owner_id="this-process",
+    )
+
+    runtime.start()
+    skipped = runtime.run_cycle(trigger="manual")
+    status = runtime.status()
+
+    assert skipped.status == "skipped"
+    assert skipped.skipped_reason == "runtime lock is held by another process"
+    assert status.running is False
+    assert status.leader is False
+    assert status.lock_owner == "other-process"
+
+
 def _config_and_store(tmp_path: Path) -> tuple[WorkflowConfig, Store]:
     config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
     store = Store(config.database.path)

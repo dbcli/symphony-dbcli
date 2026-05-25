@@ -132,7 +132,10 @@ def test_fastapi_workflow_page_renders_vertical_flowchart(tmp_path: Path) -> Non
     assert 'aria-label="Vertical workflow flowchart"' in response.text
     assert "data-workflow-controls" in response.text
     assert "data-workflow-flowchart" in response.text
+    assert "Conditional branch" in response.text
+    assert '<polygon points="' in response.text
     assert "fix_issue" in response.text
+    assert "task.type == &#34;code&#34;" in response.text
     assert "create_draft_pr" in response.text
     assert "Pending Gates" in response.text
 
@@ -146,7 +149,7 @@ def test_fastapi_workers_page_shows_runtime_status(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Run workflow cycle now" in response.text
     assert 'action="/workflow/run-cycle"' in response.text
-    assert "Attached" in response.text
+    assert "Leader" in response.text
     assert "Running" in response.text
     assert "Enabled" in response.text
     assert "2026-05-25T12:01:00+00:00" in response.text

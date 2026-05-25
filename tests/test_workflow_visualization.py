@@ -14,6 +14,10 @@ def test_workflow_flowchart_preserves_workflow_shape() -> None:
     assert nodes["review"].x < nodes["pr_ready"].x
     assert edges["fix_issue"].from_state == "setup_complete"
     assert edges["fix_issue"].to_state == "worker_complete"
+    assert nodes["setup_complete"].shape == "decision"
+    assert nodes["review"].shape == "decision"
+    assert nodes["done"].shape == "terminal"
+    assert any('task.type == "code"' in line for line in edges["fix_issue"].label_lines)
     assert edges["create_draft_pr"].trigger == "human"
     assert edges["create_draft_pr"].gate == "review_diff"
 

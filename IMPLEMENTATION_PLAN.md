@@ -681,10 +681,10 @@ Implementation checklist:
 - [x] Decide the fate of `serve-web`: either remove it, make it an alias for
   the new `serve`, or keep it as a dashboard-only debug command with a name
   that makes the missing worker loop explicit.
-- [x] Document that the local/pre-alpha FastAPI runtime is single-process only.
-  Running multiple Uvicorn workers would start multiple orchestration loops
-  unless a future DB-backed leader lock is added.
-- [ ] Add a DB-backed leader/runtime lock before production deployment on
+- [x] Document the pre-alpha FastAPI runtime deployment constraints. Multiple
+  Uvicorn workers are guarded by a DB-backed leader lock, but production
+  multi-process deployment still needs soak testing.
+- [x] Add a DB-backed leader/runtime lock before production deployment on
   exe.dev if there is any chance of multiple app processes or overlapping
   deployments.
 - [x] Add focused tests for the extracted runtime: cycle ordering, workflow
@@ -705,8 +705,14 @@ Progress notes:
   Workers page, and changed `symphony-dbcli serve` to launch FastAPI with the
   runtime loop. `serve-web` is now dashboard-only debug mode and
   `serve-legacy` keeps the custom HTTP server available while route parity is
-  completed. Local runtime remains single-process only until a DB-backed leader
-  lock is added.
+  completed.
+- 2026-05-25: Added a SQLite-backed runtime leader lock. FastAPI runtime
+  instances now acquire the lock before starting the background loop or running
+  an ad hoc cycle; non-leaders stay in standby and the Workers page shows the
+  current lock owner.
+- 2026-05-25: Ported remaining review actions to FastAPI routes: attempt
+  detail, issue detail, human gates, draft reply posting, draft PR creation,
+  code follow-ups, workflow edit preview/apply, and the GitHub App callback.
 - 2026-05-24: Installed FastAPI, Uvicorn, SQLAlchemy, Alembic,
   python-multipart, and httpx with `uv`. Added a typed FastAPI app factory,
   route modules that match the dashboard hierarchy, separate CSS/JS assets,

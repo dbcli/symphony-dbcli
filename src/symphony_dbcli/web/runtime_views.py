@@ -77,6 +77,8 @@ class WorkerEventCounts:
 @dataclass(frozen=True)
 class WorkersRuntimeStatusView:
     runtime_attached: bool
+    leader: bool
+    lock_owner: str
     loop_running: bool
     polling_enabled: bool
     cycle_running: bool
@@ -95,7 +97,9 @@ class WorkersRuntimeStatusView:
 
     @property
     def runtime_label(self) -> str:
-        return "Attached" if self.runtime_attached else "Not attached"
+        if not self.runtime_attached:
+            return "Not attached"
+        return "Leader" if self.leader else "Standby"
 
     @property
     def loop_label(self) -> str:
@@ -123,6 +127,8 @@ class WorkersRuntimeStatusView:
         if runtime_status is None:
             return cls(
                 runtime_attached=False,
+                leader=False,
+                lock_owner="",
                 loop_running=False,
                 polling_enabled=False,
                 cycle_running=False,
@@ -142,6 +148,8 @@ class WorkersRuntimeStatusView:
 
         return cls(
             runtime_attached=True,
+            leader=runtime_status.leader,
+            lock_owner=runtime_status.lock_owner,
             loop_running=runtime_status.running,
             polling_enabled=runtime_status.polling_enabled,
             cycle_running=runtime_status.cycle_running,

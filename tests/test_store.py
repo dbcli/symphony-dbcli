@@ -162,6 +162,24 @@ def test_start_queued_work_automatically_is_always_on(tmp_path: Path) -> None:
     assert store.start_queued_work_automatically() is True
 
 
+def test_runtime_lock_allows_one_owner_until_expiration(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+
+    assert store.acquire_runtime_lock("orchestration", "owner-a", ttl_seconds=60) is True
+    assert store.acquire_runtime_lock("orchestration", "owner-b", ttl_seconds=60) is False
+    assert store.refresh_runtime_lock("orchestration", "owner-b", ttl_seconds=60) is False
+
+    lock = store.runtime_lock("orchestration")
+    assert lock is not None
+    assert lock["owner"] == "owner-a"
+
+    assert store.acquire_runtime_lock("orchestration", "owner-a", ttl_seconds=-1) is True
+    assert store.acquire_runtime_lock("orchestration", "owner-b", ttl_seconds=60) is True
+    store.release_runtime_lock("orchestration", "owner-b")
+    assert store.runtime_lock("orchestration") is None
+
+
 def test_store_records_workflow_runtime_state(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

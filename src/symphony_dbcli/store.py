@@ -13,7 +13,7 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 
@@ -57,6 +57,53 @@ class Store:
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
                 """,
                 (str(SCHEMA_VERSION), utc_now()),
+            )
+
+    def acquire_runtime_lock(self, name: str, owner: str, *, ttl_seconds: int) -> bool:
+        now = utc_now()
+        expires_at = utc_after(ttl_seconds)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO runtime_locks(name, owner, acquired_at, heartbeat_at, expires_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    owner = excluded.owner,
+                    acquired_at = CASE
+                        WHEN runtime_locks.owner = excluded.owner THEN runtime_locks.acquired_at
+                        ELSE excluded.acquired_at
+                    END,
+                    heartbeat_at = excluded.heartbeat_at,
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at
+                WHERE runtime_locks.owner = excluded.owner OR runtime_locks.expires_at <= ?
+                """,
+                (name, owner, now, now, expires_at, now, now),
+            )
+            return cursor.rowcount == 1
+
+    def refresh_runtime_lock(self, name: str, owner: str, *, ttl_seconds: int) -> bool:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE runtime_locks
+                SET heartbeat_at = ?, expires_at = ?, updated_at = ?
+                WHERE name = ? AND owner = ?
+                """,
+                (now, utc_after(ttl_seconds), now, name, owner),
+            )
+            return cursor.rowcount == 1
+
+    def release_runtime_lock(self, name: str, owner: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM runtime_locks WHERE name = ? AND owner = ?", (name, owner))
+
+    def runtime_lock(self, name: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute("SELECT * FROM runtime_locks WHERE name = ?", (name,)).fetchone(),
             )
 
     def record_workflow_version(
@@ -1908,6 +1955,16 @@ SCHEMA = [
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS runtime_locks(
+        name TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        acquired_at TEXT NOT NULL,
+        heartbeat_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT ''
     )
     """,
     """
