@@ -153,6 +153,62 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "Prefer unit tests." in detail.text
 
 
+def test_fastapi_source_filters_can_be_edited_and_applied_to_sync(tmp_path: Path) -> None:
+    sync_client = FilteredSourceSyncClient()
+    client = _client(tmp_path, source_sync_client=sync_client)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    edit = client.get(f"/sources/{source_id}/edit")
+    update = client.post(
+        f"/sources/{source_id}",
+        data={
+            "display_name": "LiteCLI filtered",
+            "enabled": "true",
+            "labels": "bug, support",
+            "authors": "alice",
+            "updated_after": "2026-05-01",
+            "updated_before": "",
+            "stale_after_days": "",
+        },
+        follow_redirects=False,
+    )
+    sources = client.get("/sources")
+    sync = client.post(f"/sources/{source_id}/sync", follow_redirects=False)
+    board = client.get(f"/board?source_id={source_id}")
+
+    assert edit.status_code == 200
+    assert "Edit Source" in edit.text
+    assert update.status_code == 303
+    assert update.headers["location"] == "/sources"
+    assert sync_client.issue_labels == ["bug", "support"]
+    assert sync.status_code == 303
+    assert "LiteCLI filtered" in sources.text
+    assert "labels: bug, support" in sources.text
+    assert "authors: alice" in sources.text
+    assert "Matching issue" in board.text
+    assert "Matching PR" in board.text
+    assert "Wrong author" not in board.text
+    assert "Wrong label" not in board.text
+
+
+def test_fastapi_source_filter_validation_returns_edit_form(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    response = client.post(
+        f"/sources/{source_id}",
+        data={
+            "display_name": "dbcli/litecli",
+            "enabled": "true",
+            "updated_after": "05/01/2026",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Updated after must use YYYY-MM-DD." in response.text
+    assert "05/01/2026" in response.text
+
+
 def test_fastapi_sources_can_be_added_and_listed(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -249,4 +305,71 @@ class FakeSourceSyncClient:
                 updated_at="2026-05-25T02:00:00Z",
                 body="pr body",
             )
+        ]
+
+
+class FilteredSourceSyncClient:
+    def __init__(self) -> None:
+        self.issue_labels: list[str] | None = None
+
+    def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
+        self.issue_labels = labels
+        return [
+            GitHubIssue(
+                repo=repo,
+                number=245,
+                title="Matching issue",
+                body="issue body",
+                url=f"https://github.com/{repo}/issues/245",
+                state="open",
+                labels=["bug", "support"],
+                author="alice",
+                updated_at="2026-05-25T01:00:00Z",
+            ),
+            GitHubIssue(
+                repo=repo,
+                number=246,
+                title="Wrong author",
+                body="issue body",
+                url=f"https://github.com/{repo}/issues/246",
+                state="open",
+                labels=["bug", "support"],
+                author="mallory",
+                updated_at="2026-05-25T01:00:00Z",
+            ),
+            GitHubIssue(
+                repo=repo,
+                number=247,
+                title="Wrong label",
+                body="issue body",
+                url=f"https://github.com/{repo}/issues/247",
+                state="open",
+                labels=["bug"],
+                author="alice",
+                updated_at="2026-05-25T01:00:00Z",
+            ),
+        ]
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        return [
+            PullRequest(
+                number=8,
+                url=f"https://github.com/{repo}/pull/8",
+                title="Matching PR",
+                state=state,
+                author="alice",
+                labels=["bug", "support"],
+                updated_at="2026-05-25T02:00:00Z",
+                body="pr body",
+            ),
+            PullRequest(
+                number=9,
+                url=f"https://github.com/{repo}/pull/9",
+                title="Wrong label PR",
+                state=state,
+                author="alice",
+                labels=["support"],
+                updated_at="2026-05-25T02:00:00Z",
+                body="pr body",
+            ),
         ]

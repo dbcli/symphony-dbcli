@@ -591,11 +591,11 @@ Implementation checklist:
 - [x] Add SQLite/Alembic table for `sources`.
 - [x] Add SQLite/Alembic tables for `source_sync_runs` and `source_items`.
 - [x] Implement GitHub source sync for open issues and open PRs.
-- [ ] Add source filter support for labels, authors, stale items, and date
+- [x] Add source filter support for labels, authors, stale items, and date
   ranges.
 - [x] Build a basic Sources dashboard page with add/list controls.
 - [x] Add source sync controls and sync status.
-- [ ] Add source edit controls for filters and source settings.
+- [x] Add source edit controls for filters and source settings.
 - [x] Add `work_items`, `work_item_links`, state history, and run/reason
   storage.
 - [x] Build the source-scoped kanban board shell with backlog, todo, in
@@ -652,6 +652,9 @@ Progress notes:
   work-item list/detail pages, and board rendering from work-item state.
   Verified source sync through backlog-to-todo activation against the
   `amjith/symphony-dbcli-e2e-fixture` repository.
+- 2026-05-25: Added source edit controls and structured source filters for
+  labels, authors, updated date ranges, and stale items. Source sync now
+  applies those filters before writing source items to SQLite.
 
 ## Durable Cross-Project Spec
 

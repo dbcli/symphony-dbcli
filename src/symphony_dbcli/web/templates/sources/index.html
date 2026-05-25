@@ -10,17 +10,27 @@
       <tr>
         <th>Repository</th>
         <th>Status</th>
+        <th>Enabled</th>
+        <th>Filters</th>
         <th>Last Sync</th>
         <th>Sync</th>
         <th>Board</th>
+        <th>Edit</th>
         <th>Created</th>
       </tr>
     </thead>
     <tbody>
       {% for source in sources %}
       <tr>
-        <td><strong>{{ source.repo }}</strong></td>
+        <td>
+          <strong>{{ source.display_name }}</strong>
+          {% if source.display_name != source.repo %}
+          <div class="muted">{{ source.repo }}</div>
+          {% endif %}
+        </td>
         <td>{{ source.sync_status }}</td>
+        <td>{{ "Yes" if source.enabled else "No" }}</td>
+        <td>{{ source.filter_summary }}</td>
         <td>{{ source.last_synced_at or "Never" }}</td>
         <td>
           <form method="post" action="/sources/{{ source.id }}/sync">
@@ -28,6 +38,7 @@
           </form>
         </td>
         <td><a href="/board?source_id={{ source.id }}">Open Board</a></td>
+        <td><a href="/sources/{{ source.id }}/edit">Edit</a></td>
         <td>{{ source.created_at }}</td>
       </tr>
       {% endfor %}

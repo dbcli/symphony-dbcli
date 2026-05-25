@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block page_actions %}
+<a class="button-link" href="/sources">Sources</a>
+{% endblock %}
+{% block body %}
+<section class="panel narrow-panel">
+  <form class="stacked-form" method="post" action="/sources/{{ source.id }}">
+    <div class="source-form-header">
+      <span class="kicker">Repository</span>
+      <strong>{{ source.repo }}</strong>
+    </div>
+
+    <label for="display_name">Display Name</label>
+    <input id="display_name" name="display_name" required value="{{ form.display_name }}" />
+
+    <label class="check-row" for="enabled">
+      <input id="enabled" name="enabled" type="checkbox" value="true" {{ "checked" if form.enabled else "" }} />
+      <span>Sync this source</span>
+    </label>
+
+    <div class="form-section-title">Sync Filters</div>
+
+    <label for="labels">Labels</label>
+    <input
+      id="labels"
+      name="labels"
+      autocomplete="off"
+      placeholder="bug, help wanted"
+      value="{{ form.labels }}"
+    />
+
+    <label for="authors">Authors</label>
+    <input
+      id="authors"
+      name="authors"
+      autocomplete="off"
+      placeholder="octocat, dependabot"
+      value="{{ form.authors }}"
+    />
+
+    <div class="split-fields">
+      <div>
+        <label for="updated_after">Updated After</label>
+        <input id="updated_after" name="updated_after" type="date" value="{{ form.updated_after }}" />
+      </div>
+      <div>
+        <label for="updated_before">Updated Before</label>
+        <input id="updated_before" name="updated_before" type="date" value="{{ form.updated_before }}" />
+      </div>
+    </div>
+
+    <label for="stale_after_days">Stale After Days</label>
+    <input
+      id="stale_after_days"
+      name="stale_after_days"
+      inputmode="numeric"
+      placeholder="90"
+      value="{{ form.stale_after_days }}"
+    />
+
+    {% if error %}
+    <p class="form-error">{{ error }}</p>
+    {% endif %}
+
+    <div class="form-actions">
+      <button type="submit">Save Source</button>
+      <a class="button-link quiet" href="/sources">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

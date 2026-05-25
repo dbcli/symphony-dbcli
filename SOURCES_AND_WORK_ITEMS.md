@@ -818,9 +818,9 @@ Likely new primitives:
   and `source_items`.
 - [x] Implement GitHub source sync for open issues and PRs with default
   all-open behavior.
-- [ ] Add source filters for labels, authors, stale items, and date ranges.
+- [x] Add source filters for labels, authors, stale items, and date ranges.
 - [x] Add Sources dashboard page with add source, sync now, and sync status.
-- [ ] Add source edit controls for filters and source settings.
+- [x] Add source edit controls for filters and source settings.
 - [x] Add work item tables, link tables, state history, and migration tests.
 - [x] Build kanban board UI backed by `work_items`.
 - [x] Implement backlog-to-todo activation modal with task type and optional

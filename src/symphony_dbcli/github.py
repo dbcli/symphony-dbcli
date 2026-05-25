@@ -28,6 +28,7 @@ class PullRequest:
     title: str
     state: str = ""
     author: str = ""
+    labels: list[str] | None = None
     updated_at: str = ""
     merged_at: str = ""
     head_sha: str = ""
@@ -378,6 +379,7 @@ def _pull_request_from_json(data: dict[str, Any]) -> PullRequest:
         title=str(data["title"]),
         state=str(data.get("state") or ""),
         author=str(_json_object(data.get("user")).get("login") or ""),
+        labels=[str(label.get("name") or "") for label in _json_objects(data.get("labels"))],
         updated_at=str(data.get("updated_at") or ""),
         merged_at=str(data.get("merged_at") or ""),
         head_sha=_head_sha(data),

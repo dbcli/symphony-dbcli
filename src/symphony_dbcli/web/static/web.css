@@ -327,6 +327,11 @@ h2 {
   margin-bottom: 16px;
 }
 
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .text-action {
   justify-self: start;
   font-size: 12px;
@@ -342,6 +347,44 @@ h2 {
 }
 
 .stacked-form {
+  display: grid;
+  gap: 10px;
+}
+
+.source-form-header {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.form-section-title {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.check-row {
+  display: inline-grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.check-row input {
+  width: auto;
+}
+
+.split-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.split-fields > div {
   display: grid;
   gap: 10px;
 }
@@ -450,6 +493,7 @@ h2 {
 
   .page-title,
   .inline-form,
+  .split-fields,
   .settings-list div {
     grid-template-columns: 1fr;
   }
