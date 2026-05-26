@@ -9,6 +9,7 @@ from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.orchestrator import Orchestrator, OrchestratorError
 from symphony_dbcli.review_actions import DraftPullRequestContent, build_draft_pr_content
+from symphony_dbcli.store import Store
 from symphony_dbcli.web.dependencies import get_app_state, page_context, templates
 
 router = APIRouter(tags=["attempts"])
@@ -126,20 +127,23 @@ def _attempt_context(request: Request, attempt_id: int) -> dict[str, object]:
     context["create_draft_pr_gate"] = gate_transitions.get("create_draft_pr")
     context["post_answer_gate"] = gate_transitions.get("post_answer")
     context["return_to"] = f"/attempts/{attempt_id}"
-    context["draft_pr_content"] = _draft_pr_content(detail)
+    context["draft_pr_content"] = _draft_pr_content(detail, state.store)
     return context
 
 
-def _draft_pr_content(detail: dict[str, Any] | None) -> DraftPullRequestContent | None:
+def _draft_pr_content(detail: dict[str, Any] | None, store: Store) -> DraftPullRequestContent | None:
     if not detail or detail["attempt"]["task_type"] != "code" or detail["pull_requests"]:
         return None
     result = detail["result"]
     if not result:
         return None
+    issue = store.issue_detail(str(detail["attempt"]["repo"]), int(detail["attempt"]["issue_number"]))
+    issue_title = str(issue["issue"]["title"]) if issue else ""
     return build_draft_pr_content(
         str(detail["attempt"]["repo"]),
         int(detail["attempt"]["issue_number"]),
         str(result["body"]),
+        issue_title=issue_title,
     )
 
 

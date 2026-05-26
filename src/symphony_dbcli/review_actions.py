@@ -119,7 +119,9 @@ class ReviewActions:
         )
         result = self.store.worker_result_for_attempt(attempt_id)
         result_body = str(result["body"]) if result else ""
-        content = build_draft_pr_content(repo, issue_number, result_body)
+        issue = self.store.issue_detail(repo, issue_number)
+        issue_title = str(issue["issue"]["title"]) if issue else ""
+        content = build_draft_pr_content(repo, issue_number, result_body, issue_title=issue_title)
         pr_title = title.strip() or content.title
         pr_body = ensure_issue_link_marker(body.strip() or content.body, repo, issue_number)
         pr = self.github.create_pull_request(
@@ -283,39 +285,53 @@ class ReviewActions:
         raise ReviewActionError("No code changes were found in this attempt worktree.")
 
 
-def build_draft_pr_content(repo: str, issue_number: int, worker_result: str) -> DraftPullRequestContent:
+def build_draft_pr_content(
+    repo: str,
+    issue_number: int,
+    worker_result: str,
+    *,
+    issue_title: str = "",
+) -> DraftPullRequestContent:
     summary_lines = _summary_lines_from_worker_result(worker_result)
     verification_lines = _verification_lines_from_worker_result(worker_result)
     issue_url = f"https://github.com/{repo}/issues/{issue_number}"
     body_parts = [
-        "## Summary",
+        "## Changes",
         "",
-        _format_lines(summary_lines or ["Applies the code changes produced by the Symphony worker."]),
-        "",
-        "## Issue",
-        "",
-        f"Fixes {issue_url}",
-        "",
-        issue_link_marker(repo, issue_number),
+        _format_lines(summary_lines or _fallback_summary_lines(issue_title, issue_number)),
     ]
     if verification_lines:
         body_parts.extend(
             [
                 "",
-                "## Verification",
+                "## Tests",
                 "",
                 _format_lines(verification_lines),
             ]
         )
+    body_parts.extend(
+        [
+            "",
+            f"Fixes {issue_url}",
+            "",
+            issue_link_marker(repo, issue_number),
+        ]
+    )
     body_parts.append("")
     return DraftPullRequestContent(
-        title=_title_from_summary(issue_number, summary_lines),
+        title=_title_from_issue(issue_number, issue_title, summary_lines),
         body="\n".join(body_parts),
     )
 
 
-def build_draft_pr_body(repo: str, issue_number: int, worker_result: str) -> str:
-    return build_draft_pr_content(repo, issue_number, worker_result).body
+def build_draft_pr_body(
+    repo: str,
+    issue_number: int,
+    worker_result: str,
+    *,
+    issue_title: str = "",
+) -> str:
+    return build_draft_pr_content(repo, issue_number, worker_result, issue_title=issue_title).body
 
 
 def issue_link_marker(repo: str, issue_number: int) -> str:
@@ -355,7 +371,7 @@ def _summary_lines_from_worker_result(worker_result: str) -> list[str]:
 
 
 def _verification_lines_from_worker_result(worker_result: str) -> list[str]:
-    return _section_lines(worker_result, {"checks run", "verification"})[:6]
+    return _section_lines(worker_result, {"checks run", "verification"})[:3]
 
 
 def _section_lines(worker_result: str, headings: set[str]) -> list[str]:
@@ -368,7 +384,7 @@ def _section_lines(worker_result: str, headings: set[str]) -> list[str]:
             if _heading_name(section_line):
                 break
             cleaned = _clean_result_line(section_line)
-            if cleaned:
+            if cleaned and not _looks_like_pr_noise(cleaned):
                 collected.append(cleaned)
         return collected
     return []
@@ -391,17 +407,110 @@ def _looks_like_progress(line: str) -> bool:
     return lowered.startswith(("i'll ", "i'm ", "the checkout ", "the worktree "))
 
 
+def _looks_like_pr_noise(line: str) -> bool:
+    lowered = line.lower()
+    return _looks_like_progress(line) or lowered.startswith(
+        (
+            "i ",
+            "i'll ",
+            "i'm ",
+            "i’ve ",
+            "i've ",
+            "checked ",
+            "confirmed ",
+            "inspected ",
+            "looked ",
+            "opened ",
+            "read ",
+            "reviewed ",
+            "the checkout ",
+            "the worktree ",
+        )
+    )
+
+
+def _fallback_summary_lines(issue_title: str, issue_number: int) -> list[str]:
+    issue_summary = _issue_title_summary(issue_title)
+    if issue_summary:
+        return [f"Addresses {issue_summary}."]
+    return [f"Updates the code for issue #{issue_number}."]
+
+
 def _format_lines(lines: list[str]) -> str:
     if len(lines) == 1:
         return lines[0]
     return "\n".join(f"- {line}" for line in lines)
 
 
+def _title_from_issue(issue_number: int, issue_title: str, summary_lines: list[str]) -> str:
+    issue_summary = _issue_title_summary(issue_title)
+    if issue_summary:
+        return _truncate(f"Fix #{issue_number}: {issue_summary}", 72)
+    return _title_from_summary(issue_number, summary_lines)
+
+
 def _title_from_summary(issue_number: int, summary_lines: list[str]) -> str:
     if not summary_lines:
         return f"Fix #{issue_number}"
     plain_summary = _compact_title(summary_lines[0].replace("`", "").rstrip("."))
-    return _truncate(f"Fix #{issue_number}: {plain_summary}", 120)
+    return _truncate(f"Fix #{issue_number}: {plain_summary}", 72)
+
+
+def _issue_title_summary(issue_title: str) -> str:
+    cleaned = _clean_issue_title(issue_title)
+    if not cleaned:
+        return ""
+    quoted = _quoted_error_summary(issue_title)
+    if quoted:
+        return quoted
+    support_match = re.match(r"(?P<subject>.+?)\s+should\s+support\s+(?P<feature>.+)", cleaned, re.IGNORECASE)
+    if support_match:
+        subject = support_match.group("subject").strip()
+        feature = support_match.group("feature").strip()
+        return _sentence_case(f"Support {feature} in {subject}")
+    return _sentence_case(_compact_issue_title(cleaned))
+
+
+def _clean_issue_title(issue_title: str) -> str:
+    cleaned = _strip_markdown_links(issue_title).replace("`", "").strip()
+    cleaned = re.sub(r"^\[(?:bug|fix|feature|fr|documentation|docs)\]\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"^(?:bug|fix|issue|error|feature request|fr)\s*[:\-]\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"^(?:getting|gets|got)\s+error\s*", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" .")
+
+
+def _quoted_error_summary(issue_title: str) -> str:
+    match = re.search(r"['\"`](?P<message>[^'\"`]{5,80})['\"`]", issue_title)
+    if match is None:
+        return ""
+    summary = match.group("message").strip(" .")
+    lowered = issue_title.lower()
+    if "default" in lowered and ("director" in lowered or "folder" in lowered or "path" in lowered):
+        summary = f"{summary} outside default directory"
+    return _sentence_case(summary)
+
+
+def _compact_issue_title(issue_title: str) -> str:
+    compact = issue_title
+    for separator in (" when ", " after ", " with "):
+        if len(compact) > 64 and separator in compact.lower():
+            parts = re.split(separator, compact, maxsplit=1, flags=re.IGNORECASE)
+            if len(parts[0]) >= 20:
+                compact = parts[0]
+                break
+    return compact
+
+
+def _sentence_case(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    return stripped[0].upper() + stripped[1:]
 
 
 def _strip_markdown_links(value: str) -> str:

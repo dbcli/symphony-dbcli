@@ -236,7 +236,7 @@
           <td>{{ version["id"] }}</td>
           <td>{{ version["status"] }}</td>
           <td><code>{{ version["content_hash"][:12] }}</code></td>
-          <td>{{ version["created_at"] }}</td>
+          <td>{{ version["created_at"]|localtime }}</td>
         </tr>
         {% endfor %}
       </tbody>

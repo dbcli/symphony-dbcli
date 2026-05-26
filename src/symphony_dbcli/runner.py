@@ -44,8 +44,10 @@ class CodexRunner:
             "exec",
             "--cd",
             cwd,
-            "--ask-for-approval",
-            self.config.approval_policy,
+            "--sandbox",
+            self.config.sandbox,
+            "-c",
+            f'approval_policy="{self.config.approval_policy}"',
         ]
         if self.config.model:
             command.extend(["--model", self.config.model])

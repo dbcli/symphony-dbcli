@@ -23,7 +23,7 @@ from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus, RuntimeWor
 from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.web.app import create_app
-from symphony_dbcli.web.dependencies import WebRuntime
+from symphony_dbcli.web.dependencies import WebRuntime, _format_localtime
 
 
 def _legacy_store(tmp_path: Path) -> Store:
@@ -123,6 +123,13 @@ def test_fastapi_dashboard_hierarchy_routes_render(tmp_path: Path) -> None:
         assert expected in response.text
 
 
+def test_localtime_filter_formats_utc_timestamps_as_pacific_time() -> None:
+    assert _format_localtime("2026-05-25T12:00:00+00:00") == "2026-05-25 5:00:00 AM PDT"
+    assert _format_localtime("2026-01-25T12:00:00Z") == "2026-01-25 4:00:00 AM PST"
+    assert _format_localtime("") == "-"
+    assert _format_localtime("not-a-date") == "not-a-date"
+
+
 def test_fastapi_workflow_page_renders_vertical_flowchart(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -153,7 +160,7 @@ def test_fastapi_workers_page_shows_runtime_status(tmp_path: Path) -> None:
     assert "Leader" in response.text
     assert "Running" in response.text
     assert "Enabled" in response.text
-    assert "2026-05-25T12:01:00+00:00" in response.text
+    assert "2026-05-25 5:01:00 AM PDT" in response.text
     assert "3 queued, 1 running" in response.text
     assert "worker-42" in response.text
     assert "dbcli/litecli#245" in response.text
@@ -473,6 +480,50 @@ def test_fastapi_work_item_detail_links_attempts(tmp_path: Path) -> None:
     assert f'href="/attempts/{attempt_id}"' in detail.text
     assert f"Attempt #{attempt_id}" in detail.text
     assert "needs_review" in detail.text
+
+
+def test_fastapi_work_item_detail_includes_related_attempts_without_runs(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+    store = Store(str(tmp_path / "symphony.db"))
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=245,
+            title="Fix completion crash",
+            url="https://github.com/dbcli/litecli/issues/245",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    linked_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        work_item_id=1,
+        status="review",
+    )
+    legacy_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+        status="failed",
+    )
+
+    detail = client.get("/work-items/1")
+
+    assert detail.status_code == 200
+    assert f'href="/attempts/{linked_attempt_id}"' in detail.text
+    assert f"Attempt #{linked_attempt_id}" in detail.text
+    assert f'href="/attempts/{legacy_attempt_id}"' in detail.text
+    assert f"Attempt #{legacy_attempt_id}" in detail.text
+    assert "no run" in detail.text
 
 
 def test_fastapi_operations_page_lists_operation_runs(tmp_path: Path) -> None:
@@ -839,6 +890,13 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
         body="Suggested reply body",
         status="drafted",
     )
+    store.record_error(
+        attempt_id,
+        phase="worker",
+        error_type="RuntimeError",
+        message="Worker failed.",
+        log_excerpt="Traceback (most recent call last):\nRuntimeError: worker exploded",
+    )
     gate_id = _open_attempt_gate(store, attempt_id, transition_name="post_answer", gate="review_answer")
 
     attempt = client.get(f"/attempts/{attempt_id}")
@@ -850,6 +908,7 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     assert "post_answer" in attempt.text
     assert "Worker result body" in attempt.text
     assert "Suggested reply body" in attempt.text
+    assert "RuntimeError: worker exploded" in attempt.text
     assert f'action="/workflow-gates/{gate_id}/run"' in attempt.text
     assert issue.status_code == 200
     assert "Logging support question" in issue.text
@@ -915,7 +974,9 @@ def test_fastapi_attempt_page_creates_code_follow_up_and_renders_draft_pr_gate(t
     assert f'action="/workflow-gates/{gate_id}/run"' in draft_pr.text
     assert 'name="title"' in draft_pr.text
     assert 'name="body"' in draft_pr.text
-    assert "Fix #245: Expanded configured log_file paths" in draft_pr.text
+    assert "Fix #245: Logging support question" in draft_pr.text
+    assert "## Changes" in draft_pr.text
+    assert "## Issue" not in draft_pr.text
     assert "Fixes https://github.com/dbcli/litecli/issues/245" in draft_pr.text
 
 
@@ -932,6 +993,8 @@ def test_fastapi_workflow_edit_preview_posts_without_legacy_server(tmp_path: Pat
     assert "Workflow Preview" in response.text
     assert "Prefer unit tests over integration tests." in response.text
     assert "WORKFLOW.md proposal" in response.text
+    assert "data-line-numbered-editor" in response.text
+    assert "data-line-number-gutter" in response.text
 
 
 def test_fastapi_github_app_callback_matches_legacy_setup_page(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@
     <article class="draft-reply">
       <div class="draft-meta">
         <strong>{{ row.status }}</strong>
-        <span>{{ row.created_at }}</span>
+        <span>{{ row.created_at|localtime }}</span>
         {% if show_attempt_link and row.attempt_id %}
         <a href="/attempts/{{ row.attempt_id }}">Attempt {{ row.attempt_id }}</a>
         {% endif %}

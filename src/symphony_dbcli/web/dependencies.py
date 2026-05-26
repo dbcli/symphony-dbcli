@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -18,6 +20,7 @@ from symphony_dbcli.work_items import WorkItemRepository
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+PACIFIC_TIME = ZoneInfo("America/Los_Angeles")
 
 
 def _format_ms(value: object) -> str:
@@ -31,7 +34,33 @@ def _format_ms(value: object) -> str:
     return f"{minutes}m {remaining}s"
 
 
+def _format_localtime(value: object) -> str:
+    if value is None:
+        return "-"
+    raw_value = str(value).strip()
+    if not raw_value:
+        return "-"
+    try:
+        timestamp = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return raw_value
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    local_time = timestamp.astimezone(PACIFIC_TIME)
+    hour = local_time.strftime("%I").lstrip("0") or "0"
+    return f"{local_time:%Y-%m-%d} {hour}:{local_time:%M:%S} {local_time:%p} {local_time:%Z}"
+
+
+def _numbered_lines(value: object) -> list[dict[str, object]]:
+    lines = str(value).splitlines()
+    if not lines:
+        lines = [""]
+    return [{"number": number, "text": line} for number, line in enumerate(lines, start=1)]
+
+
 templates.env.filters["ms"] = _format_ms
+templates.env.filters["localtime"] = _format_localtime
+templates.env.filters["numbered_lines"] = _numbered_lines
 
 
 class WebRuntime(Protocol):

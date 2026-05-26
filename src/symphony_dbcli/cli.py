@@ -443,6 +443,7 @@ def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
             reload=True,
             reload_dirs=_reload_dirs(args.workflow),
             reload_includes=_reload_includes(args.workflow),
+            reload_excludes=_reload_excludes(args.workflow, config),
         )
     else:
         app = create_app(config, store, workflow_path=args.workflow, run_runtime=run_runtime)
@@ -457,19 +458,66 @@ def _set_fastapi_factory_env(workflow_path: str, profile: str, *, run_runtime: b
 
 
 def _reload_dirs(workflow_path: str) -> list[str]:
-    dirs = {str(Path(workflow_path).resolve().parent)}
     src_dir = Path("src")
     if src_dir.exists():
-        dirs.add(str(src_dir.resolve()))
-    return sorted(dirs)
+        return [str(src_dir.resolve())]
+    return [str(Path(__file__).resolve().parent)]
 
 
 def _reload_includes(workflow_path: str) -> list[str]:
-    includes = ["*.py", "*.html", "*.css", "*.js"]
-    workflow_name = Path(workflow_path).name
-    if workflow_name not in includes:
-        includes.append(workflow_name)
-    return includes
+    return ["*.py", "*.html", "*.css", "*.js"]
+
+
+def _reload_excludes(workflow_path: str, config: WorkflowConfig) -> list[str]:
+    workflow_dir = Path(workflow_path).resolve().parent
+    excluded_dirs = _unique_paths(
+        [
+            workflow_dir / ".git",
+            workflow_dir / ".mypy_cache",
+            workflow_dir / ".pytest_cache",
+            workflow_dir / ".ruff_cache",
+            workflow_dir / ".symphony",
+            workflow_dir / ".venv",
+            Path(config.database.path).resolve().parent,
+            Path(config.workspace.root).resolve(),
+            Path(config.workspace.bare_repos_root).resolve(),
+        ],
+        protected={workflow_dir, Path.cwd().resolve()},
+    )
+    return [
+        *[str(path) for path in excluded_dirs],
+        ".git",
+        ".git/*",
+        ".git/**",
+        ".mypy_cache",
+        ".mypy_cache/*",
+        ".mypy_cache/**",
+        ".pytest_cache",
+        ".pytest_cache/*",
+        ".pytest_cache/**",
+        ".ruff_cache",
+        ".ruff_cache/*",
+        ".ruff_cache/**",
+        ".symphony",
+        ".symphony/*",
+        ".symphony/**",
+        ".venv",
+        ".venv/*",
+        ".venv/**",
+    ]
+
+
+def _unique_paths(paths: list[Path], *, protected: set[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        if path in protected:
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
 
 
 def _load_config_store_and_record(

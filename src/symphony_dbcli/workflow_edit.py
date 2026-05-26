@@ -3,12 +3,13 @@ from __future__ import annotations
 import difflib
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from .actions import DEFAULT_ACTION_REGISTRY
-from .config import WorkflowConfig, WorkflowError, parse_workflow
+from .config import FENCE_RE, WorkflowConfig, WorkflowError, parse_workflow
 
 
 class WorkflowEditError(RuntimeError):
@@ -57,7 +58,10 @@ def propose_workflow_edit_with_model(
         proposed = _append_instruction_note(current_content, cleaned_request)
     else:
         try:
-            proposed = model.propose(current_content, cleaned_request)
+            proposed = normalize_workflow_edit_output(
+                current_content,
+                model.propose(current_content, cleaned_request),
+            )
         except WorkflowEditError as exc:
             return WorkflowEditProposal(
                 request=cleaned_request,
@@ -77,17 +81,37 @@ def propose_workflow_edit_with_model(
 
 
 def validate_workflow_edit(current_content: str, proposed_content: str, request: str) -> WorkflowEditProposal:
+    normalized_content = normalize_workflow_edit_output(current_content, proposed_content)
     return WorkflowEditProposal(
         request=request.strip(),
         current_content=current_content,
-        proposed_content=proposed_content,
-        diff=_diff(current_content, proposed_content),
-        error=_validation_error(proposed_content),
+        proposed_content=normalized_content,
+        diff=_diff(current_content, normalized_content),
+        error=_validation_error(normalized_content),
     )
 
 
 def parsed_config(content: str) -> WorkflowConfig:
     return parse_workflow(content)
+
+
+def normalize_workflow_edit_output(current_content: str, output: str) -> str:
+    candidate = _extract_workflow_markdown(output)
+    applied_diff = _apply_unified_diff(current_content, candidate)
+    if applied_diff is not None:
+        return applied_diff
+    replaced_toml = _replace_toml_block(current_content, candidate)
+    if (
+        replaced_toml is not None
+        and not _looks_like_complete_workflow_markdown(candidate)
+        and not _validation_error(replaced_toml)
+    ):
+        return replaced_toml
+    if not _validation_error(candidate):
+        return _ensure_trailing_newline(candidate)
+    if replaced_toml is not None and not _validation_error(replaced_toml):
+        return replaced_toml
+    return _ensure_trailing_newline(candidate)
 
 
 @dataclass(frozen=True)
@@ -101,11 +125,21 @@ class CodexWorkflowEditModel:
             "exec",
             "--cd",
             str(self.cwd),
-            "--ask-for-approval",
-            self.config.codex.approval_policy,
+            "--sandbox",
+            self.config.codex.sandbox,
+            "-c",
+            f'approval_policy="{self.config.codex.approval_policy}"',
         ]
-        if self.config.codex.model:
-            command.extend(["--model", self.config.codex.model])
+        if self.config.codex.workflow_edit_reasoning_effort:
+            command.extend(
+                [
+                    "-c",
+                    f'model_reasoning_effort="{self.config.codex.workflow_edit_reasoning_effort}"',
+                ]
+            )
+        workflow_edit_model = self.config.codex.workflow_edit_model or self.config.codex.model
+        if workflow_edit_model:
+            command.extend(["--model", workflow_edit_model])
         command.append(_workflow_edit_prompt(current_content, request))
         try:
             result = subprocess.run(command, text=True, capture_output=True, check=False)
@@ -141,6 +175,96 @@ def _diff(before: str, after: str) -> str:
     )
 
 
+def _ensure_trailing_newline(content: str) -> str:
+    return content.rstrip() + "\n" if content.strip() else ""
+
+
+def _replace_toml_block(current_content: str, candidate: str) -> str | None:
+    current_match = FENCE_RE.search(current_content)
+    candidate_match = FENCE_RE.search(candidate)
+    if current_match is None or candidate_match is None:
+        return None
+    toml_body = candidate_match.group("body").strip()
+    if not toml_body:
+        return None
+    return (
+        current_content[: current_match.start("body")]
+        + toml_body
+        + current_content[current_match.end("body") :]
+    )
+
+
+def _looks_like_complete_workflow_markdown(content: str) -> bool:
+    return "# Symphony DBCLI Workflow" in content or "## Worker Instructions" in content
+
+
+def _apply_unified_diff(current_content: str, candidate: str) -> str | None:
+    lines = candidate.splitlines()
+    if not any(line.startswith("@@ ") for line in lines):
+        return None
+    try:
+        patched = _apply_unified_diff_lines(current_content.splitlines(), lines)
+    except ValueError:
+        return None
+    return "\n".join(patched) + "\n"
+
+
+def _apply_unified_diff_lines(original_lines: Sequence[str], diff_lines: Sequence[str]) -> list[str]:
+    output: list[str] = []
+    original_index = 0
+    diff_index = 0
+    while diff_index < len(diff_lines):
+        line = diff_lines[diff_index]
+        if not line.startswith("@@ "):
+            diff_index += 1
+            continue
+        old_start = _parse_hunk_old_start(line)
+        hunk_start = old_start - 1
+        if hunk_start < original_index or hunk_start > len(original_lines):
+            raise ValueError("hunk start does not match current content")
+        output.extend(original_lines[original_index:hunk_start])
+        original_index = hunk_start
+        diff_index += 1
+        while diff_index < len(diff_lines) and not diff_lines[diff_index].startswith("@@ "):
+            diff_line = diff_lines[diff_index]
+            if diff_line.startswith("\\ No newline at end of file"):
+                diff_index += 1
+                continue
+            if not diff_line:
+                raise ValueError("invalid unified diff line")
+            marker = diff_line[0]
+            value = diff_line[1:]
+            if marker == " ":
+                if not _original_line_matches(original_lines, original_index, value):
+                    raise ValueError("context line does not match current content")
+                output.append(original_lines[original_index])
+                original_index += 1
+            elif marker == "-":
+                if not _original_line_matches(original_lines, original_index, value):
+                    raise ValueError("removed line does not match current content")
+                original_index += 1
+            elif marker == "+":
+                output.append(value)
+            elif diff_line.startswith(("--- ", "+++ ", "diff --git ", "index ")):
+                pass
+            else:
+                raise ValueError("invalid unified diff line")
+            diff_index += 1
+    output.extend(original_lines[original_index:])
+    return output
+
+
+def _parse_hunk_old_start(header: str) -> int:
+    match = re.match(r"@@ -(?P<start>\d+)(?:,\d+)? \+(?:\d+)(?:,\d+)? @@", header)
+    if match is None:
+        raise ValueError("invalid unified diff hunk header")
+    return int(match.group("start"))
+
+
+def _original_line_matches(lines: Sequence[str], index: int, expected: str) -> bool:
+    return index < len(lines) and lines[index] == expected
+
+
 def _validation_error(content: str) -> str:
     try:
         parse_workflow(content)
@@ -155,6 +279,7 @@ def _workflow_edit_prompt(current_content: str, request: str) -> str:
 You are editing WORKFLOW.md for symphony-dbcli.
 
 Return only the complete updated WORKFLOW.md markdown. Do not include commentary.
+Do not return a unified diff, patch, or partial snippet.
 Keep unrelated configuration and prose unchanged. Preserve one fenced toml block.
 The result must validate with the symphony-dbcli workflow parser.
 

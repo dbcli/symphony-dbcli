@@ -59,7 +59,7 @@
       <div><span class="kicker">Poll Interval</span><strong>{{ runtime_status.poll_interval_seconds }}s</strong></div>
       <div>
         <span class="kicker">Next Poll</span>
-        <strong>{{ runtime_status.next_poll_at if runtime_status.next_poll_at else "not scheduled" }}</strong>
+        <strong>{{ runtime_status.next_poll_at|localtime if runtime_status.next_poll_at else "not scheduled" }}</strong>
       </div>
       <div><span class="kicker">Workspace</span><strong>{{ runtime.workspace_strategy }}</strong></div>
     </div>
@@ -77,7 +77,7 @@
     {% if runtime_status.last_cycle %}
     <div class="runtime-grid">
       <div><span class="kicker">Trigger</span><strong>{{ runtime_status.last_cycle.trigger }}</strong></div>
-      <div><span class="kicker">Completed</span><strong>{{ runtime_status.last_cycle.completed_at }}</strong></div>
+      <div><span class="kicker">Completed</span><strong>{{ runtime_status.last_cycle.completed_at|localtime }}</strong></div>
       <div><span class="kicker">Issues Synced</span><strong>{{ runtime_status.last_cycle.synced }}</strong></div>
       <div><span class="kicker">States Advanced</span><strong>{{ runtime_status.last_cycle.advanced }}</strong></div>
       <div><span class="kicker">Workers Started</span><strong>{{ runtime_status.last_cycle.started }}</strong></div>
@@ -132,8 +132,8 @@
             <td><a href="/attempts/{{ worker.attempt_id }}">#{{ worker.attempt_id }}</a></td>
             <td>{{ worker.repo }}#{{ worker.issue_number }} · {{ worker.task_type }}</td>
             <td>{{ worker.pid }}</td>
-            <td>{{ worker.heartbeat_at if worker.heartbeat_at else "unknown" }}</td>
-            <td>{{ worker.deadline_at if worker.deadline_at else "none" }}</td>
+            <td>{{ worker.heartbeat_at|localtime if worker.heartbeat_at else "unknown" }}</td>
+            <td>{{ worker.deadline_at|localtime if worker.deadline_at else "none" }}</td>
             <td>{{ worker.retry_count }}</td>
           </tr>
           {% endfor %}
@@ -168,7 +168,7 @@
             <td><a href="/attempts/{{ attempt.attempt_id }}">#{{ attempt.attempt_id }}</a></td>
             <td>{{ attempt.repo }}#{{ attempt.issue_number }} · {{ attempt.task_type }}</td>
             <td>{{ attempt.current_phase if attempt.current_phase else "queued" }}</td>
-            <td>{{ attempt.queued_at }}</td>
+            <td>{{ attempt.queued_at|localtime }}</td>
             <td>{{ attempt.retry_count }}</td>
           </tr>
           {% endfor %}

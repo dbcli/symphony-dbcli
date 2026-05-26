@@ -18,6 +18,8 @@ from .models import create_model_tables
 from .store import Store
 from .work_items import WorkItemRepository
 
+MAX_LOG_EXCERPT_BYTES = 12_000
+
 
 class WorkerProcess(Protocol):
     pid: int
@@ -29,7 +31,7 @@ class WorkerProcess(Protocol):
     def kill(self) -> None: ...
 
 
-type ProcessFactory = Callable[[Sequence[str]], WorkerProcess]
+type ProcessFactory = Callable[[Sequence[str], Path], WorkerProcess]
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class WorkerSupervisor:
         self.profile = profile
         self.process_factory = process_factory or _default_process_factory
         self.processes: dict[str, WorkerProcess] = {}
+        self.worker_log_dir = Path(store.path).parent / "worker-logs"
         engine = create_db_engine(store.path)
         create_model_tables(engine)
         self.work_items = WorkItemRepository(create_session_factory(engine))
@@ -134,8 +137,10 @@ class WorkerSupervisor:
             )
             self.work_items.start_attempt_run(attempt_id)
             command = self._worker_command(attempt_id)
+            log_path = self._worker_log_path(worker_id)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                process = self.process_factory(command)
+                process = self.process_factory(command, log_path)
             except Exception as exc:
                 self.store.record_error(
                     attempt_id,
@@ -153,7 +158,7 @@ class WorkerSupervisor:
                 phase="supervisor",
                 event_type="spawned",
                 message=worker_id,
-                data={"pid": process.pid, "command": list(command)},
+                data={"pid": process.pid, "command": list(command), "log_path": str(log_path)},
             )
             self.processes[worker_id] = process
             counts[repo] = counts.get(repo, 0) + 1
@@ -187,6 +192,9 @@ class WorkerSupervisor:
         command.extend(["worker", "run-attempt", "--attempt-id", str(attempt_id)])
         return command
 
+    def _worker_log_path(self, worker_id: str) -> Path:
+        return self.worker_log_dir / f"{_safe_log_name(worker_id)}.log"
+
     def _fail_and_retry(
         self,
         worker_id: str,
@@ -199,6 +207,7 @@ class WorkerSupervisor:
         exit_code: int | None = None,
     ) -> bool:
         should_retry = self._should_retry(attempt_id, config)
+        log_excerpt = _read_log_excerpt(self._worker_log_path(worker_id))
         self.store.mark_worker_exited(worker_id, exit_code, stop_reason=reason)
         self.store.fail_running_workflow_action_runs(attempt_id, error=message)
         self.store.record_error(
@@ -207,6 +216,7 @@ class WorkerSupervisor:
             error_type=reason,
             message=message,
             recoverable=should_retry,
+            log_excerpt=log_excerpt,
         )
         if should_retry:
             self.store.requeue_attempt_for_retry(attempt_id, reason=reason)
@@ -260,8 +270,33 @@ class WorkerSupervisor:
             _terminate_pid(pid, grace_seconds)
 
 
-def _default_process_factory(command: Sequence[str]) -> WorkerProcess:
-    return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def _default_process_factory(command: Sequence[str], log_path: Path) -> WorkerProcess:
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    with log_path.open("wb") as log_file:
+        return subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, env=env)
+
+
+def _read_log_excerpt(path: Path) -> str:
+    try:
+        with path.open("rb") as log_file:
+            log_file.seek(0, os.SEEK_END)
+            size = log_file.tell()
+            start = max(size - MAX_LOG_EXCERPT_BYTES, 0)
+            log_file.seek(start)
+            content = log_file.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not content:
+        return ""
+    if start > 0:
+        return f"[last {MAX_LOG_EXCERPT_BYTES} bytes of {path}]\n{content}"
+    return content
+
+
+def _safe_log_name(value: str) -> str:
+    safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
+    return safe or "worker"
 
 
 def _terminate_pid(pid: int, grace_seconds: int) -> None:

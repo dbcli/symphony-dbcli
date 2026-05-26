@@ -66,11 +66,13 @@ command = "codex"
 transport = "app-server"
 app_server_listen = "stdio://"
 model = ""
+workflow_edit_model = "gpt-5.4-mini"
+workflow_edit_reasoning_effort = "low"
 approval_policy = "never"
 sandbox = "workspace-write"
 
 [policy]
-dry_run = true
+dry_run = false
 
 [workflow]
 initial_state = "todo"

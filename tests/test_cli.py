@@ -31,8 +31,14 @@ def test_serve_runs_fastapi_with_runtime(tmp_path: Path, monkeypatch: pytest.Mon
     assert calls["reload"] is True
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8765
-    assert calls["reload_includes"] == ["*.py", "*.html", "*.css", "*.js", "WORKFLOW.md"]
-    assert calls["reload_dirs"] == sorted({str(workflow_path.parent.resolve()), str(Path("src").resolve())})
+    assert calls["reload_includes"] == ["*.py", "*.html", "*.css", "*.js"]
+    reload_excludes = calls["reload_excludes"]
+    assert isinstance(reload_excludes, list)
+    assert str(workflow_path.parent / ".symphony") in reload_excludes
+    assert str(workflow_path.parent / ".venv") in reload_excludes
+    assert ".symphony/**" in reload_excludes
+    assert ".venv/**" in reload_excludes
+    assert calls["reload_dirs"] == [str(Path("src").resolve())]
     assert os.environ["SYMPHONY_WORKFLOW"] == str(workflow_path)
     assert os.environ["SYMPHONY_PROFILE"] == "local"
     assert os.environ["SYMPHONY_RUN_RUNTIME"] == "1"

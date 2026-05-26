@@ -38,8 +38,9 @@ def test_supervisor_starts_queued_attempt(tmp_path: Path) -> None:
     )
     commands: list[list[str]] = []
 
-    def factory(command: Sequence[str]) -> FakeProcess:
+    def factory(command: Sequence[str], log_path: Path) -> FakeProcess:
         commands.append(list(command))
+        assert log_path.name.startswith(f"worker-{attempt_id}-")
         return FakeProcess(9001)
 
     result = WorkerSupervisor(
@@ -70,7 +71,8 @@ def test_supervisor_retries_crashed_worker(tmp_path: Path) -> None:
     )
     process = FakeProcess(9002)
 
-    def factory(command: Sequence[str]) -> FakeProcess:
+    def factory(command: Sequence[str], log_path: Path) -> FakeProcess:
+        log_path.write_text("Traceback (most recent call last):\nRuntimeError: worker exploded\n")
         return process
 
     supervisor = WorkerSupervisor(
@@ -107,6 +109,7 @@ def test_supervisor_retries_crashed_worker(tmp_path: Path) -> None:
             "SELECT * FROM workflow_action_runs WHERE id = ?",
             (action_run_id,),
         ).fetchone()
+        error = conn.execute("SELECT * FROM worker_errors WHERE attempt_id = ?", (attempt_id,)).fetchone()
     assert result.crashed == 1
     assert result.retried == 1
     assert retried_attempt is not None
@@ -118,6 +121,8 @@ def test_supervisor_retries_crashed_worker(tmp_path: Path) -> None:
     assert instance["status"] == "active"
     assert action_run is not None
     assert action_run["status"] == "failed"
+    assert error is not None
+    assert "RuntimeError: worker exploded" in error["log_excerpt"]
     assert len(queued_attempts) == 1
     assert queued_attempts[0]["id"] == attempt_id
 

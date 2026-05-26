@@ -19,7 +19,7 @@
         <td>{{ item.state_label }}</td>
         <td>{{ item.task_type }}</td>
         <td><a href="{{ item.source_url }}" target="_blank" rel="noreferrer">{{ item.source_label }} #{{ item.source_number }}</a></td>
-        <td>{{ item.updated_at }}</td>
+        <td>{{ item.updated_at|localtime }}</td>
       </tr>
       {% endfor %}
     </tbody>

@@ -19,7 +19,7 @@
         <td><a href="/work-items/{{ run.work_item_id }}">#{{ run.work_item_id }}</a> {{ run.title }}</td>
         <td>{{ run.status }}</td>
         <td>{{ run.user_hint or "-" }}</td>
-        <td>{{ run.updated_at }}</td>
+        <td>{{ run.updated_at|localtime }}</td>
       </tr>
       {% endfor %}
     </tbody>

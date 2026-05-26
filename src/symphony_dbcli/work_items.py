@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
 from .clock import utc_now
@@ -110,7 +111,7 @@ class OperationRunView:
 
 @dataclass(frozen=True)
 class WorkItemRunView:
-    id: int
+    id: int | None
     attempt_id: int | None
     workflow_instance_id: int | None
     task_type: str
@@ -341,12 +342,95 @@ class WorkItemRepository:
 
     def list_runs(self, work_item_id: int) -> list[WorkItemRunView]:
         with self._session_factory() as session:
+            context = session.execute(
+                select(WorkItem, SourceItem, Source)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .join(Source, WorkItem.source_id == Source.id)
+                .where(WorkItem.id == work_item_id)
+            ).one_or_none()
+            if context is None:
+                return []
+            _work_item, source_item, source = context
             runs = session.scalars(
                 select(WorkItemRun)
                 .where(WorkItemRun.work_item_id == work_item_id)
                 .order_by(WorkItemRun.created_at.desc(), WorkItemRun.id.desc())
             ).all()
-            return [_work_item_run_view(run) for run in runs]
+            run_views = [_work_item_run_view(run) for run in runs]
+            seen_attempt_ids = {run.attempt_id for run in run_views if run.attempt_id is not None}
+            related_attempts = session.execute(
+                text(
+                    """
+                    SELECT
+                        a.id AS attempt_id,
+                        a.task_type AS task_type,
+                        a.status AS status,
+                        a.started_at AS started_at,
+                        a.completed_at AS completed_at,
+                        a.created_at AS created_at,
+                        a.updated_at AS updated_at,
+                        COALESCE(
+                            (
+                                SELECT wi.id
+                                FROM workflow_instances wi
+                                WHERE wi.attempt_id = a.id
+                                  AND wi.work_item_id = :work_item_id
+                                ORDER BY wi.id DESC
+                                LIMIT 1
+                            ),
+                            (
+                                SELECT wi.id
+                                FROM workflow_instances wi
+                                WHERE wi.attempt_id = a.id
+                                ORDER BY wi.id DESC
+                                LIMIT 1
+                            )
+                        ) AS workflow_instance_id,
+                        CASE
+                            WHEN a.work_item_id = :work_item_id THEN 'attempt'
+                            WHEN EXISTS (
+                                SELECT 1
+                                FROM workflow_instances wi
+                                WHERE wi.attempt_id = a.id
+                                  AND wi.work_item_id = :work_item_id
+                            ) THEN 'workflow'
+                            ELSE 'legacy'
+                        END AS trigger
+                    FROM attempts a
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM work_item_runs wir
+                        WHERE wir.work_item_id = :work_item_id
+                          AND wir.attempt_id = a.id
+                    )
+                      AND (
+                        a.work_item_id = :work_item_id
+                        OR EXISTS (
+                            SELECT 1
+                            FROM workflow_instances wi
+                            WHERE wi.attempt_id = a.id
+                              AND wi.work_item_id = :work_item_id
+                        )
+                        OR (
+                            a.work_item_id IS NULL
+                            AND a.repo = :repo
+                            AND a.issue_number = :issue_number
+                        )
+                      )
+                    """
+                ),
+                {
+                    "work_item_id": work_item_id,
+                    "repo": source.repo,
+                    "issue_number": source_item.number,
+                },
+            ).mappings()
+            run_views.extend(
+                _work_item_attempt_view(row)
+                for row in related_attempts
+                if int(row["attempt_id"]) not in seen_attempt_ids
+            )
+            return sorted(run_views, key=_work_item_run_sort_key, reverse=True)
 
     def next_queued_run(self, *, blocked_repos: set[str] | None = None) -> WorkItemRunClaim | None:
         with self._session_factory() as session:
@@ -821,6 +905,35 @@ def _work_item_run_view(run: WorkItemRun) -> WorkItemRunView:
         created_at=run.created_at,
         updated_at=run.updated_at,
     )
+
+
+def _work_item_attempt_view(row: RowMapping) -> WorkItemRunView:
+    return WorkItemRunView(
+        id=None,
+        attempt_id=int(row["attempt_id"]),
+        workflow_instance_id=_optional_int(row["workflow_instance_id"]),
+        task_type=str(row["task_type"]),
+        trigger=str(row["trigger"]),
+        status=str(row["status"]),
+        reasons=[],
+        user_hint="",
+        started_at=_optional_str(row["started_at"]),
+        completed_at=_optional_str(row["completed_at"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _work_item_run_sort_key(run: WorkItemRunView) -> tuple[str, int, int]:
+    return (run.created_at, run.attempt_id or 0, run.id or 0)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 def reasons_json(reasons: list[str]) -> str:

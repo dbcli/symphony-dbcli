@@ -23,7 +23,7 @@
       <div class="draft-meta">
         <strong>{{ gate.transition_name }}</strong>
         <span>{{ gate.gate }}</span>
-        <span>{{ gate.created_at }}</span>
+        <span>{{ gate.created_at|localtime }}</span>
       </div>
       {% if gate.prompt %}
       <p>{{ gate.prompt }}</p>
@@ -52,7 +52,7 @@
     <div class="draft-meta">
       <strong>{{ detail.result.title }}</strong>
       <span>{{ detail.result.result_type|replace("_", " ") }}</span>
-      <span>{{ detail.result.updated_at }}</span>
+      <span>{{ detail.result.updated_at|localtime }}</span>
     </div>
     {% if detail.result.body %}
     <pre class="result-body">{{ detail.result.body }}</pre>
@@ -106,18 +106,18 @@
           <td>{{ row.title }}</td>
           <td>
             {{ row.state or "unknown" }}
-            {% if row.merged_at %}<div class="muted">merged {{ row.merged_at }}</div>{% endif %}
+            {% if row.merged_at %}<div class="muted">merged {{ row.merged_at|localtime }}</div>{% endif %}
           </td>
           <td>
             {% if row.worktree_cleaned_at %}
-            cleaned {{ row.worktree_cleaned_at }}
+            cleaned {{ row.worktree_cleaned_at|localtime }}
             {% elif row.cleanup_error %}
             <span class="form-error">{{ row.cleanup_error }}</span>
             {% else %}
             pending merge
             {% endif %}
           </td>
-          <td>{{ row.created_at }}</td>
+          <td>{{ row.created_at|localtime }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -149,7 +149,7 @@
       Attempt {{ detail.source_result.source_attempt_id }}
     </a></strong>
     <span>{{ detail.source_result.result_type|replace("_", " ") }}</span>
-    <span>{{ detail.source_result.result_updated_at }}</span>
+    <span>{{ detail.source_result.result_updated_at|localtime }}</span>
   </div>
   <pre class="result-body">{{ detail.source_result.body }}</pre>
 </section>
@@ -171,7 +171,7 @@
           <td>{{ row.relationship|replace("_", " ") }}</td>
           <td>{{ row.status }}</td>
           <td>{{ row.task_type }}</td>
-          <td>{{ row.linked_at }}</td>
+          <td>{{ row.linked_at|localtime }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -219,7 +219,14 @@
       <thead><tr><th>Phase</th><th>Type</th><th>Message</th></tr></thead>
       <tbody>
         {% for row in detail.errors %}
-        <tr><td>{{ row.phase }}</td><td>{{ row.error_type }}</td><td class="form-error">{{ row.message }}</td></tr>
+        <tr>
+          <td>{{ row.phase }}</td>
+          <td>{{ row.error_type }}</td>
+          <td class="form-error">
+            {{ row.message }}
+            {% if row.log_excerpt %}<pre class="result-body">{{ row.log_excerpt }}</pre>{% endif %}
+          </td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>

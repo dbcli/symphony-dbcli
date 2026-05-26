@@ -166,6 +166,41 @@ function setupMoveWorkForm() {
 
 setupMoveWorkForm();
 
+function setupLineNumberedEditors() {
+  const editors = [...document.querySelectorAll("[data-line-numbered-editor]")];
+  for (const editor of editors) {
+    if (editor.dataset.lineNumbersReady === "true") {
+      continue;
+    }
+    const source = editor.querySelector("[data-line-numbered-source]");
+    const gutter = editor.querySelector("[data-line-number-gutter]");
+    if (!(source instanceof HTMLTextAreaElement) || !gutter) {
+      continue;
+    }
+    editor.dataset.lineNumbersReady = "true";
+
+    function renderLineNumbers() {
+      const lineCount = Math.max(1, source.value.split("\n").length);
+      gutter.replaceChildren(
+        ...Array.from({ length: lineCount }, (_, index) => {
+          const line = document.createElement("span");
+          line.textContent = String(index + 1);
+          return line;
+        }),
+      );
+      gutter.scrollTop = source.scrollTop;
+    }
+
+    source.addEventListener("input", renderLineNumbers);
+    source.addEventListener("scroll", () => {
+      gutter.scrollTop = source.scrollTop;
+    });
+    renderLineNumbers();
+  }
+}
+
+setupLineNumberedEditors();
+
 function closeModal() {
   const modalRoot = document.querySelector("#modal-root");
   if (modalRoot) {
@@ -281,6 +316,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   if (event.target.id === "dashboard-main") {
     setupKanbanDrag();
     setupMoveWorkForm();
+    setupLineNumberedEditors();
     setupWorkflowFlowchart();
   }
 });

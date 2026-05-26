@@ -5,7 +5,7 @@ from pathlib import Path
 
 from symphony_dbcli.config import default_config
 from symphony_dbcli.github import PullRequest
-from symphony_dbcli.review_actions import ReviewActions, issue_link_marker
+from symphony_dbcli.review_actions import ReviewActions, build_draft_pr_content, issue_link_marker
 from symphony_dbcli.store import IssueSnapshot, Store
 
 
@@ -99,17 +99,33 @@ def test_review_actions_create_draft_pr_from_code_attempt(tmp_path: Path) -> Non
     assert detail["attempt"]["outcome"] == "draft_pr_created"
     assert detail["pull_requests"][0]["url"] == "https://github.com/dbcli/litecli/pull/7"
     assert github.pushed_branches == [("dbcli/litecli", str(repo), "symphony/dbcli-litecli-245-attempt-1")]
-    assert github.pull_request_title == "Fix #245: Expanded configured log_file paths"
+    assert github.pull_request_title == "Fix #245: Support tilde paths in log_file"
     assert "Fixes https://github.com/dbcli/litecli/issues/245" in github.pull_request_body
     assert issue_link_marker("dbcli/litecli", 245) in github.pull_request_body
+    assert "## Changes" in github.pull_request_body
+    assert "## Tests" in github.pull_request_body
     assert (
         "Expanded configured `log_file` paths before directory checks in litecli/main.py"
         in github.pull_request_body
     )
+    assert "## Issue" not in github.pull_request_body
     assert "/Users/amjith" not in github.pull_request_body
     assert "`ruff check litecli/main.py tests/test_main.py` passed." in github.pull_request_body
     assert "I'll verify the issue context first" not in github.pull_request_body
     assert "Worker Notes" not in github.pull_request_body
+
+
+def test_build_draft_pr_content_uses_issue_title_for_human_title() -> None:
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        245,
+        "Summary:\n- Expanded configured `log_file` paths before directory checks.",
+        issue_title="Getting error 'Unable to open log file' when log file move to other directory other than default",
+    )
+
+    assert content.title == "Fix #245: Unable to open log file outside default directory"
+    assert content.body.startswith("## Changes\n\nExpanded configured `log_file` paths")
+    assert "## Issue" not in content.body
 
 
 def test_review_actions_create_draft_pr_uses_edited_content(tmp_path: Path) -> None:

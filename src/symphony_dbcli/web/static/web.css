@@ -1005,6 +1005,54 @@ h2 {
   white-space: pre-wrap;
 }
 
+.line-numbered-editor {
+  display: grid;
+  grid-template-columns: minmax(48px, max-content) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.line-number-gutter {
+  overflow: hidden;
+  margin: 0;
+  border-right: 1px solid var(--line);
+  padding: 10px 8px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: right;
+  user-select: none;
+}
+
+.line-number-gutter span {
+  display: block;
+  min-height: 1.4em;
+}
+
+.line-numbered-editor textarea {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.line-numbered-editor textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .answer-links {
   display: flex;
   flex-wrap: wrap;

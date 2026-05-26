@@ -31,7 +31,7 @@
         <td>{{ source.sync_status }}</td>
         <td>{{ "Yes" if source.enabled else "No" }}</td>
         <td>{{ source.filter_summary }}</td>
-        <td>{{ source.last_synced_at or "Never" }}</td>
+        <td>{{ source.last_synced_at|localtime if source.last_synced_at else "Never" }}</td>
         <td>
           <form method="post" action="/sources/{{ source.id }}/sync">
             <button type="submit">Sync</button>
@@ -39,7 +39,7 @@
         </td>
         <td><a href="/board/source/{{ source.id }}">Open Board</a></td>
         <td><a href="/sources/{{ source.id }}/edit">Edit</a></td>
-        <td>{{ source.created_at }}</td>
+        <td>{{ source.created_at|localtime }}</td>
       </tr>
       {% endfor %}
     </tbody>

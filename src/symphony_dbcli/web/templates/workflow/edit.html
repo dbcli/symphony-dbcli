@@ -108,7 +108,10 @@
     {% endif %}
 
     <label for="proposed-content">WORKFLOW.md proposal</label>
-    <textarea id="proposed-content" name="proposed_content" rows="28">{{ proposal.proposed_content }}</textarea>
+    <div class="line-numbered-editor" data-line-numbered-editor>
+      <pre class="line-number-gutter" aria-hidden="true" data-line-number-gutter>{% for line in proposal.proposed_content|numbered_lines %}<span>{{ line.number }}</span>{% endfor %}</pre>
+      <textarea id="proposed-content" name="proposed_content" rows="28" spellcheck="false" data-line-numbered-source>{{ proposal.proposed_content }}</textarea>
+    </div>
 
     <div class="form-actions">
       <button type="submit" name="action" value="generate">Generate Proposal</button>

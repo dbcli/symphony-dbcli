@@ -31,6 +31,8 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.workspace.bare_repos_root == ".symphony/repos"
     assert config.workspace.branch_prefix == "symphony"
     assert config.dashboard.host == "127.0.0.1"
+    assert config.codex.workflow_edit_model == "gpt-5.4-mini"
+    assert config.codex.workflow_edit_reasoning_effort == "low"
     assert config.policy.dry_run is True
     assert config.workflow.initial_state == "todo"
     assert config.workflow.transitions["fix_issue"].action == "codex.fix_issue"
@@ -53,6 +55,8 @@ def test_rendered_workflow_includes_local_and_prod_profiles() -> None:
     assert 'action = "codex.fix_issue"' in workflow
     assert "guidance =" in workflow
     assert "[preferences]" in workflow
+    assert 'workflow_edit_model = "gpt-5.4-mini"' in workflow
+    assert 'workflow_edit_reasoning_effort = "low"' in workflow
     assert "[profiles.local.database]" in workflow
     assert 'path = ".symphony/symphony.db"' in workflow
     assert "[profiles.prod.database]" in workflow

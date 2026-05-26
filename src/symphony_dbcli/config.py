@@ -122,6 +122,8 @@ class CodexConfig:
     transport: str = "app-server"
     app_server_listen: str = "stdio://"
     model: str = ""
+    workflow_edit_model: str = "gpt-5.4-mini"
+    workflow_edit_reasoning_effort: str = "low"
     approval_policy: str = "never"
     sandbox: str = "workspace-write"
 
