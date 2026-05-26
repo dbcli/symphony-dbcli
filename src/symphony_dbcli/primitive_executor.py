@@ -330,6 +330,7 @@ class PrimitiveExecutor:
                 "worktree_path": allocation.worktree_path,
                 "branch": allocation.branch,
                 "commit_sha": allocation.commit_sha,
+                "reused_existing": allocation.reused_existing,
             }
         )
 

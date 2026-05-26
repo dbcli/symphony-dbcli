@@ -83,6 +83,9 @@ def test_action_registry_records_execution_boundaries() -> None:
     assert operations_task.output_type == "WorkerResult"
     assert operations_task.human_gate_allowed is True
     assert "worktree_path" in operations_task.input_fields
+    allocate_workspace = DEFAULT_ACTION_REGISTRY.get("workspace.allocate")
+    assert allocate_workspace is not None
+    assert "reused_existing" in allocate_workspace.output_fields
 
     assert push_update is not None
     assert push_update.side_effect == "github_write"

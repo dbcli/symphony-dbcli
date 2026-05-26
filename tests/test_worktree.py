@@ -43,6 +43,54 @@ def test_source_ref_resolves_origin_branch_in_bare_clone(tmp_path: Path) -> None
     assert manager._resolve_source_ref(bare, "origin/symphony/existing-pr") == "symphony/existing-pr"
 
 
+def test_allocate_reuses_managed_worktree_for_existing_pr_branch(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    bare = tmp_path / "repos" / "dbcli_litecli.git"
+    existing_worktree = tmp_path / "worktrees" / "dbcli_litecli_245_attempt_10"
+    source.mkdir()
+    bare.parent.mkdir()
+    existing_worktree.parent.mkdir()
+    _git(source, "init", "--initial-branch=main")
+    (source / "README.md").write_text("start\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    _git(source, "checkout", "-b", "symphony/existing-pr")
+    (source / "README.md").write_text("branch\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "branch")
+    subprocess.run(["git", "clone", "--bare", str(source), str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "--git-dir",
+            str(bare),
+            "worktree",
+            "add",
+            str(existing_worktree),
+            "symphony/existing-pr",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    manager = WorktreeManager(
+        WorkspaceConfig(root=str(existing_worktree.parent), bare_repos_root=str(bare.parent))
+    )
+
+    allocation = manager.allocate(
+        "dbcli/litecli",
+        245,
+        12,
+        branch_name="symphony/existing-pr",
+        source_ref="origin/symphony/existing-pr",
+    )
+
+    assert allocation.worktree_path == str(existing_worktree)
+    assert allocation.branch == "symphony/existing-pr"
+    assert allocation.reused_existing is True
+    assert not manager.worktree_path("dbcli/litecli", 245, 12).exists()
+
+
 def test_remove_worktree_removes_clean_managed_worktree(tmp_path: Path) -> None:
     source = tmp_path / "source"
     bare = tmp_path / "repos" / "repo.git"

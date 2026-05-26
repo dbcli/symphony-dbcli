@@ -23,6 +23,7 @@ class WorktreeAllocation:
     worktree_path: str
     branch: str
     commit_sha: str
+    reused_existing: bool = False
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,16 @@ class WorktreeManager:
         branch = branch_name or self.branch_name(repo, issue_number, attempt_id)
         clone_url = f"https://github.com/{repo}.git"
 
+        if branch_name and base_repo_path.exists():
+            existing = self._managed_worktree_for_branch(base_repo_path, branch)
+            if existing is not None:
+                return self._existing_allocation(repo, attempt_id, base_repo_path, existing, branch)
+
         self._ensure_base_repo(base_repo_path, clone_url)
+        if branch_name:
+            existing = self._managed_worktree_for_branch(base_repo_path, branch)
+            if existing is not None:
+                return self._existing_allocation(repo, attempt_id, base_repo_path, existing, branch)
         remote_ref = self._resolve_source_ref(base_repo_path, source_ref)
         Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
         self._run(
@@ -283,13 +293,59 @@ class WorktreeManager:
         )
         return result.returncode == 0
 
+    def _managed_worktree_for_branch(self, base_repo_path: Path, branch: str) -> Path | None:
+        result = self._run(
+            ["git", "--git-dir", str(base_repo_path), "worktree", "list", "--porcelain"],
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        for entry in _worktree_entries(result.stdout):
+            if entry.get("branch") != f"refs/heads/{branch}":
+                continue
+            worktree_value = entry.get("worktree")
+            if not worktree_value:
+                continue
+            path = Path(worktree_value)
+            if not path.exists():
+                self._run(["git", "--git-dir", str(base_repo_path), "worktree", "prune"], check=False)
+                return None
+            if self._is_managed_worktree(path):
+                return path
+            raise WorktreeError(f"Branch {branch!r} is already checked out in unmanaged worktree: {path}")
+        return None
+
+    def _existing_allocation(
+        self,
+        repo: str,
+        attempt_id: int,
+        base_repo_path: Path,
+        worktree_path: Path,
+        branch: str,
+    ) -> WorktreeAllocation:
+        commit_sha = self._run(["git", "-C", str(worktree_path), "rev-parse", "HEAD"]).stdout.strip()
+        return WorktreeAllocation(
+            repo=repo,
+            attempt_id=attempt_id,
+            base_repo_path=str(base_repo_path),
+            worktree_path=str(worktree_path),
+            branch=branch,
+            commit_sha=commit_sha,
+            reused_existing=True,
+        )
+
     def _ensure_managed_worktree(self, path: Path) -> None:
+        if not self._is_managed_worktree(path):
+            raise WorktreeError(f"Refusing to clean unmanaged worktree path: {path}")
+
+    def _is_managed_worktree(self, path: Path) -> bool:
         root = Path(self.config.root).resolve()
         resolved = path.resolve()
         try:
             resolved.relative_to(root)
-        except ValueError as exc:
-            raise WorktreeError(f"Refusing to clean unmanaged worktree path: {path}") from exc
+        except ValueError:
+            return False
+        return True
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(args, text=True, capture_output=True, check=False)
@@ -325,6 +381,22 @@ class WorktreeManager:
 def safe_key(value: str) -> str:
     cleaned = SAFE_RE.sub("_", value.strip()).strip("_")
     return cleaned or "repo"
+
+
+def _worktree_entries(value: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in value.splitlines():
+        if not line:
+            if current:
+                entries.append(current)
+                current = {}
+            continue
+        key, _, item_value = line.partition(" ")
+        current[key] = item_value
+    if current:
+        entries.append(current)
+    return entries
 
 
 def _excerpt(value: str) -> str:

@@ -461,7 +461,9 @@ def default_action_registry() -> ActionRegistry:
             human_gate_allowed=False,
             description="Allocate an isolated worktree or clone for an attempt.",
             input_fields=frozenset({"repo", "issue_number", "attempt_id", "branch", "source_ref"}),
-            output_fields=frozenset({"base_repo_path", "worktree_path", "branch", "commit_sha"}),
+            output_fields=frozenset(
+                {"base_repo_path", "worktree_path", "branch", "commit_sha", "reused_existing"}
+            ),
         ),
         PrimitiveSpec(
             name="workspace.run_setup",
