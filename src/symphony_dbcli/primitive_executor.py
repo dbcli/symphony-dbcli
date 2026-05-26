@@ -17,6 +17,7 @@ from .github import (
     GitHubPullRequestReviewComment,
     PullRequest,
     PullRequestMergeStatus,
+    is_actionable_ci_annotation,
 )
 from .models import create_model_tables
 from .review_actions import (
@@ -921,6 +922,7 @@ def _format_ci_failure_context(records: list[dict[str, Any]]) -> str:
         conclusion = str(record.get("conclusion") or "unknown")
         url = str(record.get("url") or record.get("details_url") or "")
         lines.append(f"{index}. {name} ({conclusion})" + (f" {url}" if url else ""))
+        has_actionable_detail = False
         for record_field, label in (
             ("summary", "summary"),
             ("text", "output"),
@@ -928,19 +930,32 @@ def _format_ci_failure_context(records: list[dict[str, Any]]) -> str:
         ):
             value = str(record.get(record_field) or "").strip()
             if value:
+                has_actionable_detail = True
                 lines.append(f"   {label}:")
                 lines.extend(f"   {line}" for line in value.splitlines())
         annotations = cast(list[dict[str, Any]], record.get("annotations") or [])
         for annotation in annotations:
-            location = _annotation_location(annotation)
             title = str(annotation.get("title") or "").strip()
             message = str(annotation.get("message") or "").strip()
+            raw_details = str(annotation.get("raw_details") or "").strip()
+            if not is_actionable_ci_annotation(
+                annotation_level=str(annotation.get("annotation_level") or ""),
+                title=title,
+                message=message,
+                raw_details=raw_details,
+            ):
+                continue
+            location = _annotation_location(annotation)
             details = " - ".join(part for part in (title, message) if part)
             if details:
+                has_actionable_detail = True
                 lines.append(f"   annotation: {location}{details}")
         unavailable_reason = str(record.get("unavailable_reason") or "").strip()
         if unavailable_reason:
+            has_actionable_detail = True
             lines.append(f"   unavailable: {unavailable_reason}")
+        elif not has_actionable_detail:
+            lines.append("   unavailable: no actionable CI failure output captured.")
     return "\n".join(lines)
 
 

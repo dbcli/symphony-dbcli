@@ -33,6 +33,11 @@ FAILURE_LINE_RE = re.compile(
     r"exception|expected .* actual|expected .* got)",
     re.IGNORECASE,
 )
+LOW_SIGNAL_CI_ANNOTATION_RE = re.compile(
+    r"(node\.js \d+ actions are deprecated|process completed with exit code \d+\.?)",
+    re.IGNORECASE,
+)
+ACTIONABLE_CI_ANNOTATION_LEVELS = {"failure", "error"}
 
 
 @dataclass(frozen=True)
@@ -355,6 +360,7 @@ class GitHubClient:
                 annotations = self._check_run_annotations(repo, check_run_id)
             except GitHubError as exc:
                 annotation_error = str(exc)
+        annotations = _actionable_ci_annotations(annotations)
         log_excerpt = ""
         log_error = ""
         job_id = _actions_job_id(data)
@@ -726,6 +732,33 @@ def _annotation_from_json(data: dict[str, Any]) -> GitHubCheckAnnotation:
         raw_details=_truncate_text(_str_text(data.get("raw_details")), MAX_CI_OUTPUT_CHARS),
         url=str(data.get("blob_href") or ""),
     )
+
+
+def _actionable_ci_annotations(
+    annotations: list[GitHubCheckAnnotation],
+) -> list[GitHubCheckAnnotation]:
+    return [
+        annotation
+        for annotation in annotations
+        if is_actionable_ci_annotation(
+            annotation_level=annotation.annotation_level,
+            title=annotation.title,
+            message=annotation.message,
+            raw_details=annotation.raw_details,
+        )
+    ]
+
+
+def is_actionable_ci_annotation(
+    *, annotation_level: str, title: str, message: str, raw_details: str = ""
+) -> bool:
+    text = " ".join(part for part in (title.strip(), message.strip(), raw_details.strip()) if part)
+    if not text:
+        return False
+    level = annotation_level.strip().lower()
+    if level and level not in ACTIONABLE_CI_ANNOTATION_LEVELS:
+        return False
+    return LOW_SIGNAL_CI_ANNOTATION_RE.search(text) is None
 
 
 def _actions_job_id(data: dict[str, Any]) -> int | None:

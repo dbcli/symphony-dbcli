@@ -4,8 +4,11 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import anyio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from starlette.requests import Request
+from starlette.responses import RedirectResponse
 
 from symphony_dbcli.config import DatabaseConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
@@ -24,6 +27,7 @@ from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.web.app import create_app
 from symphony_dbcli.web.dependencies import WebRuntime, _format_localtime
+from symphony_dbcli.web.routers import work_items
 
 
 def _legacy_store(tmp_path: Path) -> Store:
@@ -589,6 +593,58 @@ def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> 
     assert runs[-1].trigger == "rerun"
     assert runs[-1].user_hint == "Reviewer asked for tests."
     assert json.loads(runs[-1].reasons_json) == ["address_pr_comments", "fix_ci"]
+
+
+def test_fastapi_work_item_move_schedules_in_progress_cycle_after_response(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
+    store = Store(config.database.path)
+    store.init()
+    app = create_app(config, store, runtime=runtime)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/work-items/1/move",
+            "headers": [],
+            "app": app,
+        }
+    )
+    response = RedirectResponse("/work-items/1", status_code=303)
+
+    scheduled_response = work_items._schedule_cycle_after_in_progress_move(request, "in_progress", response)
+
+    assert scheduled_response is response
+    assert response.background is not None
+    assert runtime.triggers == []
+
+    anyio.run(response.background)
+
+    assert runtime.triggers == ["board_move"]
+
+
+def test_fastapi_work_item_move_only_schedules_cycle_for_in_progress(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
+    store = Store(config.database.path)
+    store.init()
+    app = create_app(config, store, runtime=runtime)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/work-items/1/move",
+            "headers": [],
+            "app": app,
+        }
+    )
+    response = RedirectResponse("/work-items/1", status_code=303)
+
+    scheduled_response = work_items._schedule_cycle_after_in_progress_move(request, "in_review", response)
+
+    assert scheduled_response is response
+    assert response.background is None
+    assert runtime.triggers == []
 
 
 def test_fastapi_review_rerun_does_not_reuse_activation_hint(tmp_path: Path) -> None:

@@ -476,6 +476,60 @@ def test_fix_ci_failures_runs_codex_with_failed_check_context(tmp_path: Path) ->
     assert detail["result"]["body"] == "Fixed failing CI."
 
 
+def test_fix_ci_failures_omits_low_signal_ci_annotations(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    attempt_id, worktree = _seed_attempt(store, tmp_path)
+    prompt_path = tmp_path / "prompt.txt"
+    config = _config_with_fake_codex(tmp_path, prompt_path, "Fixed failing CI.")
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+
+    executor.execute(
+        _context(
+            "codex.fix_ci_failures",
+            attempt_id=attempt_id,
+            worktree_path=str(worktree),
+            input_data={
+                "pull_request_number": 12,
+                "failed_checks": [
+                    {
+                        "name": "Tests (3.11)",
+                        "conclusion": "failure",
+                        "url": "https://github.com/dbcli/litecli/actions/runs/1/job/2",
+                    }
+                ],
+                "failure_context": [
+                    {
+                        "name": "Tests (3.11)",
+                        "conclusion": "failure",
+                        "url": "https://github.com/dbcli/litecli/actions/runs/1/job/2",
+                        "annotations": [
+                            {
+                                "path": ".github",
+                                "start_line": 2,
+                                "annotation_level": "warning",
+                                "message": "Node.js 20 actions are deprecated.",
+                            },
+                            {
+                                "path": ".github",
+                                "start_line": 342,
+                                "annotation_level": "failure",
+                                "message": "Process completed with exit code 3.",
+                            },
+                        ],
+                    }
+                ],
+                "checks": [],
+            },
+        )
+    )
+
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "Tests (3.11)" in prompt
+    assert "Node.js 20 actions are deprecated" not in prompt
+    assert "Process completed with exit code 3" not in prompt
+    assert "unavailable: no actionable CI failure output captured." in prompt
+
+
 def test_address_pr_feedback_runs_codex_with_combined_pr_context(tmp_path: Path) -> None:
     store = _store(tmp_path)
     attempt_id, worktree = _seed_attempt(store, tmp_path)

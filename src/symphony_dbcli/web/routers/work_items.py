@@ -4,6 +4,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request, status
+from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.web.dependencies import (
@@ -110,13 +111,14 @@ def move(
             context=context,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
-    _run_cycle_after_in_progress_move(request, target_state)
     if _is_htmx(request) and safe_return_to:
-        return Response(status_code=204, headers={"HX-Redirect": safe_return_to})
-    return RedirectResponse(
-        safe_return_to or f"/work-items/{work_item_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+        response: Response = Response(status_code=204, headers={"HX-Redirect": safe_return_to})
+    else:
+        response = RedirectResponse(
+            safe_return_to or f"/work-items/{work_item_id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    return _schedule_cycle_after_in_progress_move(request, target_state, response)
 
 
 @router.post("/work-items/{work_item_id}/active-pr")
@@ -319,10 +321,13 @@ def _safe_return_to(value: str) -> str:
     return value
 
 
-def _run_cycle_after_in_progress_move(request: Request, target_state: str) -> None:
+def _schedule_cycle_after_in_progress_move(
+    request: Request, target_state: str, response: Response
+) -> Response:
     if target_state != "in_progress":
-        return
+        return response
     runtime = get_app_state(request).runtime
     if runtime is None:
-        return
-    runtime.run_cycle(trigger="board_move")
+        return response
+    response.background = BackgroundTask(runtime.run_cycle, trigger="board_move")
+    return response
