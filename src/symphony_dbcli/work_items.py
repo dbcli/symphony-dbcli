@@ -793,7 +793,7 @@ class WorkItemRepository:
                         trigger="rerun" if previous_state == "in_review" else "manual_move",
                         status="queued",
                         reasons_json=reasons_json(reasons),
-                        user_hint=note or work_item.user_hint,
+                        user_hint=_move_run_user_hint(previous_state, note, work_item.user_hint),
                         started_at=None,
                         completed_at=None,
                         created_at=now,
@@ -822,6 +822,12 @@ def _validated_reasons(reasons: list[str]) -> list[str]:
     if invalid:
         raise WorkItemError(f"Unknown rerun reason: {', '.join(invalid)}.")
     return reasons
+
+
+def _move_run_user_hint(previous_state: str, note: str, existing_hint: str) -> str:
+    if previous_state == "in_review":
+        return note
+    return note or existing_hint
 
 
 def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemView:

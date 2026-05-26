@@ -56,6 +56,18 @@ def test_store_records_workflow_versions_and_attempt_metrics(tmp_path: Path) -> 
         started_monotonic_ns=1_000_000,
         ended_monotonic_ns=6_000_000,
     )
+    store.record_codex_event(
+        attempt_id,
+        thread_id="thread-1",
+        event_type="turn/start/request",
+        payload={
+            "threadId": "thread-1",
+            "cwd": "/tmp/worktree",
+            "model": "gpt-5.4-mini",
+            "approvalPolicy": "never",
+            "input": [{"type": "text", "text": "Fix the failing tests."}],
+        },
+    )
     store.record_error(
         attempt_id,
         phase="test",
@@ -90,6 +102,8 @@ def test_store_records_workflow_versions_and_attempt_metrics(tmp_path: Path) -> 
     assert detail["attempt"]["duration_ms"] == 5
     assert detail["result"]["body"] == "Worker result body"
     assert detail["comments"][0]["body"] == "Draft response"
+    assert detail["prompts"][0]["prompt"] == "Fix the failing tests."
+    assert detail["prompts"][0]["model"] == "gpt-5.4-mini"
 
 
 def test_eligible_issues_use_labels(tmp_path: Path) -> None:

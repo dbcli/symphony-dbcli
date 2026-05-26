@@ -180,45 +180,38 @@ class ReviewActions:
             raise ReviewActionError("Attempt does not have a complete worktree, branch, and base commit.")
 
         pull_request = existing[0]
+        worktree = GitWorktree(worktree_path)
         commit_sha = self._ensure_commit(
             attempt_id,
             repo,
             issue_number,
-            GitWorktree(worktree_path),
+            worktree,
             base_commit,
             require_changes=False,
         )
-        if not commit_sha:
-            return PullRequestBranchUpdate(
-                number=int(pull_request["number"]),
-                url=str(pull_request["url"]),
-                title=str(pull_request["title"]),
-                branch=branch,
-                commit_sha=base_commit,
-                pushed=False,
-            )
+        pushed_sha = commit_sha or worktree.head_sha()
 
+        self.github.push_branch(repo=repo, worktree_path=worktree_path, branch=branch)
         self.store.update_attempt_workspace(
             attempt_id,
             base_repo_path=str(attempt["base_repo_path"]),
             worktree_path=worktree_path,
             branch=branch,
-            commit_sha=commit_sha,
+            commit_sha=pushed_sha,
         )
-        self.github.push_branch(repo=repo, worktree_path=worktree_path, branch=branch)
         self.store.record_timeline_event(
             attempt_id,
             phase="github",
             event_type="pr_branch_updated",
             message=branch,
-            data={"pull_request": int(pull_request["number"]), "commit_sha": commit_sha},
+            data={"pull_request": int(pull_request["number"]), "commit_sha": pushed_sha},
         )
         return PullRequestBranchUpdate(
             number=int(pull_request["number"]),
             url=str(pull_request["url"]),
             title=str(pull_request["title"]),
             branch=branch,
-            commit_sha=commit_sha,
+            commit_sha=pushed_sha,
             pushed=True,
         )
 
@@ -262,7 +255,7 @@ class ReviewActions:
     ) -> str:
         if worktree.has_changes():
             self.store.record_timeline_event(attempt_id, phase="git", event_type="commit_started")
-            commit = worktree.commit_all(f"Work on {repo}#{issue_number}")
+            commit = worktree.commit_all(self._commit_message(attempt_id, repo, issue_number))
             self.store.record_timeline_event(
                 attempt_id,
                 phase="git",
@@ -283,6 +276,13 @@ class ReviewActions:
         if not require_changes:
             return ""
         raise ReviewActionError("No code changes were found in this attempt worktree.")
+
+    def _commit_message(self, attempt_id: int, repo: str, issue_number: int) -> str:
+        result = self.store.worker_result_for_attempt(attempt_id)
+        worker_result = str(result["body"]) if result else ""
+        issue = self.store.issue_detail(repo, issue_number)
+        issue_title = str(issue["issue"]["title"]) if issue else ""
+        return build_commit_message(issue_number, worker_result, issue_title=issue_title)
 
 
 def build_draft_pr_content(
@@ -322,6 +322,16 @@ def build_draft_pr_content(
         title=_title_from_issue(issue_number, issue_title, summary_lines),
         body="\n".join(body_parts),
     )
+
+
+def build_commit_message(
+    issue_number: int,
+    worker_result: str,
+    *,
+    issue_title: str = "",
+) -> str:
+    summary_lines = _summary_lines_from_worker_result(worker_result)
+    return _title_from_issue(issue_number, issue_title, summary_lines)
 
 
 def build_draft_pr_body(

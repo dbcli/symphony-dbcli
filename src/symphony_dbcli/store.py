@@ -16,6 +16,7 @@ from .types import AttemptSummary
 SCHEMA_VERSION = 10
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
+CODEX_PROMPT_EVENT_TYPES = ("turn/start/request", "exec/request")
 
 
 @dataclass(frozen=True)
@@ -1771,6 +1772,7 @@ class Store:
                         (attempt_id,),
                     )
                 ),
+                "prompts": _codex_prompts_for_attempt(conn, attempt_id),
                 "errors": list(
                     conn.execute(
                         "SELECT * FROM worker_errors WHERE attempt_id = ? ORDER BY id ASC", (attempt_id,)
@@ -1917,6 +1919,69 @@ class Store:
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
+
+
+def _codex_prompts_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> list[dict[str, object]]:
+    placeholders = ", ".join("?" for _ in CODEX_PROMPT_EVENT_TYPES)
+    rows = conn.execute(
+        f"""
+        SELECT id, thread_id, event_type, payload_json, created_at
+        FROM codex_events
+        WHERE attempt_id = ? AND event_type IN ({placeholders})
+        ORDER BY id ASC
+        """,
+        (attempt_id, *CODEX_PROMPT_EVENT_TYPES),
+    )
+    prompts: list[dict[str, object]] = []
+    for row in rows:
+        payload = _json_object(row["payload_json"])
+        prompts.append(
+            {
+                "id": int(row["id"]),
+                "thread_id": str(row["thread_id"]),
+                "event_type": str(row["event_type"]),
+                "created_at": str(row["created_at"]),
+                "cwd": _payload_string(payload, "cwd"),
+                "model": _payload_string(payload, "model"),
+                "approval_policy": _payload_string(payload, "approvalPolicy"),
+                "prompt": _prompt_text_from_codex_payload(payload),
+            }
+        )
+    return prompts
+
+
+def _json_object(raw_value: object) -> dict[str, Any]:
+    try:
+        value = json.loads(str(raw_value))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return cast(dict[str, Any], value)
+
+
+def _payload_string(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _prompt_text_from_codex_payload(payload: dict[str, Any]) -> str:
+    direct_prompt = payload.get("prompt")
+    if isinstance(direct_prompt, str):
+        return direct_prompt
+    input_items = payload.get("input")
+    if not isinstance(input_items, list):
+        return ""
+    parts: list[str] = []
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts)
 
 
 def _lastrowid(cursor: sqlite3.Cursor) -> int:

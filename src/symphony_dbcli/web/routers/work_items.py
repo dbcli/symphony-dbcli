@@ -7,6 +7,7 @@ from fastapi import APIRouter, Form, HTTPException, Request, status
 from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.web.dependencies import (
+    get_app_state,
     page_context,
     source_repository,
     templates,
@@ -109,6 +110,7 @@ def move(
             context=context,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
+    _run_cycle_after_in_progress_move(request, target_state)
     if _is_htmx(request) and safe_return_to:
         return Response(status_code=204, headers={"HX-Redirect": safe_return_to})
     return RedirectResponse(
@@ -315,3 +317,12 @@ def _safe_return_to(value: str) -> str:
     if parsed.scheme or parsed.netloc or not value.startswith("/") or value.startswith("//"):
         return ""
     return value
+
+
+def _run_cycle_after_in_progress_move(request: Request, target_state: str) -> None:
+    if target_state != "in_progress":
+        return
+    runtime = get_app_state(request).runtime
+    if runtime is None:
+        return
+    runtime.run_cycle(trigger="board_move")

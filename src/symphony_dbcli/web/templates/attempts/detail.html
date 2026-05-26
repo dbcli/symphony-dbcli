@@ -95,6 +95,30 @@
   </div>
 </section>
 
+{% if detail.prompts %}
+<section class="panel">
+  <div class="section-heading">
+    <h2>Codex Prompts</h2>
+    <span class="muted">{{ detail.prompts|length }}</span>
+  </div>
+  <div class="gate-list">
+    {% for prompt in detail.prompts %}
+    <article class="gate-card">
+      <div class="draft-meta">
+        <strong>Prompt {{ loop.index }}</strong>
+        <span>{{ prompt.created_at|localtime }}</span>
+        <span>{{ prompt.event_type }}</span>
+        {% if prompt.model %}<span>{{ prompt.model }}</span>{% endif %}
+        {% if prompt.approval_policy %}<span>approval: {{ prompt.approval_policy }}</span>{% endif %}
+        {% if prompt.cwd %}<span>{{ prompt.cwd }}</span>{% endif %}
+      </div>
+      <pre class="result-body">{{ prompt.prompt }}</pre>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="section-heading">
     <h2>Pull Request</h2>

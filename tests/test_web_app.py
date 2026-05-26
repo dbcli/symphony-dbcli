@@ -552,7 +552,8 @@ def test_fastapi_operations_page_lists_operation_runs(tmp_path: Path) -> None:
 
 
 def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> None:
-    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    runtime = FakeRuntime()
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient(), runtime=runtime)
     source_id = _add_source(client, "dbcli/litecli")
     _sync_source(client, source_id)
     source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
@@ -578,6 +579,7 @@ def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> 
 
     assert review_move.status_code == 303
     assert rerun_move.status_code == 303
+    assert runtime.triggers == ["board_move"]
     assert "In Progress" in detail.text
     assert "Reviewer asked for tests." in detail.text
     assert "work item #1" in board.text
@@ -587,6 +589,36 @@ def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> 
     assert runs[-1].trigger == "rerun"
     assert runs[-1].user_hint == "Reviewer asked for tests."
     assert json.loads(runs[-1].reasons_json) == ["address_pr_comments", "fix_ci"]
+
+
+def test_fastapi_review_rerun_does_not_reuse_activation_hint(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(
+        client,
+        source_item_id,
+        task_type="code",
+        user_hint="Use the initial model context only.",
+    )
+
+    client.post(
+        "/work-items/1/move",
+        data={"target_state": "in_review"},
+        follow_redirects=False,
+    )
+    response = client.post(
+        "/work-items/1/move",
+        data={"target_state": "in_progress", "reasons": ["fix_ci"]},
+        follow_redirects=False,
+    )
+    _events, runs = _work_item_events_and_runs(tmp_path)
+
+    assert response.status_code == 303
+    assert runs[-1].trigger == "rerun"
+    assert runs[-1].user_hint == ""
+    assert json.loads(runs[-1].reasons_json) == ["fix_ci"]
 
 
 def test_fastapi_work_item_move_form_presets_review_rerun_target(tmp_path: Path) -> None:
@@ -913,6 +945,18 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
         message="Worker failed.",
         log_excerpt="Traceback (most recent call last):\nRuntimeError: worker exploded",
     )
+    store.record_codex_event(
+        attempt_id,
+        thread_id="thread-245",
+        event_type="turn/start/request",
+        payload={
+            "threadId": "thread-245",
+            "cwd": "/tmp/litecli",
+            "model": "gpt-5.4-mini",
+            "approvalPolicy": "never",
+            "input": [{"type": "text", "text": "Draft a reply for issue 245."}],
+        },
+    )
     gate_id = _open_attempt_gate(store, attempt_id, transition_name="post_answer", gate="review_answer")
 
     attempt = client.get(f"/attempts/{attempt_id}")
@@ -925,6 +969,9 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     assert "Worker result body" in attempt.text
     assert "Suggested reply body" in attempt.text
     assert "Started codex exec" in attempt.text
+    assert "Codex Prompts" in attempt.text
+    assert "Draft a reply for issue 245." in attempt.text
+    assert "/tmp/litecli" in attempt.text
     assert "2026-01-25 4:00:00 AM PST" in attempt.text
     assert "RuntimeError: worker exploded" in attempt.text
     assert f'action="/workflow-gates/{gate_id}/run"' in attempt.text

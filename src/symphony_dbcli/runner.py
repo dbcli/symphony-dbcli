@@ -52,6 +52,14 @@ class CodexRunner:
         if self.config.model:
             command.extend(["--model", self.config.model])
         command.append(prompt)
+        store.record_codex_event(
+            attempt_id,
+            thread_id=thread_id,
+            event_type="exec/request",
+            payload=_prompt_payload(
+                self.config, thread_id=thread_id, cwd=cwd, prompt=prompt, include_sandbox=True
+            ),
+        )
         result = subprocess.run(command, text=True, capture_output=True, check=False)
         ended = monotonic_ns()
         output = result.stdout.strip()
@@ -206,16 +214,14 @@ class _AppServerClient:
         return str(thread_id)
 
     def turn_start(self, *, thread_id: str, cwd: str, prompt: str) -> str:
-        self.request(
-            "turn/start",
-            {
-                "threadId": thread_id,
-                "cwd": str(Path(cwd).resolve()),
-                "model": self.config.model or None,
-                "approvalPolicy": self.config.approval_policy,
-                "input": [{"type": "text", "text": prompt}],
-            },
+        payload = _prompt_payload(self.config, thread_id=thread_id, cwd=cwd, prompt=prompt)
+        self.store.record_codex_event(
+            self.attempt_id,
+            thread_id=thread_id,
+            event_type="turn/start/request",
+            payload=payload,
         )
+        self.request("turn/start", payload)
         self._read_until_turn_completed(thread_id)
         return "".join(self.final_message_parts).strip()
 
@@ -286,3 +292,18 @@ class _AppServerClient:
         }:
             delta = params.get("delta") or params.get("text") or ""
             self.final_message_parts.append(str(delta))
+
+
+def _prompt_payload(
+    config: CodexConfig, *, thread_id: str, cwd: str, prompt: str, include_sandbox: bool = False
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "threadId": thread_id,
+        "cwd": str(Path(cwd).resolve()),
+        "model": config.model or None,
+        "approvalPolicy": config.approval_policy,
+        "input": [{"type": "text", "text": prompt}],
+    }
+    if include_sandbox:
+        payload["sandbox"] = config.sandbox
+    return payload
