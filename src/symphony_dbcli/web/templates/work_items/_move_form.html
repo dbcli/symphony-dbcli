@@ -1,0 +1,57 @@
+{% if show_rerun_prompt %}
+<p class="form-hint" data-rerun-prompt="true">
+  Add rerun reasons and optional model context before moving this item back to In Progress.
+</p>
+{% endif %}
+<form
+  class="stacked-form"
+  method="post"
+  action="/work-items/{{ work_item.id }}/move"
+  {% if is_modal %}
+  hx-post="/work-items/{{ work_item.id }}/move"
+  hx-target="#modal-root"
+  hx-swap="innerHTML"
+  {% endif %}
+>
+  <label for="{{ 'modal-' if is_modal else '' }}target_state">Target State</label>
+  <select id="{{ 'modal-' if is_modal else '' }}target_state" name="target_state">
+    {% for state, label in states %}
+    <option value="{{ state }}" {{ "selected" if state == selected_target_state else "" }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+
+  <fieldset class="option-group">
+    <legend>Rerun Reasons</legend>
+    {% for value, label in review_reasons %}
+    <label class="check-row" for="{{ 'modal-' if is_modal else '' }}reason_{{ value }}">
+      <input id="{{ 'modal-' if is_modal else '' }}reason_{{ value }}" name="reasons" type="checkbox" value="{{ value }}" />
+      <span>{{ label }}</span>
+    </label>
+    {% endfor %}
+  </fieldset>
+
+  <label for="{{ 'modal-' if is_modal else '' }}note">Note</label>
+  <textarea
+    id="{{ 'modal-' if is_modal else '' }}note"
+    name="note"
+    rows="3"
+    placeholder="Optional context for the next worker run"
+  ></textarea>
+
+  {% if return_to %}
+  <input type="hidden" name="return_to" value="{{ return_to }}" />
+  {% endif %}
+
+  {% if error %}
+  <p class="form-error">{{ error }}</p>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit">Move Work Item</button>
+    {% if is_modal %}
+    <button class="quiet" type="button" data-modal-close>Cancel</button>
+    {% else %}
+    <a class="button-link quiet" href="/board/source/{{ work_item.source_id }}">Board</a>
+    {% endif %}
+  </div>
+</form>

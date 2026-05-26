@@ -118,36 +118,7 @@
 
 <section id="move-work" class="panel flow-panel">
   <h2>Move Work</h2>
-  <form class="stacked-form" method="post" action="/work-items/{{ work_item.id }}/move">
-    <label for="target_state">Target State</label>
-    <select id="target_state" name="target_state">
-      {% for state, label in states %}
-      <option value="{{ state }}" {{ "selected" if state == work_item.state else "" }}>{{ label }}</option>
-      {% endfor %}
-    </select>
-
-    <fieldset class="option-group">
-      <legend>Rerun Reasons</legend>
-      {% for value, label in review_reasons %}
-      <label class="check-row" for="reason_{{ value }}">
-        <input id="reason_{{ value }}" name="reasons" type="checkbox" value="{{ value }}" />
-        <span>{{ label }}</span>
-      </label>
-      {% endfor %}
-    </fieldset>
-
-    <label for="note">Note</label>
-    <textarea id="note" name="note" rows="3" placeholder="Optional context for the next worker run"></textarea>
-
-    {% if error %}
-    <p class="form-error">{{ error }}</p>
-    {% endif %}
-
-    <div class="form-actions">
-      <button type="submit">Move Work Item</button>
-      <a class="button-link quiet" href="/board/source/{{ work_item.source_id }}">Board</a>
-    </div>
-  </form>
+  {% include "work_items/_move_form.html" %}
 </section>
 
 <section class="panel flow-panel">

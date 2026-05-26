@@ -89,9 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     poll_once.set_defaults(func=cmd_poll_once)
 
     serve = subcommands.add_parser("serve", help="Run the FastAPI dashboard and orchestration runtime")
+    _add_serve_reload_flags(serve)
     serve.set_defaults(func=cmd_serve)
 
     serve_web = subcommands.add_parser("serve-web", help="Run the FastAPI dashboard without workers")
+    _add_serve_reload_flags(serve_web)
     serve_web.set_defaults(func=cmd_serve_web)
 
     worker = subcommands.add_parser("worker", help="Worker commands")
@@ -166,6 +168,22 @@ def build_parser() -> argparse.ArgumentParser:
     installations.set_defaults(func=cmd_github_app_installations)
 
     return parser
+
+
+def _add_serve_reload_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--reload",
+        dest="reload",
+        action="store_true",
+        default=None,
+        help="Reload the FastAPI process when Python, template, static, or workflow files change.",
+    )
+    parser.add_argument(
+        "--no-reload",
+        dest="reload",
+        action="store_false",
+        help="Disable Uvicorn file watching.",
+    )
 
 
 def cmd_init_workflow(args: argparse.Namespace) -> int:
@@ -414,9 +432,44 @@ def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
         args.workflow,
         profile=_runtime_profile(args),
     )
-    app = create_app(config, store, workflow_path=args.workflow, run_runtime=run_runtime)
-    uvicorn.run(app, host=config.dashboard.host, port=config.dashboard.port)
+    reload_enabled = bool(args.reload) if args.reload is not None else config.profile.active == "local"
+    if reload_enabled:
+        _set_fastapi_factory_env(args.workflow, config.profile.active, run_runtime=run_runtime)
+        uvicorn.run(
+            "symphony_dbcli.web.app:create_app_from_env",
+            factory=True,
+            host=config.dashboard.host,
+            port=config.dashboard.port,
+            reload=True,
+            reload_dirs=_reload_dirs(args.workflow),
+            reload_includes=_reload_includes(args.workflow),
+        )
+    else:
+        app = create_app(config, store, workflow_path=args.workflow, run_runtime=run_runtime)
+        uvicorn.run(app, host=config.dashboard.host, port=config.dashboard.port)
     return 0
+
+
+def _set_fastapi_factory_env(workflow_path: str, profile: str, *, run_runtime: bool) -> None:
+    os.environ["SYMPHONY_WORKFLOW"] = str(Path(workflow_path))
+    os.environ["SYMPHONY_PROFILE"] = profile
+    os.environ["SYMPHONY_RUN_RUNTIME"] = "1" if run_runtime else "0"
+
+
+def _reload_dirs(workflow_path: str) -> list[str]:
+    dirs = {str(Path(workflow_path).resolve().parent)}
+    src_dir = Path("src")
+    if src_dir.exists():
+        dirs.add(str(src_dir.resolve()))
+    return sorted(dirs)
+
+
+def _reload_includes(workflow_path: str) -> list[str]:
+    includes = ["*.py", "*.html", "*.css", "*.js"]
+    workflow_name = Path(workflow_path).name
+    if workflow_name not in includes:
+        includes.append(workflow_name)
+    return includes
 
 
 def _load_config_store_and_record(

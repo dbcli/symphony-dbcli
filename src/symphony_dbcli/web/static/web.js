@@ -54,13 +54,44 @@ async function moveWorkItem(workItemId, targetState) {
   }
 }
 
+function restoreDroppedItem(event) {
+  event.from.insertBefore(event.item, event.from.children[event.oldIndex] || null);
+}
+
+function openMoveWorkModal(workItemId, targetState) {
+  if (!window.htmx) {
+    window.location.href = `/work-items/${workItemId}?target_state=${encodeURIComponent(targetState)}#move-work`;
+    return;
+  }
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  const params = new URLSearchParams({
+    target_state: targetState,
+    return_to: returnTo,
+  });
+  window.htmx.ajax("GET", `/work-items/${workItemId}/move-form?${params.toString()}`, {
+    target: "#modal-root",
+    swap: "innerHTML",
+  });
+}
+
+function openActivateWorkModal(sourceItemId) {
+  if (!window.htmx) {
+    window.location.href = `/source-items/${sourceItemId}/activate`;
+    return;
+  }
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  const params = new URLSearchParams({ return_to: returnTo });
+  window.htmx.ajax("GET", `/source-items/${sourceItemId}/activate-form?${params.toString()}`, {
+    target: "#modal-root",
+    swap: "innerHTML",
+  });
+}
+
 function setupKanbanDrag() {
   if (!window.Sortable) {
     return;
   }
-  const lists = [...document.querySelectorAll(".kanban-list[data-state]")].filter(
-    (list) => list.dataset.state !== "backlog",
-  );
+  const lists = [...document.querySelectorAll(".kanban-list[data-state]")];
   for (const list of lists) {
     if (list.dataset.sortableReady === "true") {
       continue;
@@ -69,17 +100,34 @@ function setupKanbanDrag() {
     window.Sortable.create(list, {
       group: "work-items",
       animation: 120,
-      draggable: "[data-work-item-id]",
+      draggable: "[data-work-item-id], [data-source-item-id]",
       ghostClass: "is-dragging",
+      emptyInsertThreshold: 48,
       onEnd: async (event) => {
         const workItemId = event.item.dataset.workItemId;
+        const sourceItemId = event.item.dataset.sourceItemId;
         const targetState = event.to.dataset.state;
         const previousState = event.from.dataset.state;
-        if (!workItemId || !targetState || targetState === previousState) {
+        if (!targetState || targetState === previousState) {
+          return;
+        }
+        if (sourceItemId) {
+          restoreDroppedItem(event);
+          if (previousState === "backlog" && targetState === "todo") {
+            openActivateWorkModal(sourceItemId);
+          }
+          return;
+        }
+        if (!workItemId) {
+          return;
+        }
+        if (targetState === "backlog") {
+          restoreDroppedItem(event);
           return;
         }
         if (previousState === "in_review" && targetState === "in_progress") {
-          window.location.href = `/work-items/${workItemId}#move-work`;
+          restoreDroppedItem(event);
+          openMoveWorkModal(workItemId, targetState);
           return;
         }
         event.item.classList.add("is-moving");
@@ -95,6 +143,51 @@ function setupKanbanDrag() {
 }
 
 setupKanbanDrag();
+
+function setupMoveWorkForm() {
+  const movePanel = document.querySelector("#move-work");
+  const targetSelect = movePanel?.querySelector('select[name="target_state"]');
+  if (!movePanel || !targetSelect) {
+    return;
+  }
+  const requestedTarget = new URLSearchParams(window.location.search).get("target_state");
+  if (requestedTarget) {
+    targetSelect.value = requestedTarget;
+  }
+  if (requestedTarget === "in_progress" && !movePanel.querySelector("[data-rerun-prompt]")) {
+    const hint = document.createElement("p");
+    hint.className = "form-hint";
+    hint.dataset.rerunPrompt = "true";
+    hint.textContent =
+      "Add rerun reasons and optional model context before moving this item back to In Progress.";
+    movePanel.querySelector("h2")?.after(hint);
+  }
+}
+
+setupMoveWorkForm();
+
+function closeModal() {
+  const modalRoot = document.querySelector("#modal-root");
+  if (modalRoot) {
+    modalRoot.innerHTML = "";
+  }
+}
+
+document.body.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  if (target.closest("[data-modal-close]") || target.matches("[data-modal-backdrop]")) {
+    closeModal();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeModal();
+  }
+});
 
 function setupWorkflowFlowchart() {
   const frame = document.querySelector("[data-workflow-flowchart]");
@@ -187,6 +280,7 @@ setupWorkflowFlowchart();
 document.body.addEventListener("htmx:afterSwap", (event) => {
   if (event.target.id === "dashboard-main") {
     setupKanbanDrag();
+    setupMoveWorkForm();
     setupWorkflowFlowchart();
   }
 });

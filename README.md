@@ -26,7 +26,10 @@ credentials before workers can label issues. Workers save research answers and
 code summaries as local review drafts instead of posting comments or opening
 pull requests automatically.
 `serve-web` is available for dashboard-only debugging without starting workers.
-Normal local iteration should use `serve`.
+Normal local iteration should use `serve`. Local profiles start Uvicorn with
+reload enabled so Python, template, static, and workflow edits restart the web
+process. Use `--no-reload` to disable file watching, or `--reload` to force it
+for a non-local profile.
 
 ## Worker Lifecycle
 

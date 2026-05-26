@@ -1,0 +1,49 @@
+<div class="activation-summary">
+  <span class="source-card-kind">{{ source_item.kind_label }}</span>
+  <a href="{{ source_item.url }}" target="_blank" rel="noreferrer">#{{ source_item.number }}</a>
+  <strong>{{ source_item.title }}</strong>
+  <span class="muted">{{ source_item.activation_label }}</span>
+  {% if source_item.linked_items %}
+  <details class="linked-detail" open>
+    <summary>{{ source_item.linked_items|length }} linked PR{{ "s" if source_item.linked_items|length != 1 else "" }}</summary>
+    <ul>
+      {% for linked in source_item.linked_items %}
+      <li><a href="{{ linked.url }}" target="_blank" rel="noreferrer">#{{ linked.number }}</a> {{ linked.title }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</div>
+<form
+  class="stacked-form"
+  method="post"
+  action="/source-items/{{ source_item.id }}/activate"
+  {% if is_modal %}
+  hx-post="/source-items/{{ source_item.id }}/activate"
+  hx-target="#modal-root"
+  hx-swap="innerHTML"
+  {% endif %}
+>
+  <label for="{{ 'modal-' if is_modal else '' }}task-type">Task Type</label>
+  <select id="{{ 'modal-' if is_modal else '' }}task-type" name="task_type">
+    {% for value in ["research", "code", "operations"] %}
+    <option value="{{ value }}" {% if value == task_type %}selected{% endif %}>{{ value|title }}</option>
+    {% endfor %}
+  </select>
+  <label for="{{ 'modal-' if is_modal else '' }}user-hint">Hint</label>
+  <textarea id="{{ 'modal-' if is_modal else '' }}user-hint" name="user_hint" rows="4">{{ user_hint }}</textarea>
+  {% if return_to %}
+  <input type="hidden" name="return_to" value="{{ return_to }}" />
+  {% endif %}
+  {% if error %}
+  <p class="form-error">{{ error }}</p>
+  {% endif %}
+  <div class="form-actions">
+    <button type="submit">Queue Work</button>
+    {% if is_modal %}
+    <button class="quiet" type="button" data-modal-close>Cancel</button>
+    {% else %}
+    <a class="button-link quiet" href="/board/source/{{ source_item.source_id }}">Cancel</a>
+    {% endif %}
+  </div>
+</form>

@@ -89,7 +89,7 @@
     {% if column.source_items %}
     <div class="source-card-list kanban-list" data-state="{{ column.name }}">
       {% for item in column.source_items %}
-      <article class="source-card">
+      <article class="source-card" data-source-item-id="{{ item.id }}">
         <div>
           <span class="source-card-kind">{{ item.kind_label }}</span>
           <a href="{{ item.url }}" target="_blank" rel="noreferrer">#{{ item.number }}</a>
@@ -133,8 +133,9 @@
       {% endfor %}
     </div>
     {% else %}
-    <div class="source-card-list kanban-list" data-state="{{ column.name }}"></div>
-    <div class="empty-state">No {{ column.label|lower }} items</div>
+    <div class="source-card-list kanban-list is-empty" data-state="{{ column.name }}">
+      <div class="empty-state">No {{ column.label|lower }} items</div>
+    </div>
     {% endif %}
   </div>
   {% endfor %}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -93,3 +94,23 @@ def create_app(
         return Response(status_code=204)
 
     return app
+
+
+def create_app_from_env() -> FastAPI:
+    workflow_path = os.environ.get("SYMPHONY_WORKFLOW", "WORKFLOW.md")
+    profile = os.environ.get("SYMPHONY_PROFILE") or None
+    run_runtime = os.environ.get("SYMPHONY_RUN_RUNTIME") == "1"
+
+    from symphony_dbcli.config import load_workflow
+    from symphony_dbcli.orchestrator import load_and_record_workflow
+
+    config = load_workflow(workflow_path, profile=profile)
+    store = Store(config.database.path)
+    store.init()
+    config, _version_id = load_and_record_workflow(store, workflow_path, profile=profile)
+    return create_app(
+        config,
+        store,
+        workflow_path=workflow_path,
+        run_runtime=run_runtime,
+    )

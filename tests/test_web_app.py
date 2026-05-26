@@ -82,6 +82,7 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert "Backlog" in response.text
     assert "In Review" in response.text
     assert 'id="dashboard-main"' in response.text
+    assert 'id="modal-root"' in response.text
     assert 'name="backlog_q"' in response.text
     assert 'name="todo_q"' in response.text
     assert 'hx-trigger="input changed delay:200ms, search"' in response.text
@@ -246,6 +247,8 @@ def test_fastapi_board_is_scoped_by_source(tmp_path: Path) -> None:
     assert f'href="/board/source/{pgcli_id}"' in default_board.text
     assert 'aria-label="Work board for dbcli/litecli"' in litecli_board.text
     assert 'aria-label="Work board for dbcli/pgcli"' in pgcli_board.text
+    assert '<div class="source-card-list kanban-list is-empty" data-state="todo">' in pgcli_board.text
+    assert '<div class="empty-state">No todo items</div>' in pgcli_board.text
     assert "No backlog items" in pgcli_board.text
 
 
@@ -284,6 +287,7 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     assert "Improve docs" in board.text
     assert "#245" in board.text
     assert "#8" in board.text
+    assert "data-source-item-id=" in board.text
     assert "<span>2</span>" in board.text
     assert "No backlog items" not in board.text
 
@@ -372,6 +376,48 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "Prefer unit tests." in detail.text
     assert "Runs / Attempts" in detail.text
     assert "not claimed" in detail.text
+
+
+def test_fastapi_source_item_activate_form_renders_modal(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+
+    response = client.get(f"/source-items/{source_item_id}/activate-form?return_to=/board/source/{source_id}")
+
+    assert response.status_code == 200
+    assert 'class="modal-backdrop"' in response.text
+    assert 'role="dialog"' in response.text
+    assert f'hx-post="/source-items/{source_item_id}/activate"' in response.text
+    assert 'hx-target="#modal-root"' in response.text
+    assert f'name="return_to" value="/board/source/{source_id}"' in response.text
+    assert "Fix completion crash" in response.text
+    assert "Queue Work" in response.text
+
+
+def test_fastapi_htmx_source_item_activation_redirects_to_return_target(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+
+    response = client.post(
+        f"/source-items/{source_item_id}/activate",
+        data={
+            "task_type": "code",
+            "user_hint": "Drag queued this.",
+            "return_to": f"/board/source/{source_id}",
+        },
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    board = client.get(f"/board/source/{source_id}")
+
+    assert response.status_code == 204
+    assert response.headers["HX-Redirect"] == f"/board/source/{source_id}"
+    assert "work item #1" in board.text
+    assert "Drag queued this." not in board.text
 
 
 def test_fastapi_work_item_detail_links_attempts(tmp_path: Path) -> None:
@@ -485,6 +531,82 @@ def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> 
     assert runs[-1].trigger == "rerun"
     assert runs[-1].user_hint == "Reviewer asked for tests."
     assert json.loads(runs[-1].reasons_json) == ["address_pr_comments", "fix_ci"]
+
+
+def test_fastapi_work_item_move_form_presets_review_rerun_target(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+
+    client.post(
+        "/work-items/1/move",
+        data={"target_state": "in_review"},
+        follow_redirects=False,
+    )
+    response = client.get("/work-items/1?target_state=in_progress")
+
+    assert response.status_code == 200
+    assert "Add rerun reasons and optional model context" in response.text
+    assert '<option value="in_progress" selected>In Progress</option>' in response.text
+
+
+def test_fastapi_work_item_move_form_renders_modal(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+    client.post(
+        "/work-items/1/move",
+        data={"target_state": "in_review"},
+        follow_redirects=False,
+    )
+
+    response = client.get(
+        f"/work-items/1/move-form?target_state=in_progress&return_to=/board/source/{source_id}"
+    )
+
+    assert response.status_code == 200
+    assert 'class="modal-backdrop"' in response.text
+    assert 'role="dialog"' in response.text
+    assert 'hx-post="/work-items/1/move"' in response.text
+    assert 'hx-target="#modal-root"' in response.text
+    assert f'name="return_to" value="/board/source/{source_id}"' in response.text
+    assert '<option value="in_progress" selected>In Progress</option>' in response.text
+    assert "Add rerun reasons and optional model context" in response.text
+
+
+def test_fastapi_htmx_work_item_move_redirects_to_return_target(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+    client.post(
+        "/work-items/1/move",
+        data={"target_state": "in_review"},
+        follow_redirects=False,
+    )
+
+    response = client.post(
+        "/work-items/1/move",
+        data={
+            "target_state": "in_progress",
+            "reasons": ["fix_ci"],
+            "note": "CI is failing.",
+            "return_to": f"/board/source/{source_id}",
+        },
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    events, runs = _work_item_events_and_runs(tmp_path)
+
+    assert response.status_code == 204
+    assert response.headers["HX-Redirect"] == f"/board/source/{source_id}"
+    assert events[-1].to_state == "in_progress"
+    assert runs[-1].user_hint == "CI is failing."
 
 
 def test_fastapi_groups_linked_issue_pr_and_selects_active_pr(tmp_path: Path) -> None:
