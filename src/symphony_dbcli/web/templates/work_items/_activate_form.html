@@ -1,6 +1,10 @@
 <div class="activation-summary">
   <span class="source-card-kind">{{ source_item.kind_label }}</span>
+  {% if source_item.url %}
   <a href="{{ source_item.url }}" target="_blank" rel="noreferrer">#{{ source_item.number }}</a>
+  {% else %}
+  <span class="source-card-ref">#{{ source_item.number }}</span>
+  {% endif %}
   <strong>{{ source_item.title }}</strong>
   <span class="muted">{{ source_item.activation_label }}</span>
   {% if source_item.linked_items %}

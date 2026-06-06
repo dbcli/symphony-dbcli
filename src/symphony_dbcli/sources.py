@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any, Literal, Protocol, cast
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,7 +28,8 @@ from .search import matching_source_item_ids, rebuild_source_item_search
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_ITEM_PAGE_SIZE = 20
-SourceItemKind = Literal["issue", "pull_request"]
+LOCAL_TICKET_KIND: Literal["local_ticket"] = "local_ticket"
+SourceItemKind = Literal["issue", "pull_request", "local_ticket"]
 
 
 class SourceValidationError(ValueError):
@@ -117,6 +118,13 @@ class SourceItemUpsert:
 
 
 @dataclass(frozen=True)
+class LocalTicketCreate:
+    source_id: int
+    title: str
+    body: str = ""
+
+
+@dataclass(frozen=True)
 class SourceItemView:
     id: int
     source_id: int
@@ -153,7 +161,11 @@ class SourceItemView:
 
     @property
     def kind_label(self) -> str:
-        return "PR" if self.kind == "pull_request" else "Issue"
+        if self.kind == "pull_request":
+            return "PR"
+        if self.kind == LOCAL_TICKET_KIND:
+            return "Ticket"
+        return "Issue"
 
     @property
     def default_task_type(self) -> str:
@@ -335,7 +347,7 @@ class SourceRepository:
         source_id: int,
         *,
         query: str = "",
-        kind: SourceItemKind | None = None,
+        kinds: tuple[SourceItemKind, ...] | None = None,
         page: int = 1,
         limit: int = SOURCE_ITEM_PAGE_SIZE,
     ) -> SourceItemPage:
@@ -358,8 +370,8 @@ class SourceRepository:
             ]
             if visible_match_ids:
                 conditions.append(SourceItem.id.in_(visible_match_ids))
-            if kind is not None:
-                conditions.append(SourceItem.kind == kind)
+            if kinds is not None:
+                conditions.append(SourceItem.kind.in_(kinds))
             rows = list(
                 session.scalars(
                     select(SourceItem)
@@ -419,6 +431,39 @@ class SourceRepository:
             source_item.disposition_note = note.strip()
             source_item.disposition_at = now
             source_item.updated_at = now
+            session.commit()
+            session.refresh(source_item)
+            return SourceItemView.from_model(source_item)
+
+    def create_local_ticket(self, ticket: LocalTicketCreate) -> SourceItemView:
+        title = ticket.title.strip()
+        if not title:
+            raise SourceValidationError("Title is required.")
+        body = ticket.body.strip()
+        now = utc_now()
+        with self._session_factory() as session:
+            source = session.get(Source, ticket.source_id)
+            if source is None:
+                raise SourceValidationError("Source not found.")
+            next_number = _next_local_ticket_number(session, ticket.source_id)
+            source_item = SourceItem(
+                source_id=ticket.source_id,
+                kind=LOCAL_TICKET_KIND,
+                number=next_number,
+                title=title,
+                url="",
+                state="open",
+                author="local",
+                labels_json="[]",
+                body=body,
+                github_updated_at=now,
+                synced_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(source_item)
+            session.flush()
+            rebuild_source_item_search(session, ticket.source_id)
             session.commit()
             session.refresh(source_item)
             return SourceItemView.from_model(source_item)
@@ -648,6 +693,16 @@ def _active_numbers_by_kind(items: list[SourceItemUpsert]) -> dict[str, set[int]
     for item in items:
         numbers.setdefault(item.kind, set()).add(item.number)
     return numbers
+
+
+def _next_local_ticket_number(session: Session, source_id: int) -> int:
+    max_number = session.scalar(
+        select(func.max(SourceItem.number)).where(
+            SourceItem.source_id == source_id,
+            SourceItem.kind == LOCAL_TICKET_KIND,
+        )
+    )
+    return int(max_number or 0) + 1
 
 
 def _source_item_view_with_links(item: SourceItem, linked_items: list[SourceItem]) -> SourceItemView:

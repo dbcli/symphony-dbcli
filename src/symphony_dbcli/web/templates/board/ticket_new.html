@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block page_actions %}
+<a class="button-link" href="/board/source/{{ selected_source.id }}">Board</a>
+{% endblock %}
+{% block body %}
+<section class="panel narrow-panel">
+  {% include "board/_ticket_form.html" %}
+</section>
+{% endblock %}

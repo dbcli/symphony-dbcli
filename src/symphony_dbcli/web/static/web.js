@@ -13,11 +13,13 @@ function applyTheme(theme) {
   document.documentElement.style.colorScheme = theme;
   for (const button of document.querySelectorAll("[data-theme-toggle]")) {
     const isDark = theme === "dark";
+    const labelText = isDark ? "Switch to light mode" : "Switch to dark mode";
     button.setAttribute("aria-pressed", String(isDark));
-    button.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+    button.setAttribute("aria-label", labelText);
+    button.setAttribute("title", labelText);
     const label = button.querySelector("[data-theme-toggle-label]");
     if (label) {
-      label.textContent = isDark ? "Light" : "Dark";
+      label.textContent = isDark ? "\u2600" : "\u263E";
     }
   }
 }

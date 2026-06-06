@@ -144,11 +144,16 @@ code {
 }
 
 .theme-toggle {
-  min-height: 24px;
+  width: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 0;
   color: var(--text);
-  font-size: 12px;
+  font-size: 17px;
+  line-height: 1;
   text-transform: none;
 }
 
@@ -165,6 +170,13 @@ code {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 h1,
@@ -446,6 +458,11 @@ h2 {
   color: var(--accent);
   font-size: 11px;
   font-weight: 800;
+}
+
+.source-card-ref {
+  color: var(--muted);
+  font-weight: 750;
 }
 
 .activation-summary {

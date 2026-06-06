@@ -30,6 +30,7 @@ from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.web.app import create_app
 from symphony_dbcli.web.dependencies import WebRuntime, _format_localtime
 from symphony_dbcli.web.routers import attempts, work_items
+from symphony_dbcli.work_items import WorkItemRepository
 
 
 def _legacy_store(tmp_path: Path) -> Store:
@@ -111,7 +112,9 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert "auto dispatch" not in response.text
     assert "dry run" not in response.text
     assert "data-theme-toggle" in response.text
+    assert "data-theme-toggle-label>&#9790;</span>" in response.text
     assert "Switch to dark mode" in response.text
+    assert ">Dark</span>" not in response.text
     assert '<link rel="stylesheet" href="/web-static/web.css?v=' in response.text
     assert '<script src="/web-static/vendor/htmx.min.js"' in response.text
     assert '<script src="/web-static/vendor/sortable.min.js"' in response.text
@@ -393,6 +396,90 @@ def test_fastapi_board_filters_by_source_item_kind(tmp_path: Path) -> None:
     assert prs_board.status_code == 200
     assert "Improve docs" in prs_board.text
     assert "Fix completion crash" not in prs_board.text
+
+
+def test_fastapi_board_create_ticket_modal_renders(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    board = client.get(f"/board/source/{source_id}")
+    response = client.get(
+        f"/board/source/{source_id}/tickets/new?return_to=/board/source/{source_id}",
+        headers={"HX-Request": "true"},
+    )
+
+    assert board.status_code == 200
+    assert "Create Ticket" in board.text
+    assert f'hx-get="/board/source/{source_id}/tickets/new?return_to=/board/source/{source_id}"' in board.text
+    assert response.status_code == 200
+    assert 'class="modal-backdrop"' in response.text
+    assert 'role="dialog"' in response.text
+    assert f'hx-post="/board/source/{source_id}/tickets"' in response.text
+    assert 'hx-target="#modal-root"' in response.text
+    assert f'name="return_to" value="/board/source/{source_id}"' in response.text
+    assert 'name="title"' in response.text
+    assert 'name="body"' in response.text
+    assert 'name="task_type"' in response.text
+    assert "dbcli/litecli" in response.text
+
+
+def test_fastapi_create_ticket_persists_and_queues_work_item(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    response = client.post(
+        f"/board/source/{source_id}/tickets",
+        data={
+            "title": "Investigate local regression",
+            "body": "Check the sqlite-backed board path.",
+            "task_type": "code",
+        },
+        follow_redirects=False,
+    )
+    board = client.get(f"/board/source/{source_id}")
+    issues_board = client.get(f"/board/source/{source_id}?kind=issue")
+    prs_board = client.get(f"/board/source/{source_id}?kind=pull_request")
+    search_board = client.get(f"/board/source/{source_id}?q=sqlite-backed")
+    detail = client.get("/work-items/1")
+    source_items, work_item, links, runs = _local_ticket_records(tmp_path)
+    run_claim = WorkItemRepository(
+        create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    ).next_queued_run()
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/board/source/{source_id}"
+    assert "Investigate local regression" in board.text
+    assert "Ticket" in board.text
+    assert "work item #1" in board.text
+    assert 'href=""' not in board.text
+    assert "Investigate local regression" in issues_board.text
+    assert "Investigate local regression" not in prs_board.text
+    assert "Investigate local regression" in search_board.text
+    assert "Ticket #1" in detail.text
+    assert 'href="">Ticket #1</a>' not in detail.text
+    assert len(source_items) == 1
+    assert source_items[0].source_id == source_id
+    assert source_items[0].kind == "local_ticket"
+    assert source_items[0].number == 1
+    assert source_items[0].title == "Investigate local regression"
+    assert source_items[0].body == "Check the sqlite-backed board path."
+    assert source_items[0].url == ""
+    assert source_items[0].author == "local"
+    assert work_item.source_id == source_id
+    assert work_item.primary_source_item_id == source_items[0].id
+    assert work_item.title == "Investigate local regression"
+    assert work_item.state == "todo"
+    assert work_item.task_type == "code"
+    assert work_item.user_hint == "Check the sqlite-backed board path."
+    assert [(link.source_item_id, link.relationship) for link in links] == [
+        (source_items[0].id, "primary_issue")
+    ]
+    assert len(runs) == 1
+    assert runs[0].work_item_id == work_item.id
+    assert runs[0].status == "queued"
+    assert run_claim is not None
+    assert run_claim.source_number == 1
+    assert run_claim.issue_number > 1_000_000_000
 
 
 def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -> None:
@@ -1392,6 +1479,18 @@ def _source_item(tmp_path: Path, source_item_id: int) -> SourceItem:
     session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
     with session_factory() as session:
         return session.scalars(select(SourceItem).where(SourceItem.id == source_item_id)).one()
+
+
+def _local_ticket_records(
+    tmp_path: Path,
+) -> tuple[list[SourceItem], WorkItem, list[WorkItemLink], list[WorkItemRun]]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        source_items = list(session.scalars(select(SourceItem).order_by(SourceItem.id.asc())))
+        work_item = session.scalars(select(WorkItem)).one()
+        links = list(session.scalars(select(WorkItemLink).order_by(WorkItemLink.id.asc())))
+        runs = list(session.scalars(select(WorkItemRun).order_by(WorkItemRun.id.asc())))
+        return source_items, work_item, links, runs
 
 
 def _git(path: Path, *args: str) -> str:

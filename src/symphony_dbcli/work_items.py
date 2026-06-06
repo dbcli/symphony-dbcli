@@ -22,7 +22,9 @@ from .models import (
 from .search import matching_source_item_ids
 
 KANBAN_STATES = ("todo", "in_progress", "in_review", "done")
-SourceItemKind = Literal["issue", "pull_request"]
+LOCAL_TICKET_KIND: Literal["local_ticket"] = "local_ticket"
+LOCAL_TICKET_ISSUE_NUMBER_OFFSET = 1_000_000_000
+SourceItemKind = Literal["issue", "pull_request", "local_ticket"]
 TASK_TYPES = frozenset({"research", "code", "operations"})
 DONE_STATE = "done"
 STATE_LABELS = {
@@ -78,7 +80,7 @@ class WorkItemView:
 
     @property
     def source_label(self) -> str:
-        return "PR" if self.source_kind == "pull_request" else "Issue"
+        return _source_kind_label(self.source_kind)
 
     @property
     def state_label(self) -> str:
@@ -96,7 +98,7 @@ class WorkItemLinkedSourceView:
 
     @property
     def source_label(self) -> str:
-        return "PR" if self.kind == "pull_request" else "Issue"
+        return _source_kind_label(self.kind)
 
 
 @dataclass(frozen=True)
@@ -147,11 +149,13 @@ class WorkItemRunClaim:
 
     @property
     def issue_number(self) -> int:
+        if self.source_kind == LOCAL_TICKET_KIND:
+            return LOCAL_TICKET_ISSUE_NUMBER_OFFSET + self.primary_source_item_id
         return self.source_number
 
     @property
     def source_label(self) -> str:
-        return "PR" if self.source_kind == "pull_request" else "Issue"
+        return _source_kind_label(self.source_kind)
 
     def workflow_artifacts(self) -> dict[str, object]:
         artifacts: dict[str, object] = {
@@ -167,7 +171,7 @@ class WorkItemRunClaim:
             "source_item.url": self.source_url,
             "source_item.title": self.title,
         }
-        if self.source_kind == "issue":
+        if self.source_kind in {"issue", LOCAL_TICKET_KIND}:
             artifacts.update(
                 {
                     "linked_issue.source_item_id": self.primary_source_item_id,
@@ -296,7 +300,7 @@ class WorkItemRepository:
         state: str,
         *,
         query: str = "",
-        kind: SourceItemKind | None = None,
+        kinds: tuple[SourceItemKind, ...] | None = None,
     ) -> list[WorkItemView]:
         with self._session_factory() as session:
             matching_work_item_ids = _matching_work_item_ids(session, source_id, query)
@@ -309,8 +313,8 @@ class WorkItemRepository:
             ]
             if matching_work_item_ids:
                 conditions.append(WorkItem.id.in_(matching_work_item_ids))
-            if kind is not None:
-                conditions.append(SourceItem.kind == kind)
+            if kinds is not None:
+                conditions.append(SourceItem.kind.in_(kinds))
             rows = session.execute(
                 select(WorkItem, SourceItem)
                 .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
@@ -984,6 +988,14 @@ def _active_pr_source_item_id(source_item: SourceItem, linked_prs: list[SourceIt
 
 def _primary_relationship(source_item: SourceItem) -> str:
     return "source_pr" if source_item.kind == "pull_request" else "primary_issue"
+
+
+def _source_kind_label(kind: str) -> str:
+    if kind == "pull_request":
+        return "PR"
+    if kind == LOCAL_TICKET_KIND:
+        return "Ticket"
+    return "Issue"
 
 
 def _ensure_work_item_link(

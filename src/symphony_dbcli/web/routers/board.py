@@ -1,26 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Request
-from starlette.responses import Response
+from fastapi import APIRouter, Form, HTTPException, Request, status
+from starlette.responses import RedirectResponse, Response
 
-from symphony_dbcli.sources import SourceItemPage, SourceItemView, SourceRepository, SourceView
+from symphony_dbcli.sources import (
+    LOCAL_TICKET_KIND,
+    LocalTicketCreate,
+    SourceItemPage,
+    SourceItemView,
+    SourceRepository,
+    SourceView,
+)
 from symphony_dbcli.web.dependencies import (
     page_context,
     source_repository,
     templates,
     work_item_repository,
 )
-from symphony_dbcli.work_items import KANBAN_STATES, STATE_LABELS, WorkItemRepository, WorkItemView
+from symphony_dbcli.work_items import (
+    KANBAN_STATES,
+    STATE_LABELS,
+    TASK_TYPES,
+    WorkItemActivation,
+    WorkItemError,
+    WorkItemRepository,
+    WorkItemView,
+)
 
 router = APIRouter(tags=["board"])
 BACKLOG_STATE = "backlog"
 BOARD_STATE_LABELS = {"backlog": "Backlog", **STATE_LABELS}
 BoardKindFilter = Literal["all", "issue", "pull_request"]
-SourceItemKind = Literal["issue", "pull_request"]
+SourceItemKind = Literal["issue", "pull_request", "local_ticket"]
 
 
 @dataclass(frozen=True)
@@ -38,10 +53,12 @@ class BoardFilters:
     backlog_page: int = 1
 
     @property
-    def source_item_kind(self) -> SourceItemKind | None:
+    def source_item_kinds(self) -> tuple[SourceItemKind, ...] | None:
         if self.kind == "all":
             return None
-        return self.kind
+        if self.kind == "issue":
+            return ("issue", LOCAL_TICKET_KIND)
+        return (self.kind,)
 
 
 @dataclass(frozen=True)
@@ -97,6 +114,71 @@ def source_index(
     )
 
 
+@router.get("/board/source/{source_id}/tickets/new")
+def new_ticket_form(request: Request, source_id: int, return_to: str = "") -> Response:
+    source = source_repository(request).get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    context = page_context(request, title="Create Ticket", active="board")
+    context["selected_source"] = source
+    context["title_value"] = ""
+    context["body_value"] = ""
+    context["task_type"] = "research"
+    context["return_to"] = _safe_return_to(return_to)
+    context["error"] = ""
+    context["is_modal"] = _is_htmx(request)
+    template_name = "board/_ticket_modal.html" if _is_htmx(request) else "board/ticket_new.html"
+    return templates.TemplateResponse(request=request, name=template_name, context=context)
+
+
+@router.post("/board/source/{source_id}/tickets")
+def create_ticket(
+    request: Request,
+    source_id: int,
+    title: Annotated[str, Form()],
+    body: Annotated[str, Form()] = "",
+    task_type: Annotated[str, Form()] = "research",
+    return_to: Annotated[str, Form()] = "",
+) -> Response:
+    safe_return_to = _safe_return_to(return_to)
+    try:
+        if task_type not in TASK_TYPES:
+            raise WorkItemError("Task type must be research, code, or operations.")
+        source_item = source_repository(request).create_local_ticket(
+            LocalTicketCreate(source_id=source_id, title=title, body=body)
+        )
+        work_item_repository(request).activate_source_item(
+            WorkItemActivation(
+                source_item_id=source_item.id,
+                task_type=task_type,
+                user_hint=body,
+            )
+        )
+    except (ValueError, WorkItemError) as exc:
+        source = source_repository(request).get_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Source not found") from exc
+        context = page_context(request, title="Create Ticket", active="board")
+        context["selected_source"] = source
+        context["title_value"] = title
+        context["body_value"] = body
+        context["task_type"] = task_type
+        context["return_to"] = safe_return_to
+        context["error"] = str(exc)
+        context["is_modal"] = _is_htmx(request)
+        template_name = "board/_ticket_modal.html" if _is_htmx(request) else "board/ticket_new.html"
+        return templates.TemplateResponse(
+            request=request,
+            name=template_name,
+            context=context,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    redirect_target = safe_return_to or f"/board/source/{source_id}"
+    if _is_htmx(request):
+        return Response(status_code=204, headers={"HX-Redirect": redirect_target})
+    return RedirectResponse(redirect_target, status_code=status.HTTP_303_SEE_OTHER)
+
+
 def _render_board(request: Request, filters: BoardFilters) -> Response:
     repo = source_repository(request)
     work_items = work_item_repository(request)
@@ -146,7 +228,7 @@ def _board_columns(
         repo.backlog_source_item_page(
             selected_source.id,
             query=filters.q,
-            kind=filters.source_item_kind,
+            kinds=filters.source_item_kinds,
             page=filters.backlog_page,
         )
         if selected_source
@@ -192,7 +274,7 @@ def _work_item_column(
             selected_source.id,
             state,
             query=query,
-            kind=filters.source_item_kind,
+            kinds=filters.source_item_kinds,
         )
         if selected_source
         else []
@@ -246,3 +328,16 @@ def _board_kind_options(filters: BoardFilters) -> tuple[BoardKindOption, ...]:
     return tuple(
         BoardKindOption(label=label, value=value, selected=value == filters.kind) for label, value in options
     )
+
+
+def _safe_return_to(value: str) -> str:
+    normalized = value.strip()
+    if not normalized.startswith("/"):
+        return ""
+    if normalized.startswith("//"):
+        return ""
+    return normalized
+
+
+def _is_htmx(request: Request) -> bool:
+    return request.headers.get("HX-Request", "").lower() == "true"

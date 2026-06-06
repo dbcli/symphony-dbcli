@@ -18,7 +18,13 @@
         <td><a href="/work-items/{{ item.id }}">{{ item.title }}</a></td>
         <td>{{ item.state_label }}</td>
         <td>{{ item.task_type }}</td>
-        <td><a href="{{ item.source_url }}" target="_blank" rel="noreferrer">{{ item.source_label }} #{{ item.source_number }}</a></td>
+        <td>
+          {% if item.source_url %}
+          <a href="{{ item.source_url }}" target="_blank" rel="noreferrer">{{ item.source_label }} #{{ item.source_number }}</a>
+          {% else %}
+          <span>{{ item.source_label }} #{{ item.source_number }}</span>
+          {% endif %}
+        </td>
         <td>{{ item.updated_at|localtime }}</td>
       </tr>
       {% endfor %}

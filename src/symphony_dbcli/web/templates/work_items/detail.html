@@ -12,7 +12,13 @@
     </div>
     <div>
       <dt>Source</dt>
-      <dd><a href="{{ work_item.source_url }}" target="_blank" rel="noreferrer">{{ work_item.source_label }} #{{ work_item.source_number }}</a></dd>
+      <dd>
+        {% if work_item.source_url %}
+        <a href="{{ work_item.source_url }}" target="_blank" rel="noreferrer">{{ work_item.source_label }} #{{ work_item.source_number }}</a>
+        {% else %}
+        <span>{{ work_item.source_label }} #{{ work_item.source_number }}</span>
+        {% endif %}
+      </dd>
     </div>
     {% if linked_source_items %}
     <div>
@@ -21,7 +27,11 @@
         <ul class="compact-list">
           {% for linked in linked_source_items %}
           <li>
+            {% if linked.url %}
             <a href="{{ linked.url }}" target="_blank" rel="noreferrer">{{ linked.source_label }} #{{ linked.number }}</a>
+            {% else %}
+            <span>{{ linked.source_label }} #{{ linked.number }}</span>
+            {% endif %}
             <span>{{ linked.title }}</span>
             <span class="muted">{{ linked.relationship }}</span>
           </li>

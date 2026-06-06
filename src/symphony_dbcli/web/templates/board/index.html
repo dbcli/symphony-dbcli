@@ -1,9 +1,20 @@
 {% extends "base.html" %}
 {% block page_actions %}
 {% if selected_source %}
-<form method="post" action="/sources/{{ selected_source.id }}/sync">
-  <button type="submit">Sync Source</button>
-</form>
+<div class="page-actions">
+  <a
+    class="button-link"
+    href="/board/source/{{ selected_source.id }}/tickets/new"
+    hx-get="/board/source/{{ selected_source.id }}/tickets/new?return_to=/board/source/{{ selected_source.id }}"
+    hx-target="#modal-root"
+    hx-swap="innerHTML"
+  >
+    Create Ticket
+  </a>
+  <form method="post" action="/sources/{{ selected_source.id }}/sync">
+    <button type="submit">Sync Source</button>
+  </form>
+</div>
 {% else %}
 <a class="button-link" href="/sources/new">Add Source</a>
 {% endif %}
@@ -112,7 +123,11 @@
       <article class="source-card" data-source-item-id="{{ item.id }}">
         <div>
           <span class="source-card-kind">{{ item.kind_label }}</span>
+          {% if item.url %}
           <a href="{{ item.url }}" target="_blank" rel="noreferrer">#{{ item.number }}</a>
+          {% else %}
+          <span class="source-card-ref">#{{ item.number }}</span>
+          {% endif %}
         </div>
         <strong>{{ item.title }}</strong>
         <span class="muted">{{ item.author or "unknown author" }}</span>
@@ -142,7 +157,11 @@
       <article class="source-card" data-work-item-id="{{ item.id }}">
         <div>
           <span class="source-card-kind">{{ item.source_label }}</span>
+          {% if item.source_url %}
           <a href="{{ item.source_url }}" target="_blank" rel="noreferrer">#{{ item.source_number }}</a>
+          {% else %}
+          <span class="source-card-ref">#{{ item.source_number }}</span>
+          {% endif %}
         </div>
         <strong><a href="/work-items/{{ item.id }}">{{ item.title }}</a></strong>
         <span class="muted">{{ item.task_type }} · work item #{{ item.id }}</span>

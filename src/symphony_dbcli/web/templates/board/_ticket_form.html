@@ -1,0 +1,43 @@
+<form
+  class="stacked-form"
+  method="post"
+  action="/board/source/{{ selected_source.id }}/tickets"
+  {% if is_modal %}
+  hx-post="/board/source/{{ selected_source.id }}/tickets"
+  hx-target="#modal-root"
+  hx-swap="innerHTML"
+  {% endif %}
+>
+  <label for="{{ 'modal-' if is_modal else '' }}ticket-title">Title</label>
+  <input
+    id="{{ 'modal-' if is_modal else '' }}ticket-title"
+    type="text"
+    name="title"
+    value="{{ title_value }}"
+    maxlength="500"
+    required
+    autofocus
+  />
+  <label for="{{ 'modal-' if is_modal else '' }}ticket-body">Description</label>
+  <textarea id="{{ 'modal-' if is_modal else '' }}ticket-body" name="body" rows="5">{{ body_value }}</textarea>
+  <label for="{{ 'modal-' if is_modal else '' }}ticket-task-type">Task Type</label>
+  <select id="{{ 'modal-' if is_modal else '' }}ticket-task-type" name="task_type">
+    {% for value in ["research", "code", "operations"] %}
+    <option value="{{ value }}" {% if value == task_type %}selected{% endif %}>{{ value|title }}</option>
+    {% endfor %}
+  </select>
+  {% if return_to %}
+  <input type="hidden" name="return_to" value="{{ return_to }}" />
+  {% endif %}
+  {% if error %}
+  <p class="form-error">{{ error }}</p>
+  {% endif %}
+  <div class="form-actions">
+    <button type="submit">Create Ticket</button>
+    {% if is_modal %}
+    <button class="quiet" type="button" data-modal-close>Cancel</button>
+    {% else %}
+    <a class="button-link quiet" href="/board/source/{{ selected_source.id }}">Cancel</a>
+    {% endif %}
+  </div>
+</form>
