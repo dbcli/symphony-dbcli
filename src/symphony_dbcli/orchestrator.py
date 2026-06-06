@@ -107,6 +107,15 @@ class WorkflowActionRuntime:
 
 
 @dataclass(frozen=True)
+class HumanGateRuntime:
+    gate_id: int
+    instance: sqlite3.Row
+    transition_name: str
+    transition: WorkflowTransitionConfig
+    action_input: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class WorkflowAdvanceResult:
     current_state: str
     ran_actions: int
@@ -518,11 +527,54 @@ class Orchestrator:
         input_data: dict[str, Any] | None = None,
         decided_by: str = "dashboard",
     ) -> WorkflowAdvanceResult:
+        return self._run_human_gate(
+            gate_id,
+            input_data=input_data,
+            decided_by=decided_by,
+            expected_status="pending",
+        )
+
+    def start_human_gate(
+        self,
+        gate_id: int,
+        *,
+        input_data: dict[str, Any] | None = None,
+        decided_by: str = "dashboard",
+    ) -> None:
+        self._human_gate_runtime(gate_id, input_data=input_data, expected_status="pending")
+        if not self.store.start_workflow_gate(gate_id, decided_by=decided_by):
+            raise OrchestratorError(f"Workflow gate {gate_id} is not pending.")
+
+    def run_started_human_gate(
+        self,
+        gate_id: int,
+        *,
+        input_data: dict[str, Any] | None = None,
+        decided_by: str = "dashboard",
+    ) -> WorkflowAdvanceResult:
+        try:
+            return self._run_human_gate(
+                gate_id,
+                input_data=input_data,
+                decided_by=decided_by,
+                expected_status="running",
+            )
+        except Exception:
+            self.store.reopen_workflow_gate(gate_id)
+            raise
+
+    def _human_gate_runtime(
+        self,
+        gate_id: int,
+        *,
+        input_data: dict[str, Any] | None = None,
+        expected_status: str,
+    ) -> HumanGateRuntime:
         gate = self.store.workflow_gate_by_id(gate_id)
         if not gate:
             raise OrchestratorError(f"Workflow gate {gate_id} does not exist.")
-        if str(gate["status"]) != "pending":
-            raise OrchestratorError(f"Workflow gate {gate_id} is not pending.")
+        if str(gate["status"]) != expected_status:
+            raise OrchestratorError(f"Workflow gate {gate_id} is not {expected_status}.")
         instance = self.store.workflow_instance_by_id(int(gate["workflow_instance_id"]))
         if not instance:
             raise OrchestratorError(f"Workflow instance {gate['workflow_instance_id']} does not exist.")
@@ -545,6 +597,31 @@ class Orchestrator:
             transition=transition,
             extra={"gate_id": gate_id} | (input_data or {}),
         )
+        return HumanGateRuntime(
+            gate_id=gate_id,
+            instance=instance,
+            transition_name=transition_name,
+            transition=transition,
+            action_input=action_input,
+        )
+
+    def _run_human_gate(
+        self,
+        gate_id: int,
+        *,
+        input_data: dict[str, Any] | None = None,
+        decided_by: str,
+        expected_status: str,
+    ) -> WorkflowAdvanceResult:
+        runtime = self._human_gate_runtime(
+            gate_id,
+            input_data=input_data,
+            expected_status=expected_status,
+        )
+        instance = runtime.instance
+        transition = runtime.transition
+        transition_name = runtime.transition_name
+        action_input = runtime.action_input
         action = self._start_workflow_action(
             int(instance["id"]),
             attempt_id=_optional_int(instance["attempt_id"]),

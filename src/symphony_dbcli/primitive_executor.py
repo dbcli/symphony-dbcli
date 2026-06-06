@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, cast
@@ -32,6 +33,7 @@ from .sources import SourceRepository, SourceSyncService
 from .store import Store
 from .work_items import WorkItemActivation, WorkItemMove, WorkItemRepository, WorkItemView
 from .worker_prompt import (
+    build_pull_request_prompt,
     build_worker_prompt,
     format_follow_up_context,
     result_title,
@@ -187,8 +189,8 @@ class PrimitiveExecutor:
             "codex.operations_task",
         }:
             return self._run_codex(context)
-        if context.transition.action == "github.create_draft_pr":
-            return self._create_draft_pr(context)
+        if context.transition.action == "codex.create_draft_pr":
+            return self._create_draft_pr_with_codex(context)
         if context.transition.action == "github.push_pr_update":
             return self._push_pr_update(context)
         if context.transition.action == "github.post_issue_comment":
@@ -543,36 +545,126 @@ class PrimitiveExecutor:
             }
         )
 
-    def _create_draft_pr(self, context: PrimitiveContext) -> PrimitiveOutcome:
+    def _create_draft_pr_with_codex(self, context: PrimitiveContext) -> PrimitiveOutcome:
         if self.config.policy.dry_run:
             raise PrimitiveExecutionError("policy.dry_run is true; refusing to create a GitHub pull request.")
         attempt_id = _required_attempt_id(context)
-        try:
-            pull_request = self.review_actions.create_draft_pr(
+        if not context.worktree_path:
+            raise PrimitiveExecutionError("Attempt does not have an allocated workspace.")
+        if not context.branch:
+            raise PrimitiveExecutionError("Attempt does not have an allocated branch.")
+
+        existing = self.store.pull_requests_for_attempt(attempt_id)
+        if existing:
+            row = existing[0]
+            pull_request = self.github.pull_request(context.repo, int(row["number"]))
+            return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
+
+        result = self.store.worker_result_for_attempt(attempt_id)
+        worker_result = str(result["body"]) if result else ""
+        prompt = build_pull_request_prompt(
+            self.config,
+            context.repo,
+            context.issue_number,
+            context.issue_title,
+            worktree_path=context.worktree_path,
+            branch=context.branch,
+            commit_sha=context.commit_sha,
+            worker_result=worker_result,
+            issue_link_marker=issue_link_marker(context.repo, context.issue_number),
+            primitive_guidance=context.transition.guidance,
+        )
+        codex_result = CodexRunner(self.config.codex).run(
+            prompt=prompt,
+            cwd=context.worktree_path,
+            attempt_id=attempt_id,
+            store=self.store,
+        )
+        final_message = codex_result.final_message.strip()
+        self.store.record_worker_log(attempt_id, "info", final_message)
+        pull_request = self._pull_request_created_by_codex(context, final_message)
+        marker_present = body_links_issue(pull_request.body, context.repo, context.issue_number)
+        if not marker_present:
+            self.store.record_error(
                 attempt_id,
-                title=str(context.input_data.get("title", "")),
-                body=str(context.input_data.get("body", "")),
+                phase="github",
+                error_type="PullRequestMarkerMissing",
+                message="Codex-created pull request body is missing the Symphony issue-link marker.",
+                recoverable=True,
             )
-        except ReviewActionError as exc:
-            raise PrimitiveExecutionError(str(exc)) from exc
+        self.store.record_pr(
+            attempt_id,
+            context.repo,
+            pull_request.number,
+            pull_request.url,
+            pull_request.title,
+            state=pull_request.state,
+            merged_at=pull_request.merged_at,
+        )
+        self.store.record_issue_pull_request_link(
+            repo=context.repo,
+            issue_number=context.issue_number,
+            pull_request_number=pull_request.number,
+            pull_request_url=pull_request.url,
+            pull_request_title=pull_request.title,
+            state=pull_request.state,
+            link_source="created_by_codex",
+            marker=issue_link_marker(context.repo, context.issue_number),
+        )
+        self.store.update_attempt_workspace(
+            attempt_id,
+            base_repo_path=context.base_repo_path,
+            worktree_path=context.worktree_path,
+            branch=context.branch,
+            commit_sha=pull_request.head_sha or context.commit_sha,
+        )
+        self.store.record_timeline_event(
+            attempt_id,
+            phase="github",
+            event_type="pull_request_created",
+            message=pull_request.url,
+            data={
+                "number": pull_request.number,
+                "created_by": "codex",
+                "thread_id": codex_result.thread_id,
+                "issue_marker_present": marker_present,
+            },
+        )
         if context.work_item_id is not None:
             self.work_items.record_created_pull_request(
                 work_item_id=context.work_item_id,
                 number=pull_request.number,
                 url=pull_request.url,
                 title=pull_request.title,
-                body=issue_link_marker(context.repo, context.issue_number),
+                body=pull_request.body or issue_link_marker(context.repo, context.issue_number),
+                link_source="created_by_codex",
+                marker=issue_link_marker(context.repo, context.issue_number),
             )
-        return PrimitiveOutcome(
-            {
-                "pull_request_number": pull_request.number,
-                "pull_request_url": pull_request.url,
-                "pull_request_title": pull_request.title,
-                "state": pull_request.state,
-                "merged_at": pull_request.merged_at,
-                "head_ref": pull_request.head_ref,
-                "head_sha": pull_request.head_sha,
-            }
+        return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
+
+    def _pull_request_created_by_codex(
+        self,
+        context: PrimitiveContext,
+        final_message: str,
+    ) -> PullRequest:
+        number = _pull_request_number_from_text(context.repo, final_message)
+        if number is not None:
+            return self.github.pull_request(context.repo, number)
+        branch_match = None
+        marker_match = None
+        for pull_request in self.github.list_pull_requests(context.repo, state="open"):
+            if context.branch and pull_request.head_ref == context.branch:
+                branch_match = pull_request
+                break
+            if body_links_issue(pull_request.body, context.repo, context.issue_number):
+                marker_match = pull_request
+        if branch_match is not None:
+            return self.github.pull_request(context.repo, branch_match.number)
+        if marker_match is not None:
+            return self.github.pull_request(context.repo, marker_match.number)
+        raise PrimitiveExecutionError(
+            "Codex did not report a created pull request URL and no matching open pull request was found.",
+            output={"final_message": final_message},
         )
 
     def _push_pr_update(self, context: PrimitiveContext) -> PrimitiveOutcome:
@@ -775,6 +867,27 @@ def _pull_request_output(pull_request: PullRequest) -> dict[str, Any]:
         "head_ref": pull_request.head_ref,
         "head_repo": pull_request.head_repo,
     }
+
+
+def _codex_created_pr_output(pull_request: PullRequest, context: PrimitiveContext) -> dict[str, Any]:
+    return {
+        "pull_request_number": pull_request.number,
+        "pull_request_url": pull_request.url,
+        "pull_request_title": pull_request.title,
+        "state": pull_request.state,
+        "merged_at": pull_request.merged_at,
+        "head_ref": pull_request.head_ref,
+        "head_sha": pull_request.head_sha,
+        "issue_marker_present": body_links_issue(pull_request.body, context.repo, context.issue_number),
+    }
+
+
+def _pull_request_number_from_text(repo: str, text: str) -> int | None:
+    pattern = rf"https://github\.com/{re.escape(repo)}/pull/(\d+)"
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def _source_ref(pull_request: PullRequest) -> str:

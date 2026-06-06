@@ -441,16 +441,16 @@ guidance = ["Let the human edit the final reply before posting.", "Keep the post
 [workflow.transitions.create_draft_pr]
 from_state = "review"
 to_state = "pr_ready"
-action = "github.create_draft_pr"
+action = "codex.create_draft_pr"
 trigger = "human"
 parallel_group = ""
-description = "Create a draft pull request after human diff review."
+description = "Ask Codex to create a draft pull request after human diff review."
 condition = "task.type == \"code\""
 gate = "review_diff"
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
-guidance = ["Let the human edit the PR title and description before creation.", "Keep the PR description clear, succinct, and linked to the GitHub issue."]
+guidance = ["Have Codex write a specific PR title and description based on the actual diff.", "Require the PR description to include the GitHub issue URL and Symphony issue-link marker."]
 
 [workflow.transitions.create_draft_pr.outputs]
 pull_request_number = "artifact.pull_request.number"

@@ -36,6 +36,7 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.policy.dry_run is True
     assert config.workflow.initial_state == "todo"
     assert config.workflow.transitions["fix_issue"].action == "codex.fix_issue"
+    assert config.workflow.transitions["create_draft_pr"].action == "codex.create_draft_pr"
     assert config.workflow.transitions["create_draft_pr"].trigger == "human"
     assert config.workflow.transitions["research_issue"].guidance
     assert config.preferences.preferred_test_strategy == "unit"
@@ -53,6 +54,7 @@ def test_rendered_workflow_includes_local_and_prod_profiles() -> None:
     assert "[workflow]" in workflow
     assert "[workflow.transitions.fix_issue]" in workflow
     assert 'action = "codex.fix_issue"' in workflow
+    assert 'action = "codex.create_draft_pr"' in workflow
     assert "guidance =" in workflow
     assert "[preferences]" in workflow
     assert 'workflow_edit_model = "gpt-5.4-mini"' in workflow

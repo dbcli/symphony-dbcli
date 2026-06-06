@@ -614,6 +614,8 @@ Requirements:
 - fetch latest PR metadata before acting
 - push only after a human gate when configured
 - do not update stored commit SHA before the push succeeds
+- let the worker produce PR title and description content when smart
+  summarization is useful
 - generate human-readable commit messages from ticket title and worker result
 - keep PR title and description succinct and focused on the actual change
 

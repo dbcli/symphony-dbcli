@@ -28,8 +28,10 @@
       {% if gate.prompt %}
       <p>{{ gate.prompt }}</p>
       {% endif %}
-      {% if gate.transition_name in ["create_draft_pr", "post_answer"] %}
+      {% if gate.transition_name == "post_answer" %}
       <p class="muted">Review the editable output below before continuing.</p>
+      {% elif gate.transition_name == "create_draft_pr" %}
+      <p class="muted">Review the worker result and workspace, then ask Codex to open the draft PR.</p>
       {% else %}
       <form action="/workflow-gates/{{ gate.id }}/run" method="post" class="inline-form">
         <input type="hidden" name="return_to" value="{{ return_to }}" />
@@ -95,6 +97,29 @@
   </div>
 </section>
 
+{% if workspace_diff %}
+<section class="panel">
+  <div class="section-heading">
+    <h2>Workspace Diff</h2>
+    <span class="muted">{{ workspace_diff.changed_files|length }} changed file(s)</span>
+  </div>
+  <div class="draft-meta">
+    <strong>{{ workspace_diff.worktree_path }}</strong>
+    {% if workspace_diff.base_commit_sha %}<span>base {{ workspace_diff.base_commit_sha[:12] }}</span>{% endif %}
+    {% if workspace_diff.head_commit_sha %}<span>head {{ workspace_diff.head_commit_sha[:12] }}</span>{% endif %}
+    {% if workspace_diff.truncated %}<span>truncated</span>{% endif %}
+  </div>
+  {% if workspace_diff.error %}
+  <p class="form-error">{{ workspace_diff.error }}</p>
+  {% endif %}
+  {% if workspace_diff.text %}
+  <pre class="result-body diff-body">{{ workspace_diff.text }}</pre>
+  {% else %}
+  <div class="empty-state">No workspace diff detected.</div>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if detail.prompts %}
 <section class="panel">
   <div class="section-heading">
@@ -151,15 +176,14 @@
       </tbody>
     </table>
   </div>
-  {% elif detail.attempt.task_type == "code" and create_draft_pr_gate and draft_pr_content and detail.attempt.worktree_path and detail.attempt.branch %}
+  {% elif running_create_draft_pr_gate %}
+  <div class="empty-state">Codex is creating the draft pull request.</div>
+  {% elif detail.attempt.task_type == "code" and create_draft_pr_gate and detail.attempt.worktree_path and detail.attempt.branch %}
   <form action="/workflow-gates/{{ create_draft_pr_gate.id }}/run" method="post" class="stacked-form draft-form">
     <input type="hidden" name="return_to" value="{{ return_to }}" />
-    <label for="draft-pr-title">Pull request title</label>
-    <input id="draft-pr-title" name="title" value="{{ draft_pr_content.title }}" />
-    <label for="draft-pr-body">Pull request description</label>
-    <textarea id="draft-pr-body" name="body" rows="12">{{ draft_pr_content.body }}</textarea>
+    <p class="muted">Codex will inspect the final diff, commit and push the branch if needed, then create a draft PR with a tailored title and description.</p>
     <div class="form-actions">
-      <button type="submit">Create Draft PR</button>
+      <button type="submit">Ask Codex to Create Draft PR</button>
     </div>
   </form>
   {% else %}

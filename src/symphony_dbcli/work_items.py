@@ -692,6 +692,8 @@ class WorkItemRepository:
         url: str,
         title: str,
         body: str,
+        link_source: str = "created_by_symphony",
+        marker: str = "",
     ) -> WorkItemView | None:
         now = utc_now()
         with self._session_factory() as session:
@@ -747,8 +749,8 @@ class WorkItemRepository:
                     source_item_id=primary_source_item.id,
                     linked_source_item_id=pull_request.id,
                     relationship="issue_pr",
-                    link_source="created_by_symphony",
-                    marker=body,
+                    link_source=link_source,
+                    marker=marker or body,
                     now=now,
                 )
             session.commit()

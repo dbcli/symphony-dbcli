@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import anyio
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from starlette.requests import Request
@@ -27,7 +29,7 @@ from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.web.app import create_app
 from symphony_dbcli.web.dependencies import WebRuntime, _format_localtime
-from symphony_dbcli.web.routers import work_items
+from symphony_dbcli.web.routers import attempts, work_items
 
 
 def _legacy_store(tmp_path: Path) -> Store:
@@ -1091,14 +1093,110 @@ def test_fastapi_attempt_page_creates_code_follow_up_and_renders_draft_pr_gate(t
     assert "Source Research" in follow_up_detail.text
     assert "Expand log_file" in follow_up_detail.text
     assert draft_pr.status_code == 200
-    assert "Create Draft PR" in draft_pr.text
+    assert "Ask Codex to Create Draft PR" in draft_pr.text
     assert f'action="/workflow-gates/{gate_id}/run"' in draft_pr.text
-    assert 'name="title"' in draft_pr.text
-    assert 'name="body"' in draft_pr.text
-    assert "Fix #245: Logging support question" in draft_pr.text
-    assert "## Changes" in draft_pr.text
-    assert "## Issue" not in draft_pr.text
-    assert "Fixes https://github.com/dbcli/litecli/issues/245" in draft_pr.text
+    assert 'name="title"' not in draft_pr.text
+    assert 'name="body"' not in draft_pr.text
+    assert "Codex will inspect the final diff" in draft_pr.text
+    assert "Fix #245: Logging support question" not in draft_pr.text
+    assert "## Changes" not in draft_pr.text
+    assert "Fixes https://github.com/dbcli/litecli/issues/245" not in draft_pr.text
+
+
+def test_fastapi_attempt_page_renders_workspace_diff_before_draft_pr(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    store = _legacy_store(tmp_path)
+    _seed_legacy_issue(store)
+    worktree = tmp_path / "litecli"
+    worktree.mkdir()
+    _git(worktree, "init")
+    (worktree / "README.md").write_text("start\n", encoding="utf-8")
+    _git(worktree, "add", "README.md")
+    _git(worktree, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    base_sha = _git(worktree, "rev-parse", "HEAD")
+    (worktree / "README.md").write_text("fixed\n", encoding="utf-8")
+    (worktree / "new_file.py").write_text("print('hello')\n", encoding="utf-8")
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(worktree),
+        worktree_path=str(worktree),
+        branch="symphony/dbcli-litecli-245-attempt-1",
+        commit_sha=base_sha,
+    )
+    _open_attempt_gate(
+        store,
+        attempt_id,
+        transition_name="create_draft_pr",
+        gate="review_diff",
+    )
+
+    response = client.get(f"/attempts/{attempt_id}")
+
+    assert response.status_code == 200
+    assert "Workspace Diff" in response.text
+    assert "README.md" in response.text
+    assert "-start" in response.text
+    assert "+fixed" in response.text
+    assert "new_file.py" in response.text
+    assert "+print(&#39;hello&#39;)" in response.text
+    assert "Ask Codex to Create Draft PR" in response.text
+
+
+def test_fastapi_create_draft_pr_gate_runs_in_background(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    store = _legacy_store(tmp_path)
+    _seed_legacy_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        worktree_path="/tmp/litecli",
+        branch="symphony/dbcli-litecli-245-attempt-1",
+        status="review",
+    )
+    gate_id = _open_attempt_gate(
+        store,
+        attempt_id,
+        transition_name="create_draft_pr",
+        gate="review_diff",
+    )
+    started_gates: list[tuple[int, dict[str, object]]] = []
+
+    def fake_run_started_gate(
+        state: object,
+        started_gate_id: int,
+        input_data: dict[str, object],
+    ) -> None:
+        started_gates.append((started_gate_id, input_data))
+
+    monkeypatch.setattr(attempts, "_run_started_gate", fake_run_started_gate)
+
+    response = client.post(
+        f"/workflow-gates/{gate_id}/run",
+        data={"return_to": f"/attempts/{attempt_id}"},
+        follow_redirects=False,
+    )
+    gate = store.workflow_gate_by_id(gate_id)
+    detail = client.get(f"/attempts/{attempt_id}")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/attempts/{attempt_id}"
+    assert started_gates == [(gate_id, {})]
+    assert gate is not None
+    assert gate["status"] == "running"
+    assert "Codex is creating the draft pull request." in detail.text
+    assert "Ask Codex to Create Draft PR" not in detail.text
 
 
 def test_fastapi_attempt_page_labels_pr_feedback_gate_explicitly(tmp_path: Path) -> None:
@@ -1235,6 +1333,11 @@ def _source_item(tmp_path: Path, source_item_id: int) -> SourceItem:
     session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
     with session_factory() as session:
         return session.scalars(select(SourceItem).where(SourceItem.id == source_item_id)).one()
+
+
+def _git(path: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
+    return result.stdout.strip()
 
 
 def _work_item(tmp_path: Path, work_item_id: int) -> WorkItem:

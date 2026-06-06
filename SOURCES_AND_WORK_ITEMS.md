@@ -465,7 +465,7 @@ The detail page should show:
 - artifacts
 - operation summaries
 - draft replies
-- draft PR title/body
+- Codex-created draft PR metadata
 - PR health checks
 - human gates
 - timeline events
@@ -664,7 +664,7 @@ The detail page should show:
 - workflow state
 - artifacts and operation summaries
 - draft replies
-- draft PR title/body
+- Codex-created draft PR metadata
 - PR health check results
 - human gates
 - timeline events

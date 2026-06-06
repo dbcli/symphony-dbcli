@@ -17,7 +17,7 @@ def test_default_action_registry_covers_default_workflow() -> None:
 
 
 def test_action_registry_records_execution_boundaries() -> None:
-    draft_pr = DEFAULT_ACTION_REGISTRY.get("github.create_draft_pr")
+    draft_pr = DEFAULT_ACTION_REGISTRY.get("codex.create_draft_pr")
     fetch_issues = DEFAULT_ACTION_REGISTRY.get("github.fetch_issues")
     find_issue_prs = DEFAULT_ACTION_REGISTRY.get("github.find_issue_pull_requests")
     ci_failure_context = DEFAULT_ACTION_REGISTRY.get("github.fetch_ci_failure_context")
@@ -31,14 +31,15 @@ def test_action_registry_records_execution_boundaries() -> None:
     noop = DEFAULT_ACTION_REGISTRY.get("workflow.noop")
 
     assert draft_pr is not None
-    assert draft_pr.side_effect == "github_write"
+    assert draft_pr.side_effect == "codex_worker"
     assert draft_pr.input_type == "DraftPullRequestRequest"
     assert draft_pr.output_type == "PullRequestSnapshot"
     assert draft_pr.idempotency_strategy == "pull_request"
-    assert draft_pr.automatic_allowed is True
+    assert draft_pr.automatic_allowed is False
     assert draft_pr.human_gate_allowed is True
     assert "attempt_id" in draft_pr.input_fields
     assert "pull_request_url" in draft_pr.output_fields
+    assert "issue_marker_present" in draft_pr.output_fields
 
     assert fetch_issues is not None
     assert fetch_issues.side_effect == "github_read"

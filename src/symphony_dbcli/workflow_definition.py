@@ -356,10 +356,10 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
             "create_draft_pr": WorkflowTransitionConfig(
                 from_state="review",
                 to_state="pr_ready",
-                action="github.create_draft_pr",
+                action="codex.create_draft_pr",
                 trigger="human",
                 gate="review_diff",
-                description="Create a draft pull request after human diff review.",
+                description="Ask Codex to create a draft pull request after human diff review.",
                 condition='task.type == "code"',
                 retry_limit=1,
                 outputs={
@@ -370,8 +370,8 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "head_sha": "artifact.pull_request.head_sha",
                 },
                 guidance=[
-                    "Let the human edit the PR title and description before creation.",
-                    "Keep the PR description clear, succinct, and linked to the GitHub issue.",
+                    "Have Codex write a specific PR title and description based on the actual diff.",
+                    "Require the PR description to include the GitHub issue URL and Symphony issue-link marker.",
                 ],
             ),
             "wait_created_pr": WorkflowTransitionConfig(

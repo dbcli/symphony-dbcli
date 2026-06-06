@@ -130,16 +130,16 @@ def default_action_registry() -> ActionRegistry:
             ),
         ),
         PrimitiveSpec(
-            name="github.create_draft_pr",
+            name="codex.create_draft_pr",
             input_type="DraftPullRequestRequest",
             output_type="PullRequestSnapshot",
-            side_effect="github_write",
+            side_effect="codex_worker",
             idempotency_strategy="pull_request",
-            automatic_allowed=True,
+            automatic_allowed=False,
             human_gate_allowed=True,
-            description="Push an attempt branch and create a draft pull request.",
+            description="Ask Codex to push an attempt branch and create a draft pull request.",
             input_fields=frozenset(
-                {"attempt_id", "repo", "issue_number", "worktree_path", "branch", "title", "body"}
+                {"attempt_id", "repo", "issue_number", "worktree_path", "branch", "commit_sha"}
             ),
             output_fields=frozenset(
                 {
@@ -150,6 +150,7 @@ def default_action_registry() -> ActionRegistry:
                     "merged_at",
                     "head_ref",
                     "head_sha",
+                    "issue_marker_present",
                 }
             ),
         ),

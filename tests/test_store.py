@@ -286,6 +286,62 @@ def test_store_records_workflow_runtime_state(tmp_path: Path) -> None:
     assert gate["decision"] == "approved"
 
 
+def test_store_running_workflow_gate_reserves_transition(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=9,
+            title="Fix prompt logging",
+            url="https://github.com/dbcli/litecli/issues/9",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    gate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_diff",
+        transition_name="create_draft_pr",
+        state="review",
+    )
+
+    assert store.start_workflow_gate(gate_id, decided_by="dashboard") is True
+    assert store.start_workflow_gate(gate_id, decided_by="dashboard") is False
+    assert store.pending_workflow_gates() == []
+    running = store.running_workflow_gate_for_attempt(attempt_id, "create_draft_pr")
+    duplicate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_diff",
+        transition_name="create_draft_pr",
+        state="review",
+    )
+
+    assert running is not None
+    assert running["id"] == gate_id
+    assert duplicate_id == gate_id
+    store.reopen_workflow_gate(gate_id)
+    assert store.pending_workflow_gates()[0]["id"] == gate_id
+
+
 def test_store_records_workflow_artifacts(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

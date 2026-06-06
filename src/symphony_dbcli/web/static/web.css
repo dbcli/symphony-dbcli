@@ -1005,6 +1005,11 @@ h2 {
   white-space: pre-wrap;
 }
 
+.diff-body {
+  white-space: pre;
+  tab-size: 2;
+}
+
 .line-numbered-editor {
   display: grid;
   grid-template-columns: minmax(48px, max-content) minmax(0, 1fr);

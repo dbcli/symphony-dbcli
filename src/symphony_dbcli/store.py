@@ -668,7 +668,7 @@ class Store:
                 FROM workflow_gates
                 WHERE workflow_instance_id = ?
                   AND transition_name = ?
-                  AND status = 'pending'
+                  AND status IN ('pending', 'running')
                 ORDER BY id DESC
                 LIMIT 1
                 """,
@@ -742,6 +742,29 @@ class Store:
                 ).fetchone(),
             )
 
+    def running_workflow_gate_for_attempt(
+        self,
+        attempt_id: int,
+        transition_name: str,
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT g.*, i.repo, i.issue_number, i.task_type, i.attempt_id
+                    FROM workflow_gates g
+                    JOIN workflow_instances i ON i.id = g.workflow_instance_id
+                    WHERE i.attempt_id = ?
+                      AND g.transition_name = ?
+                      AND g.status = 'running'
+                    ORDER BY g.id DESC
+                    LIMIT 1
+                    """,
+                    (attempt_id, transition_name),
+                ).fetchone(),
+            )
+
     def pending_workflow_gates_for_attempt(self, attempt_id: int) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return list(
@@ -756,6 +779,39 @@ class Store:
                     """,
                     (attempt_id,),
                 )
+            )
+
+    def start_workflow_gate(self, gate_id: int, *, decided_by: str) -> bool:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE workflow_gates
+                SET status = 'running',
+                    decision = 'approved',
+                    decided_by = ?,
+                    decided_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (decided_by, now, now, gate_id),
+            )
+            return cursor.rowcount == 1
+
+    def reopen_workflow_gate(self, gate_id: int) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE workflow_gates
+                SET status = 'pending',
+                    decision = '',
+                    decided_by = '',
+                    decided_at = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now, gate_id),
             )
 
     def workflow_state_counts(self) -> dict[str, int]:

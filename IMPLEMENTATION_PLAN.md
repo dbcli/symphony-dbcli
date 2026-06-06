@@ -360,7 +360,7 @@ The harness is optimized for fast workflow iteration:
 This fixture becomes the primary experimentation surface for the next workflow
 architecture iteration. The codebase should expose action primitives such as
 `github.fetch_issues`, `github.fetch_comments`, `codex.research_issue`,
-`codex.fix_issue`, `github.create_draft_pr`, `github.fetch_ci_status`,
+`codex.fix_issue`, `codex.create_draft_pr`, `github.fetch_ci_status`,
 `codex.fix_ci_failures`, and `codex.address_pr_comments`; `WORKFLOW.md` should
 compose those primitives into state machines with explicit automatic
 transitions and human gates. New workflow engine behavior should be validated
@@ -413,8 +413,8 @@ those primitives are composed into automatic transitions and human-gated steps.
   a human gate.
 - [x] Implement the first GitHub primitives: `github.fetch_issues`,
   `github.fetch_issue`, `github.fetch_comments`, `github.apply_labels`,
-  `github.create_draft_pr`, `github.post_issue_comment`,
-  `github.fetch_pull_request`, and `github.fetch_ci_status`.
+  `github.post_issue_comment`, `github.fetch_pull_request`, and
+  `github.fetch_ci_status`.
   Progress: all listed GitHub primitives now execute through the primitive
   layer. Read primitives return typed snapshots that are persisted through
   workflow action outputs/artifacts; write primitives remain guarded by
@@ -423,12 +423,13 @@ those primitives are composed into automatic transitions and human-gated steps.
   comment context, plus `github.detect_merge_conflicts` for PR mergeability and
   conflict detection.
 - [x] Implement the first Codex primitives: `codex.research_issue`,
-  `codex.fix_issue`, `codex.address_pr_comments`, and
-  `codex.fix_ci_failures`. These should store worker results in SQLite
-  regardless of dry-run mode.
+  `codex.fix_issue`, `codex.create_draft_pr`, `codex.address_pr_comments`, and
+  `codex.fix_ci_failures`. Worker-result primitives should store results in
+  SQLite regardless of dry-run mode.
   Progress: all listed Codex primitives now execute through the primitive
-  layer and store worker results in SQLite regardless of dry-run mode. The PR
-  review and CI variants include fetched workflow context in the Codex prompt.
+  layer. The PR creation primitive lets Codex write the draft PR title/body and
+  then records fetched PR metadata in SQLite; the PR review and CI variants
+  include fetched workflow context in the Codex prompt.
 - [x] Implement workspace primitives: `workspace.allocate`,
   `workspace.run_setup`, `workspace.record_changes`, and
   `workspace.cleanup_after_merge`. The first implementation should support the
@@ -450,9 +451,9 @@ those primitives are composed into automatic transitions and human-gated steps.
   approving draft PR creation.
   Progress: workflow gates are stored, opened after worker completion, shown on
   the dashboard, and executable through the generic human-gate dispatcher for
-  posting issue comments, creating draft PRs, and marking attempts blocked.
-  Draft replies and draft PR title/body are editable before GitHub side
-  effects.
+  posting issue comments, asking Codex to create draft PRs, and marking
+  attempts blocked. Draft replies remain editable before GitHub side effects;
+  draft PR title/body composition is owned by Codex.
 - [x] Refactor the orchestrator loop so it evaluates workflow instances and
   dispatches pending automatic transitions instead of directly encoding
   `todo -> working -> review` behavior in Python.

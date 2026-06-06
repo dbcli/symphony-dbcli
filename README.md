@@ -60,13 +60,13 @@ regardless of `policy.dry_run`. Open the dashboard, select an attempt in review,
 and read the `Worker Result` section. Draft GitHub replies are shown separately
 so they can be edited before posting to GitHub.
 
-Code attempts in review can open a draft pull request from the dashboard. The PR
-is created from the attempt worktree, records the PR URL in SQLite, links back to
-the GitHub issue, and includes a concise summary plus verification notes from
-the worker result. Once a recorded PR is merged, the orchestration loop checks
-the PR state and removes the associated clean worktree to avoid filling the
-disk. Dirty worktrees are left in place and the cleanup error is recorded for
-review.
+Code attempts in review can ask Codex to open a draft pull request from the
+dashboard. Codex creates the PR from the attempt worktree with a tailored title
+and description; Symphony then fetches the PR metadata, records the PR URL in
+SQLite, and links it back to the GitHub issue. Once a recorded PR is merged, the
+orchestration loop checks the PR state and removes the associated clean worktree
+to avoid filling the disk. Dirty worktrees are left in place and the cleanup
+error is recorded for review.
 
 Research results can be promoted into code work. From a research attempt page,
 use `Create Code Follow-up` to queue a linked code attempt. The code worker

@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from sqlalchemy import select
 
@@ -107,17 +107,24 @@ def test_work_item_primitives_activate_and_move_work(tmp_path: Path) -> None:
     assert moved["state"] == "in_progress"
 
 
-def test_create_draft_pr_links_work_item_issue_and_pr_source_items(tmp_path: Path) -> None:
+def test_codex_create_draft_pr_links_work_item_issue_and_pr_source_items(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.upsert_issue(
         FakePrimitiveGitHub().issue("dbcli/litecli", 245).snapshot(default_config().labels, "code")
     )
-    config = replace(default_config(), policy=PolicyConfig(dry_run=False))
+    prompt_path = tmp_path / "prompt.txt"
+    config = replace(
+        _config_with_fake_codex(
+            tmp_path,
+            prompt_path,
+            "Pull request: https://github.com/dbcli/litecli/pull/12",
+        ),
+        policy=PolicyConfig(dry_run=False),
+    )
     executor = PrimitiveExecutor(
         config,
         store,
         github=FakePrimitiveGitHub(),
-        review_actions=cast(Any, FakeReviewActions()),
     )
     source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
     executor.sources.upsert_source_items(
@@ -148,22 +155,46 @@ def test_create_draft_pr_links_work_item_issue_and_pr_source_items(tmp_path: Pat
         status="review",
         work_item_id=work_item.id,
     )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        branch="symphony/test",
+        commit_sha="base123",
+    )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        result_type="code_summary",
+        title="Code Worker Summary",
+        body="Summary:\n- Fixed logging path expansion.\n\nChecks run:\n- `pytest` passed.",
+    )
 
     output = executor.execute(
         _context(
-            "github.create_draft_pr",
+            "codex.create_draft_pr",
             attempt_id=attempt_id,
             work_item_id=work_item.id,
+            worktree_path=str(tmp_path),
+            branch="symphony/test",
+            commit_sha="base123",
         )
     ).output
 
     source_links, saved_work_item, work_item_links = _source_work_item_links(executor)
+    attempt = store.attempt_by_id(attempt_id)
     assert output["pull_request_number"] == 12
+    assert output["issue_marker_present"] is True
     assert saved_work_item.active_pr_source_item_id is not None
     assert {link.relationship for link in source_links} == {"issue_pr"}
     assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
-    assert source_links[0].link_source == "created_by_symphony"
+    assert source_links[0].link_source == "created_by_codex"
     assert issue_link_marker("dbcli/litecli", 245) in source_links[0].marker
+    assert attempt is not None
+    assert attempt["commit_sha"] == "abc123"
+    assert "Create a draft pull request" in prompt_path.read_text(encoding="utf-8")
+    assert issue_link_marker("dbcli/litecli", 245) in prompt_path.read_text(encoding="utf-8")
 
 
 def test_fetch_pull_request_records_attempt_pr(tmp_path: Path) -> None:
@@ -872,24 +903,14 @@ class FakePrimitiveGitHub:
         self.pushed_branches.append(branch)
 
 
-class FakeReviewActions:
-    def create_draft_pr(self, attempt_id: int, *, title: str = "", body: str = "") -> PullRequest:
-        return PullRequest(
-            number=12,
-            url="https://github.com/dbcli/litecli/pull/12",
-            title=title or "Fix logging path support",
-            state="open",
-            head_ref="symphony/test",
-            head_sha="abc123",
-        )
-
-
 def _context(
     action: str,
     *,
     attempt_id: int | None = None,
     work_item_id: int | None = None,
     worktree_path: str = "",
+    branch: str = "",
+    commit_sha: str = "",
     input_data: dict[str, Any] | None = None,
 ) -> PrimitiveContext:
     return PrimitiveContext(
@@ -907,6 +928,8 @@ def _context(
         attempt_id=attempt_id,
         work_item_id=work_item_id,
         worktree_path=worktree_path,
+        branch=branch,
+        commit_sha=commit_sha,
         input_data=input_data or {},
     )
 

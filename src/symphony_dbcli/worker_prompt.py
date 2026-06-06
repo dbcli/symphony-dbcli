@@ -38,6 +38,49 @@ Before finishing, provide:
 """
 
 
+def build_pull_request_prompt(
+    config: WorkflowConfig,
+    repo: str,
+    issue_number: int,
+    title: str,
+    *,
+    worktree_path: str,
+    branch: str,
+    commit_sha: str,
+    worker_result: str,
+    issue_link_marker: str,
+    primitive_guidance: list[str] | None = None,
+) -> str:
+    guidance_section = _guidance_section(primitive_guidance or [])
+    return f"""\
+Create a draft pull request for this completed Symphony code task.
+
+Repository: {repo}
+GitHub issue: https://github.com/{repo}/issues/{issue_number}
+Issue title: {title}
+Worktree: {worktree_path}
+Branch: {branch}
+Last recorded commit: {commit_sha or "unknown"}
+Issue link marker: {issue_link_marker}
+{guidance_section}
+
+Worker result:
+{worker_result.strip() or "No worker result was recorded."}
+
+Follow this workflow:
+{config.instructions}
+
+PR creation requirements:
+- Inspect the final diff and commit any uncommitted code changes.
+- Push the current branch to the GitHub repository.
+- Create a draft pull request.
+- Write a specific, reviewable pull request title and description based on the actual diff and worker result.
+- Include the GitHub issue URL and the issue link marker exactly as shown above in the pull request description.
+- Do not create a second pull request if one already exists for this branch.
+- Before finishing, print a line exactly in this form: Pull request: https://github.com/{repo}/pull/NUMBER
+"""
+
+
 def _guidance_section(items: list[str]) -> str:
     cleaned = [item.strip() for item in items if item.strip()]
     if not cleaned:

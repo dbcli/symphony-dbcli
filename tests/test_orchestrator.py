@@ -489,6 +489,58 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     }
 
 
+def test_orchestrator_runs_started_human_gate_from_background_path(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    gate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_diff",
+        transition_name="create_draft_pr",
+        state="review",
+        prompt="Review the generated diff.",
+    )
+    primitives = FakeWorkflowPrimitives()
+    orchestrator = Orchestrator(
+        default_config(),
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    )
+
+    orchestrator.start_human_gate(gate_id)
+    running_gate = store.workflow_gate_by_id(gate_id)
+    result = orchestrator.run_started_human_gate(gate_id)
+
+    gate = store.workflow_gate_by_id(gate_id)
+    instance = store.workflow_instance_by_id(instance_id)
+    assert running_gate is not None
+    assert running_gate["status"] == "running"
+    assert primitives.transitions == [
+        "create_draft_pr",
+        "wait_created_pr",
+    ]
+    assert result.current_state == "pr_waiting"
+    assert gate is not None
+    assert gate["status"] == "resolved"
+    assert instance is not None
+    assert instance["current_state"] == "pr_waiting"
+
+
 def test_orchestrator_runs_mark_blocked_human_gate(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
     attempt_id = store.create_attempt(

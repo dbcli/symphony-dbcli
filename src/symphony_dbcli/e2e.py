@@ -25,7 +25,7 @@ from .config import (
 from .github import GitHubClient, GitHubError
 from .orchestrator import Orchestrator, load_and_record_workflow
 from .primitive_executor import PrimitiveContext, PrimitiveExecutor
-from .review_actions import ReviewActions, issue_link_marker
+from .review_actions import issue_link_marker
 from .store import Store
 from .workflow_definition import WorkflowTransitionConfig
 from .worktree import safe_key
@@ -151,15 +151,14 @@ def run_fixture(config: E2EFixtureConfig) -> E2EFixtureResult:
     pull_request_url = associated_pull_request_url
     target_attempt = store.attempt_by_id(target_attempt_id)
     if config.create_pr and target_attempt and str(target_attempt["task_type"]) == "code":
-        pull_request_url = (
-            ReviewActions(
-                workflow_config,
-                store,
-                github=_E2EGitHubClient(workflow_config.github),
-            )
-            .create_draft_pr(target_attempt_id)
-            .url
-        )
+        gate = store.pending_workflow_gate_for_attempt(target_attempt_id, "create_draft_pr")
+        if not gate:
+            raise E2EFixtureError(f"Attempt {target_attempt_id} does not have a draft PR review gate.")
+        orchestrator.run_human_gate(int(gate["id"]))
+        pull_requests = store.pull_requests_for_attempt(target_attempt_id)
+        if not pull_requests:
+            raise E2EFixtureError(f"Attempt {target_attempt_id} did not record a pull request.")
+        pull_request_url = str(pull_requests[0]["url"])
     if scenario.codex_follow_up_action and pull_request_url:
         _run_codex_follow_up_action(
             workflow_config, store, target_attempt_id, scenario.codex_follow_up_action
@@ -584,7 +583,9 @@ FAKE_CODEX_SCRIPT = """#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -599,10 +600,87 @@ def main() -> int:
     exec_parser.add_argument("prompt")
     args = parser.parse_args()
     cwd = Path(args.cd)
+    if "Create a draft pull request" in args.prompt:
+        repo = _line_value(args.prompt, "Repository:")
+        issue_url = _line_value(args.prompt, "GitHub issue:")
+        branch = _line_value(args.prompt, "Branch:")
+        marker = _line_value(args.prompt, "Issue link marker:")
+        issue_number = _issue_number(issue_url)
+        title = f"Fix fixture add behavior for issue {issue_number}"
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if status.stdout.strip():
+            _run(["git", "add", "-A"], cwd)
+            _run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=symphony-dbcli",
+                    "-c",
+                    "user.email=symphony-dbcli@users.noreply.github.com",
+                    "commit",
+                    "-m",
+                    title,
+                ],
+                cwd,
+            )
+        _run(["git", "push", "origin", f"HEAD:{branch}"], cwd)
+        body = "\\n".join(
+            [
+                "## Changes",
+                "",
+                "- Updated `fixture_calc.add()` to return the sum of both arguments.",
+                "",
+                "## Tests",
+                "",
+                "- `python -m unittest discover -v` passed.",
+                "",
+                f"Fixes {issue_url}",
+                "",
+                marker,
+                "",
+            ]
+        )
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as body_file:
+            body_file.write(body)
+            body_path = body_file.name
+        pr = _run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                repo,
+                "--title",
+                title,
+                "--body-file",
+                body_path,
+                "--head",
+                branch,
+                "--draft",
+            ],
+            cwd,
+        ).strip()
+        print(f"Pull request: {pr}")
+        return 0
     if "Task type: code" in args.prompt:
         source = cwd / "fixture_calc.py"
-        source.write_text(source.read_text(encoding="utf-8").replace("left - right", "left + right"), encoding="utf-8")
-        result = subprocess.run(["python", "-m", "unittest", "discover", "-v"], cwd=cwd, text=True, capture_output=True, check=False)
+        source.write_text(
+            source.read_text(encoding="utf-8").replace("left - right", "left + right"),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["python", "-m", "unittest", "discover", "-v"],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
         if result.returncode != 0:
             print(result.stdout)
             print(result.stderr)
@@ -620,6 +698,27 @@ def main() -> int:
     print("Checks run:")
     print("- No code changes were made for this research task.")
     return 0
+
+
+def _line_value(prompt: str, label: str) -> str:
+    for line in prompt.splitlines():
+        if line.startswith(label):
+            return line.removeprefix(label).strip()
+    return ""
+
+
+def _issue_number(issue_url: str) -> str:
+    match = re.search(r"/issues/(\\d+)$", issue_url)
+    return match.group(1) if match else "unknown"
+
+
+def _run(args: list[str], cwd: Path) -> str:
+    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        raise SystemExit(result.returncode)
+    return result.stdout
 
 
 if __name__ == "__main__":
