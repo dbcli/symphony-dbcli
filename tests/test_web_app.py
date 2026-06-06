@@ -88,12 +88,20 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert "Backlog" in response.text
     assert "In Review" in response.text
     assert 'id="dashboard-main"' in response.text
+    assert 'id="board-columns"' in response.text
     assert 'id="modal-root"' in response.text
-    assert 'name="backlog_q"' in response.text
-    assert 'name="todo_q"' in response.text
+    assert 'name="q"' in response.text
+    assert 'role="radiogroup" aria-label="Item type"' in response.text
+    assert 'name="kind"' in response.text
+    assert 'value="all"' in response.text
+    assert 'value="issue"' in response.text
+    assert 'value="pull_request"' in response.text
+    assert 'name="backlog_q"' not in response.text
+    assert 'name="todo_q"' not in response.text
+    assert 'hx-trigger="change"' in response.text
     assert 'hx-trigger="input changed delay:200ms, search"' in response.text
-    assert 'hx-target="#dashboard-main"' in response.text
-    assert 'hx-select="#dashboard-main"' in response.text
+    assert 'hx-target="#board-columns"' in response.text
+    assert 'hx-select="#board-columns"' in response.text
     assert 'hx-swap="outerHTML"' in response.text
     assert 'hx-push-url="true"' in response.text
     assert "dbcli/litecli" in response.text
@@ -101,9 +109,10 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert "auto dispatch" in response.text
     assert "data-theme-toggle" in response.text
     assert "Switch to dark mode" in response.text
-    assert '<link rel="stylesheet" href="/web-static/web.css"' in response.text
+    assert '<link rel="stylesheet" href="/web-static/web.css?v=' in response.text
     assert '<script src="/web-static/vendor/htmx.min.js"' in response.text
     assert '<script src="/web-static/vendor/sortable.min.js"' in response.text
+    assert '<script src="/web-static/web.js?v=' in response.text
     assert "<style>" not in response.text
 
 
@@ -274,7 +283,7 @@ def test_fastapi_board_search_preserves_selected_source(tmp_path: Path) -> None:
 
     default_board = client.get("/board")
     litecli_board = client.get(f"/board/source/{litecli_id}")
-    search = client.get(f"/board/source/{litecli_id}?backlog_q=completion")
+    search = client.get(f"/board/source/{litecli_id}?q=completion")
 
     assert "Board · amjith/symphony-dbcli-e2e-fixture" in default_board.text
     assert f'action="/board/source/{litecli_id}"' in litecli_board.text
@@ -331,7 +340,7 @@ def test_fastapi_board_searches_backlog_with_sqlite_fts_body_matches(tmp_path: P
     source_id = _add_source(client, "dbcli/litecli")
     _sync_source(client, source_id)
 
-    board = client.get(f"/board?source_id={source_id}&backlog_q=ftsneedle%20")
+    board = client.get(f"/board?source_id={source_id}&q=ftsneedle%20")
 
     assert board.status_code == 200
     assert "Cache cleanup" in board.text
@@ -349,7 +358,7 @@ def test_fastapi_board_searches_work_columns_with_sqlite_fts(tmp_path: Path) -> 
     _activate_source_item(client, matching_source_item_id, task_type="code")
     _activate_source_item(client, other_source_item_id, task_type="code")
 
-    board = client.get(f"/board?source_id={source_id}&todo_q=ftsneedle%20")
+    board = client.get(f"/board?source_id={source_id}&q=ftsneedle%20")
 
     assert board.status_code == 200
     assert "Cache cleanup" in board.text
@@ -357,6 +366,30 @@ def test_fastapi_board_searches_work_columns_with_sqlite_fts(tmp_path: Path) -> 
     assert 'value="ftsneedle "' in board.text
     assert "work item #1" in board.text
     assert "work item #2" not in board.text
+
+
+def test_fastapi_board_filters_by_source_item_kind(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    issue_source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    pr_source_item_id = _source_item_id_for(client, source_id, "Improve docs")
+    _activate_source_item(client, issue_source_item_id, task_type="code")
+    _activate_source_item(client, pr_source_item_id, task_type="code")
+
+    all_board = client.get(f"/board?source_id={source_id}")
+    issues_board = client.get(f"/board?source_id={source_id}&kind=issue")
+    prs_board = client.get(f"/board?source_id={source_id}&kind=pull_request")
+
+    assert all_board.status_code == 200
+    assert "Fix completion crash" in all_board.text
+    assert "Improve docs" in all_board.text
+    assert issues_board.status_code == 200
+    assert "Fix completion crash" in issues_board.text
+    assert "Improve docs" not in issues_board.text
+    assert prs_board.status_code == 200
+    assert "Improve docs" in prs_board.text
+    assert "Fix completion crash" not in prs_board.text
 
 
 def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -> None:

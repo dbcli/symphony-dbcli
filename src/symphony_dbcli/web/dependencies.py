@@ -63,6 +63,17 @@ templates.env.filters["localtime"] = _format_localtime
 templates.env.filters["numbered_lines"] = _numbered_lines
 
 
+def _static_version() -> str:
+    mtimes: list[int] = []
+    for filename in ("web.css", "web.js"):
+        path = STATIC_DIR / filename
+        try:
+            mtimes.append(int(path.stat().st_mtime))
+        except FileNotFoundError:
+            continue
+    return str(max(mtimes, default=0))
+
+
 class WebRuntime(Protocol):
     def start(self) -> None: ...
 
@@ -123,4 +134,5 @@ def page_context(request: Request, *, title: str, active: str) -> dict[str, obje
         "nav_items": NAV_ITEMS,
         "runtime": RuntimeConfigView.from_config(state.config),
         "workflow_path": state.workflow_path,
+        "static_version": _static_version(),
     }

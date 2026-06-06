@@ -313,6 +313,9 @@ function setupWorkflowFlowchart() {
 setupWorkflowFlowchart();
 
 document.body.addEventListener("htmx:afterSwap", (event) => {
+  if (event.target.id === "board-columns") {
+    setupKanbanDrag();
+  }
   if (event.target.id === "dashboard-main") {
     setupKanbanDrag();
     setupMoveWorkForm();

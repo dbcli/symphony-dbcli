@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from math import ceil
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +28,7 @@ from .search import matching_source_item_ids, rebuild_source_item_search
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_ITEM_PAGE_SIZE = 20
+SourceItemKind = Literal["issue", "pull_request"]
 
 
 class SourceValidationError(ValueError):
@@ -334,6 +335,7 @@ class SourceRepository:
         source_id: int,
         *,
         query: str = "",
+        kind: SourceItemKind | None = None,
         page: int = 1,
         limit: int = SOURCE_ITEM_PAGE_SIZE,
     ) -> SourceItemPage:
@@ -356,6 +358,8 @@ class SourceRepository:
             ]
             if visible_match_ids:
                 conditions.append(SourceItem.id.in_(visible_match_ids))
+            if kind is not None:
+                conditions.append(SourceItem.kind == kind)
             rows = list(
                 session.scalars(
                     select(SourceItem)

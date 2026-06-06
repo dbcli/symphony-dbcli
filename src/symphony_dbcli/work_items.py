@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from sqlalchemy import select, text
 from sqlalchemy.engine import RowMapping
@@ -22,6 +22,7 @@ from .models import (
 from .search import matching_source_item_ids
 
 KANBAN_STATES = ("todo", "in_progress", "in_review", "done")
+SourceItemKind = Literal["issue", "pull_request"]
 TASK_TYPES = frozenset({"research", "code", "operations"})
 DONE_STATE = "done"
 STATE_LABELS = {
@@ -289,7 +290,14 @@ class WorkItemRepository:
             session.refresh(work_item)
             return _work_item_view(work_item, source_item)
 
-    def list_by_state(self, source_id: int, state: str, *, query: str = "") -> list[WorkItemView]:
+    def list_by_state(
+        self,
+        source_id: int,
+        state: str,
+        *,
+        query: str = "",
+        kind: SourceItemKind | None = None,
+    ) -> list[WorkItemView]:
         with self._session_factory() as session:
             matching_work_item_ids = _matching_work_item_ids(session, source_id, query)
             if query.strip() and not matching_work_item_ids:
@@ -301,6 +309,8 @@ class WorkItemRepository:
             ]
             if matching_work_item_ids:
                 conditions.append(WorkItem.id.in_(matching_work_item_ids))
+            if kind is not None:
+                conditions.append(SourceItem.kind == kind)
             rows = session.execute(
                 select(WorkItem, SourceItem)
                 .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)

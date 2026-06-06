@@ -36,39 +36,59 @@
   </div>
 </section>
 
-<section class="board" aria-label="Work board for {{ selected_source.repo }}">
+<form class="board-search" method="get" action="{{ board_form_action }}" role="search">
+  <div class="board-kind-filter" role="radiogroup" aria-label="Item type">
+    {% for option in board_kind_options %}
+    <label class="board-filter-pill">
+      <input
+        class="sr-only"
+        type="radio"
+        name="kind"
+        value="{{ option.value }}"
+        {% if option.selected %}checked{% endif %}
+        hx-get="{{ board_form_action }}"
+        hx-trigger="change"
+        hx-target="#board-columns"
+        hx-select="#board-columns"
+        hx-swap="outerHTML"
+        hx-include="closest form"
+        hx-push-url="true"
+        hx-sync="closest form:replace"
+      />
+      <span>{{ option.label }}</span>
+    </label>
+    {% endfor %}
+  </div>
+  <label class="sr-only" for="board-search">Search board</label>
+  <input
+    id="board-search"
+    type="search"
+    name="q"
+    value="{{ board_query }}"
+    placeholder="Search this board"
+    autocomplete="off"
+    hx-get="{{ board_form_action }}"
+    hx-trigger="input changed delay:200ms, search"
+    hx-target="#board-columns"
+    hx-select="#board-columns"
+    hx-swap="outerHTML"
+    hx-include="closest form"
+    hx-push-url="true"
+    hx-sync="closest form:replace"
+  />
+  <button type="submit">Search</button>
+  {% if board_query %}
+  <a class="text-action" href="{{ board_clear_url }}">Clear</a>
+  {% endif %}
+</form>
+
+<section id="board-columns" class="board" aria-label="Work board for {{ selected_source.repo }}">
   {% for column in columns %}
   <div class="board-column">
     <div class="column-header">
       <h2>{{ column.label }}</h2>
       <span>{{ column.count }}</span>
     </div>
-    <form class="column-search" method="get" action="{{ column.form_action }}" role="search">
-      {% for name, value in column.hidden_params %}
-      <input type="hidden" name="{{ name }}" value="{{ value }}" />
-      {% endfor %}
-      <label class="sr-only" for="search-{{ column.name }}">Search {{ column.label }}</label>
-      <input
-        id="search-{{ column.name }}"
-        type="search"
-        name="{{ column.query_param }}"
-        value="{{ column.query }}"
-        placeholder="Search {{ column.label|lower }}"
-        autocomplete="off"
-        hx-get="{{ column.form_action }}"
-        hx-trigger="input changed delay:200ms, search"
-        hx-target="#dashboard-main"
-        hx-select="#dashboard-main"
-        hx-swap="outerHTML"
-        hx-include="closest form"
-        hx-push-url="true"
-        hx-sync="closest form:replace"
-      />
-      <button type="submit">Search</button>
-      {% if column.query %}
-      <a class="text-action" href="{{ column.clear_url }}">Clear</a>
-      {% endif %}
-    </form>
     {% if column.name == "backlog" %}
     <div class="pager" aria-label="Backlog pagination">
       <span>{{ column.page_start }}-{{ column.page_end }} of {{ column.count }}</span>

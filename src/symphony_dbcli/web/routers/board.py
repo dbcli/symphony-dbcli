@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,37 +19,29 @@ from symphony_dbcli.work_items import KANBAN_STATES, STATE_LABELS, WorkItemRepos
 router = APIRouter(tags=["board"])
 BACKLOG_STATE = "backlog"
 BOARD_STATE_LABELS = {"backlog": "Backlog", **STATE_LABELS}
-SEARCH_PARAM_BY_STATE = {
-    BACKLOG_STATE: "backlog_q",
-    "todo": "todo_q",
-    "in_progress": "in_progress_q",
-    "in_review": "in_review_q",
-    "done": "done_q",
-}
+BoardKindFilter = Literal["all", "issue", "pull_request"]
+SourceItemKind = Literal["issue", "pull_request"]
+
+
+@dataclass(frozen=True)
+class BoardKindOption:
+    label: str
+    value: BoardKindFilter
+    selected: bool
 
 
 @dataclass(frozen=True)
 class BoardFilters:
     source_id: int | None = None
-    backlog_q: str = ""
-    todo_q: str = ""
-    in_progress_q: str = ""
-    in_review_q: str = ""
-    done_q: str = ""
+    q: str = ""
+    kind: BoardKindFilter = "all"
     backlog_page: int = 1
 
-    def query_for(self, state: str) -> str:
-        return self.query_values.get(SEARCH_PARAM_BY_STATE[state], "")
-
     @property
-    def query_values(self) -> dict[str, str]:
-        return {
-            "backlog_q": self.backlog_q,
-            "todo_q": self.todo_q,
-            "in_progress_q": self.in_progress_q,
-            "in_review_q": self.in_review_q,
-            "done_q": self.done_q,
-        }
+    def source_item_kind(self) -> SourceItemKind | None:
+        if self.kind == "all":
+            return None
+        return self.kind
 
 
 @dataclass(frozen=True)
@@ -58,11 +51,6 @@ class BoardColumn:
     source_items: list[SourceItemView]
     work_items: list[WorkItemView]
     count: int
-    form_action: str
-    query_param: str
-    query: str
-    hidden_params: tuple[tuple[str, str], ...]
-    clear_url: str
     page: int = 1
     page_start: int = 0
     page_end: int = 0
@@ -75,22 +63,16 @@ class BoardColumn:
 def index(
     request: Request,
     source_id: int | None = None,
-    backlog_q: str = "",
-    todo_q: str = "",
-    in_progress_q: str = "",
-    in_review_q: str = "",
-    done_q: str = "",
+    q: str = "",
+    kind: str = "all",
     backlog_page: int = 1,
 ) -> Response:
     return _render_board(
         request,
         BoardFilters(
             source_id=source_id,
-            backlog_q=backlog_q,
-            todo_q=todo_q,
-            in_progress_q=in_progress_q,
-            in_review_q=in_review_q,
-            done_q=done_q,
+            q=q,
+            kind=_board_kind_filter(kind),
             backlog_page=backlog_page,
         ),
     )
@@ -100,22 +82,16 @@ def index(
 def source_index(
     request: Request,
     source_id: int,
-    backlog_q: str = "",
-    todo_q: str = "",
-    in_progress_q: str = "",
-    in_review_q: str = "",
-    done_q: str = "",
+    q: str = "",
+    kind: str = "all",
     backlog_page: int = 1,
 ) -> Response:
     return _render_board(
         request,
         BoardFilters(
             source_id=source_id,
-            backlog_q=backlog_q,
-            todo_q=todo_q,
-            in_progress_q=in_progress_q,
-            in_review_q=in_review_q,
-            done_q=done_q,
+            q=q,
+            kind=_board_kind_filter(kind),
             backlog_page=backlog_page,
         ),
     )
@@ -130,6 +106,12 @@ def _render_board(request: Request, filters: BoardFilters) -> Response:
     context["sources"] = sources
     context["selected_source"] = selected_source
     context["columns"] = _board_columns(repo, work_items, selected_source, filters)
+    source_id = None if selected_source is None else selected_source.id
+    context["board_query"] = filters.q
+    context["board_kind"] = filters.kind
+    context["board_kind_options"] = _board_kind_options(filters)
+    context["board_form_action"] = _board_base_url(source_id)
+    context["board_clear_url"] = _board_url(source_id, filters, clear_query=True, backlog_page=1)
     return templates.TemplateResponse(
         request=request,
         name="board/index.html",
@@ -163,7 +145,8 @@ def _board_columns(
     backlog_page = (
         repo.backlog_source_item_page(
             selected_source.id,
-            query=filters.query_for(BACKLOG_STATE),
+            query=filters.q,
+            kind=filters.source_item_kind,
             page=filters.backlog_page,
         )
         if selected_source
@@ -187,11 +170,6 @@ def _backlog_column(
         source_items=page.items,
         work_items=[],
         count=page.total,
-        form_action=_board_base_url(source_id),
-        query_param=SEARCH_PARAM_BY_STATE[BACKLOG_STATE],
-        query=page.query,
-        hidden_params=_hidden_params(BACKLOG_STATE, filters),
-        clear_url=_board_url(source_id, filters, clear_state=BACKLOG_STATE, backlog_page=1),
         page=page.page,
         page_start=page.start_index,
         page_end=page.end_index,
@@ -208,35 +186,24 @@ def _work_item_column(
     selected_source: SourceView | None,
     filters: BoardFilters,
 ) -> BoardColumn:
-    source_id = None if selected_source is None else selected_source.id
-    query = filters.query_for(state)
-    items = work_items.list_by_state(selected_source.id, state, query=query) if selected_source else []
+    query = filters.q
+    items = (
+        work_items.list_by_state(
+            selected_source.id,
+            state,
+            query=query,
+            kind=filters.source_item_kind,
+        )
+        if selected_source
+        else []
+    )
     return BoardColumn(
         name=state,
         label=BOARD_STATE_LABELS[state],
         source_items=[],
         work_items=items,
         count=len(items),
-        form_action=_board_base_url(source_id),
-        query_param=SEARCH_PARAM_BY_STATE[state],
-        query=query,
-        hidden_params=_hidden_params(state, filters),
-        clear_url=_board_url(source_id, filters, clear_state=state),
     )
-
-
-def _hidden_params(
-    state: str,
-    filters: BoardFilters,
-) -> tuple[tuple[str, str], ...]:
-    query_param = SEARCH_PARAM_BY_STATE[state]
-    params: list[tuple[str, str]] = []
-    params.extend(
-        (name, value) for name, value in filters.query_values.items() if name != query_param and value
-    )
-    if state != BACKLOG_STATE and filters.backlog_page > 1:
-        params.append(("backlog_page", str(filters.backlog_page)))
-    return tuple(params)
 
 
 def _board_url(
@@ -244,13 +211,13 @@ def _board_url(
     filters: BoardFilters,
     *,
     backlog_page: int | None = None,
-    clear_state: str | None = None,
+    clear_query: bool = False,
 ) -> str:
     params: dict[str, str] = {}
-    clear_query_param = SEARCH_PARAM_BY_STATE[clear_state] if clear_state else ""
-    params.update(
-        {name: value for name, value in filters.query_values.items() if value and name != clear_query_param}
-    )
+    if filters.q and not clear_query:
+        params["q"] = filters.q
+    if filters.kind != "all":
+        params["kind"] = filters.kind
     page = filters.backlog_page if backlog_page is None else backlog_page
     if page > 1:
         params["backlog_page"] = str(page)
@@ -260,3 +227,22 @@ def _board_url(
 
 def _board_base_url(source_id: int | None) -> str:
     return f"/board/source/{source_id}" if source_id is not None else "/board"
+
+
+def _board_kind_filter(value: str) -> BoardKindFilter:
+    if value == "issue":
+        return "issue"
+    if value == "pull_request":
+        return "pull_request"
+    return "all"
+
+
+def _board_kind_options(filters: BoardFilters) -> tuple[BoardKindOption, ...]:
+    options: tuple[tuple[str, BoardKindFilter], ...] = (
+        ("All", "all"),
+        ("Issues", "issue"),
+        ("PRs", "pull_request"),
+    )
+    return tuple(
+        BoardKindOption(label=label, value=value, selected=value == filters.kind) for label, value in options
+    )
