@@ -110,14 +110,15 @@ def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> 
         "allocate_workspace",
         "run_setup",
         "fix_issue",
-        "request_review",
+        "auto_create_draft_pr",
+        "wait_created_pr",
     ]
     assert instance is not None
-    assert instance["current_state"] == "review"
+    assert instance["current_state"] == "pr_waiting"
     assert detail is not None
     assert detail["attempt"]["status"] == "review"
     assert [row["transition_name"] for row in action_runs] == primitives.transitions
-    assert {row["transition_name"] for row in gates} == {"create_draft_pr", "mark_blocked"}
+    assert {row["transition_name"] for row in gates} == {"check_pr_again"}
 
 
 def test_orchestrator_claims_and_runs_work_item_from_kanban_queue(tmp_path: Path) -> None:
@@ -382,7 +383,8 @@ def test_orchestrator_retries_failed_transition_within_retry_limit(tmp_path: Pat
         "run_setup",
         "fix_issue",
         "fix_issue",
-        "request_review",
+        "auto_create_draft_pr",
+        "wait_created_pr",
     ]
     assert [(row["status"], row["retry_count"]) for row in fix_runs] == [("failed", 0), ("succeeded", 1)]
 
@@ -429,9 +431,9 @@ def test_orchestrator_resumes_succeeded_action_checkpoint(tmp_path: Path) -> Non
     ).run_attempt(attempt_id)
 
     instance = store.workflow_instance_by_id(instance_id)
-    assert primitives.transitions == ["request_review"]
+    assert primitives.transitions == ["auto_create_draft_pr", "wait_created_pr"]
     assert instance is not None
-    assert instance["current_state"] == "review"
+    assert instance["current_state"] == "pr_waiting"
 
 
 def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -> None:
@@ -439,14 +441,14 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     attempt_id = store.create_attempt(
         repo="dbcli/litecli",
         issue_number=245,
-        task_type="code",
+        task_type="research",
         workflow_version_id=None,
         status="review",
     )
     instance_id = store.create_workflow_instance(
         repo="dbcli/litecli",
         issue_number=245,
-        task_type="code",
+        task_type="research",
         workflow_version_id=None,
         initial_state="review",
         attempt_id=attempt_id,
@@ -454,10 +456,10 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     gate_id = store.open_workflow_gate(
         instance_id=instance_id,
         workflow_version_id=None,
-        gate="review_diff",
-        transition_name="create_draft_pr",
+        gate="review_answer",
+        transition_name="post_answer",
         state="review",
-        prompt="Review the generated diff.",
+        prompt="Review the drafted answer.",
     )
     primitives = FakeWorkflowPrimitives()
 
@@ -471,22 +473,17 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     instance = store.workflow_instance_by_id(instance_id)
     gate = store.workflow_gate_by_id(gate_id)
     attempt = store.attempt_by_id(attempt_id)
-    assert primitives.transitions == [
-        "create_draft_pr",
-        "wait_created_pr",
-    ]
-    assert result.current_state == "pr_waiting"
-    assert result.stop_reason == "human_gate"
+    assert primitives.transitions == ["post_answer"]
+    assert result.current_state == "done"
+    assert result.stop_reason == "terminal"
     assert instance is not None
-    assert instance["current_state"] == "pr_waiting"
+    assert instance["current_state"] == "done"
     assert gate is not None
     assert gate["status"] == "resolved"
     assert gate["decision"] == "approved"
     assert attempt is not None
-    assert attempt["outcome"] == "draft_pr_created"
-    assert {row["transition_name"] for row in store.pending_workflow_gates_for_attempt(attempt_id)} == {
-        "check_pr_again"
-    }
+    assert attempt["outcome"] == "done"
+    assert store.pending_workflow_gates_for_attempt(attempt_id) == []
 
 
 def test_orchestrator_runs_started_human_gate_from_background_path(tmp_path: Path) -> None:
@@ -494,14 +491,14 @@ def test_orchestrator_runs_started_human_gate_from_background_path(tmp_path: Pat
     attempt_id = store.create_attempt(
         repo="dbcli/litecli",
         issue_number=245,
-        task_type="code",
+        task_type="research",
         workflow_version_id=None,
         status="review",
     )
     instance_id = store.create_workflow_instance(
         repo="dbcli/litecli",
         issue_number=245,
-        task_type="code",
+        task_type="research",
         workflow_version_id=None,
         initial_state="review",
         attempt_id=attempt_id,
@@ -509,10 +506,10 @@ def test_orchestrator_runs_started_human_gate_from_background_path(tmp_path: Pat
     gate_id = store.open_workflow_gate(
         instance_id=instance_id,
         workflow_version_id=None,
-        gate="review_diff",
-        transition_name="create_draft_pr",
+        gate="review_answer",
+        transition_name="post_answer",
         state="review",
-        prompt="Review the generated diff.",
+        prompt="Review the drafted answer.",
     )
     primitives = FakeWorkflowPrimitives()
     orchestrator = Orchestrator(
@@ -530,15 +527,12 @@ def test_orchestrator_runs_started_human_gate_from_background_path(tmp_path: Pat
     instance = store.workflow_instance_by_id(instance_id)
     assert running_gate is not None
     assert running_gate["status"] == "running"
-    assert primitives.transitions == [
-        "create_draft_pr",
-        "wait_created_pr",
-    ]
-    assert result.current_state == "pr_waiting"
+    assert primitives.transitions == ["post_answer"]
+    assert result.current_state == "done"
     assert gate is not None
     assert gate["status"] == "resolved"
     assert instance is not None
-    assert instance["current_state"] == "pr_waiting"
+    assert instance["current_state"] == "done"
 
 
 def test_orchestrator_runs_mark_blocked_human_gate(tmp_path: Path) -> None:
@@ -846,7 +840,7 @@ class FakeWorkflowPrimitives:
                     "commit_sha": "abc123",
                 }
             )
-        if context.transition_name == "create_draft_pr":
+        if context.transition_name in {"auto_create_draft_pr", "create_draft_pr"}:
             return PrimitiveOutcome(
                 {
                     "pull_request_number": 12,

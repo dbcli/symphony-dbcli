@@ -25,13 +25,15 @@
         <span>{{ gate.gate }}</span>
         <span>{{ gate.created_at|localtime }}</span>
       </div>
-      {% if gate.prompt %}
+      {% if gate.transition_name == "create_draft_pr" %}
+      <p>Create a draft pull request from the reviewed worker result and workspace.</p>
+      {% elif gate.prompt %}
       <p>{{ gate.prompt }}</p>
       {% endif %}
       {% if gate.transition_name == "post_answer" %}
       <p class="muted">Review the editable output below before continuing.</p>
       {% elif gate.transition_name == "create_draft_pr" %}
-      <p class="muted">Review the worker result and workspace, then ask Codex to open the draft PR.</p>
+      <p class="muted">Symphony will commit and push the branch if needed, then create a draft PR from the worker's title and description.</p>
       {% else %}
       <form action="/workflow-gates/{{ gate.id }}/run" method="post" class="inline-form">
         <input type="hidden" name="return_to" value="{{ return_to }}" />
@@ -177,13 +179,13 @@
     </table>
   </div>
   {% elif running_create_draft_pr_gate %}
-  <div class="empty-state">Codex is creating the draft pull request.</div>
+  <div class="empty-state">Draft pull request creation is running.</div>
   {% elif detail.attempt.task_type == "code" and create_draft_pr_gate and detail.attempt.worktree_path and detail.attempt.branch %}
   <form action="/workflow-gates/{{ create_draft_pr_gate.id }}/run" method="post" class="stacked-form draft-form">
     <input type="hidden" name="return_to" value="{{ return_to }}" />
-    <p class="muted">Codex will inspect the final diff, commit and push the branch if needed, then create a draft PR with a tailored title and description.</p>
+    <p class="muted">Symphony will commit and push the branch if needed, then create a draft PR from the worker's title and description.</p>
     <div class="form-actions">
-      <button type="submit">Ask Codex to Create Draft PR</button>
+      <button type="submit">Create Draft PR</button>
     </div>
   </form>
   {% else %}

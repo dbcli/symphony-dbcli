@@ -12,7 +12,7 @@ from sqlalchemy import select
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from symphony_dbcli.config import DatabaseConfig, default_config
+from symphony_dbcli.config import DatabaseConfig, WorkflowConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import GitHubIssue, PullRequest
 from symphony_dbcli.models import (
@@ -1093,11 +1093,12 @@ def test_fastapi_attempt_page_creates_code_follow_up_and_renders_draft_pr_gate(t
     assert "Source Research" in follow_up_detail.text
     assert "Expand log_file" in follow_up_detail.text
     assert draft_pr.status_code == 200
-    assert "Ask Codex to Create Draft PR" in draft_pr.text
+    assert "Create Draft PR" in draft_pr.text
+    assert "Ask Codex to Create Draft PR" not in draft_pr.text
     assert f'action="/workflow-gates/{gate_id}/run"' in draft_pr.text
     assert 'name="title"' not in draft_pr.text
     assert 'name="body"' not in draft_pr.text
-    assert "Codex will inspect the final diff" in draft_pr.text
+    assert "Symphony will commit and push the branch" in draft_pr.text
     assert "Fix #245: Logging support question" not in draft_pr.text
     assert "## Changes" not in draft_pr.text
     assert "Fixes https://github.com/dbcli/litecli/issues/245" not in draft_pr.text
@@ -1146,15 +1147,24 @@ def test_fastapi_attempt_page_renders_workspace_diff_before_draft_pr(tmp_path: P
     assert "+fixed" in response.text
     assert "new_file.py" in response.text
     assert "+print(&#39;hello&#39;)" in response.text
-    assert "Ask Codex to Create Draft PR" in response.text
+    assert "Create Draft PR" in response.text
+    assert "Ask Codex to Create Draft PR" not in response.text
 
 
 def test_fastapi_create_draft_pr_gate_runs_in_background(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = _client(tmp_path)
-    store = _legacy_store(tmp_path)
+    config = _codex_create_draft_pr_config(tmp_path)
+    store = Store(config.database.path)
+    store.init()
+    client = TestClient(
+        create_app(
+            config,
+            store,
+            workflow_path="WORKFLOW.md",
+        )
+    )
     _seed_legacy_issue(store)
     attempt_id = store.create_attempt(
         repo="dbcli/litecli",
@@ -1195,7 +1205,7 @@ def test_fastapi_create_draft_pr_gate_runs_in_background(
     assert started_gates == [(gate_id, {})]
     assert gate is not None
     assert gate["status"] == "running"
-    assert "Codex is creating the draft pull request." in detail.text
+    assert "Draft pull request creation is running." in detail.text
     assert "Ask Codex to Create Draft PR" not in detail.text
 
 
@@ -1253,6 +1263,19 @@ def test_fastapi_github_app_callback_matches_legacy_setup_page(tmp_path: Path) -
     assert "abc123" in response.text
     assert "State: xyz" in response.text
     assert "uv run symphony-dbcli github-app convert --code abc123" in response.text
+
+
+def _codex_create_draft_pr_config(tmp_path: Path) -> WorkflowConfig:
+    config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
+    transitions = dict(config.workflow.transitions)
+    transitions["create_draft_pr"] = replace(
+        transitions["create_draft_pr"],
+        from_state="review",
+        action="codex.create_draft_pr",
+        trigger="human",
+        gate="review_diff",
+    )
+    return replace(config, workflow=replace(config.workflow, transitions=transitions))
 
 
 def _client(

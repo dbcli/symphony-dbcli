@@ -34,7 +34,33 @@ def test_workflow_engine_selects_task_type_transition() -> None:
     assert research_match.name == "research_issue"
 
 
-def test_workflow_engine_lists_matching_human_gates() -> None:
+def test_workflow_engine_routes_code_worker_completion_to_draft_pr() -> None:
+    engine = WorkflowEngine(default_config().workflow)
+
+    match = engine.single_transition(
+        from_state="worker_complete",
+        trigger="automatic",
+        context=WorkflowExecutionContext(task_type="code"),
+    )
+
+    assert match is not None
+    assert match.name == "auto_create_draft_pr"
+    assert match.transition.action == "github.create_draft_pr"
+
+
+def test_workflow_engine_lists_matching_research_human_gates() -> None:
+    engine = WorkflowEngine(default_config().workflow)
+
+    matches = engine.matching_transitions(
+        from_state="review",
+        trigger="human",
+        context=WorkflowExecutionContext(task_type="research"),
+    )
+
+    assert [match.name for match in matches] == ["post_answer", "mark_blocked"]
+
+
+def test_workflow_engine_keeps_review_draft_pr_gate_for_legacy_code_attempts() -> None:
     engine = WorkflowEngine(default_config().workflow)
 
     matches = engine.matching_transitions(
@@ -44,6 +70,7 @@ def test_workflow_engine_lists_matching_human_gates() -> None:
     )
 
     assert [match.name for match in matches] == ["create_draft_pr", "mark_blocked"]
+    assert matches[0].transition.action == "github.create_draft_pr"
 
 
 def test_workflow_engine_returns_parallel_batch_for_pr_checks() -> None:

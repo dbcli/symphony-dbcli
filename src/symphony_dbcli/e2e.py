@@ -151,11 +151,15 @@ def run_fixture(config: E2EFixtureConfig) -> E2EFixtureResult:
     pull_request_url = associated_pull_request_url
     target_attempt = store.attempt_by_id(target_attempt_id)
     if config.create_pr and target_attempt and str(target_attempt["task_type"]) == "code":
-        gate = store.pending_workflow_gate_for_attempt(target_attempt_id, "create_draft_pr")
-        if not gate:
-            raise E2EFixtureError(f"Attempt {target_attempt_id} does not have a draft PR review gate.")
-        orchestrator.run_human_gate(int(gate["id"]))
         pull_requests = store.pull_requests_for_attempt(target_attempt_id)
+        if not pull_requests:
+            gate = store.pending_workflow_gate_for_attempt(target_attempt_id, "create_draft_pr")
+            if not gate:
+                raise E2EFixtureError(
+                    f"Attempt {target_attempt_id} did not create a pull request or open a draft PR gate."
+                )
+            orchestrator.run_human_gate(int(gate["id"]))
+            pull_requests = store.pull_requests_for_attempt(target_attempt_id)
         if not pull_requests:
             raise E2EFixtureError(f"Attempt {target_attempt_id} did not record a pull request.")
         pull_request_url = str(pull_requests[0]["url"])

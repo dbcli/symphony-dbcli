@@ -333,6 +333,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                 to_state="review",
                 action="github.apply_labels",
                 description="Move completed worker output into human review.",
+                condition='task.type == "research"',
                 retry_limit=1,
                 guidance=[
                     "Preserve worker output for human review before external side effects.",
@@ -353,13 +354,11 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "Keep the posted response succinct and avoid unnecessary caveats.",
                 ],
             ),
-            "create_draft_pr": WorkflowTransitionConfig(
-                from_state="review",
+            "auto_create_draft_pr": WorkflowTransitionConfig(
+                from_state="worker_complete",
                 to_state="pr_ready",
-                action="codex.create_draft_pr",
-                trigger="human",
-                gate="review_diff",
-                description="Ask Codex to create a draft pull request after human diff review.",
+                action="github.create_draft_pr",
+                description="Create a draft pull request automatically after the code worker finishes.",
                 condition='task.type == "code"',
                 retry_limit=1,
                 outputs={
@@ -370,7 +369,30 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "head_sha": "artifact.pull_request.head_sha",
                 },
                 guidance=[
-                    "Have Codex write a specific PR title and description based on the actual diff.",
+                    "Use the worker's PR title and body when present.",
+                    "Create only a draft pull request.",
+                    "Require the PR description to include the GitHub issue URL and Symphony issue-link marker.",
+                ],
+            ),
+            "create_draft_pr": WorkflowTransitionConfig(
+                from_state="review",
+                to_state="pr_ready",
+                action="github.create_draft_pr",
+                trigger="human",
+                gate="review_diff",
+                description="Create a draft pull request from a reviewed code attempt.",
+                condition='task.type == "code"',
+                retry_limit=2,
+                outputs={
+                    "pull_request_number": "artifact.pull_request.number",
+                    "pull_request_url": "artifact.pull_request.url",
+                    "pull_request_title": "artifact.pull_request.title",
+                    "head_ref": "artifact.pull_request.head_ref",
+                    "head_sha": "artifact.pull_request.head_sha",
+                },
+                guidance=[
+                    "Use the worker's PR title and body when present.",
+                    "Create only a draft pull request.",
                     "Require the PR description to include the GitHub issue URL and Symphony issue-link marker.",
                 ],
             ),

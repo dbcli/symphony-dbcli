@@ -18,6 +18,7 @@ def build_worker_prompt(
     follow_up_section = f"\nFollow-up context:\n{follow_up_context}\n" if follow_up_context else ""
     task_context_section = f"\nTask context:\n{task_context}\n" if task_context else ""
     guidance_section = _guidance_section(primitive_guidance or [])
+    code_pr_section = _code_pr_section(repo, issue_number) if task_type == "code" else ""
     return f"""\
 You are a Symphony worker for {repo}.
 
@@ -35,6 +36,7 @@ Before finishing, provide:
 - a concise summary of what you did
 - tests or checks run, if any
 - remaining risks or blockers
+{code_pr_section}
 """
 
 
@@ -89,6 +91,14 @@ def _guidance_section(items: list[str]) -> str:
     return f"""\
 Primitive guidance:
 {lines}
+"""
+
+
+def _code_pr_section(repo: str, issue_number: int) -> str:
+    return f"""\
+- a `PR title:` line with a specific draft pull request title
+- a `PR body:` section with a reviewable draft pull request description based on the actual diff
+- the issue URL `https://github.com/{repo}/issues/{issue_number}` in the PR body
 """
 
 

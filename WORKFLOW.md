@@ -417,7 +417,7 @@ action = "github.apply_labels"
 trigger = "automatic"
 parallel_group = ""
 description = "Move completed worker output into human review."
-condition = ""
+condition = "task.type == \"research\""
 gate = ""
 on_failure = "failed"
 retry_limit = 1
@@ -438,19 +438,40 @@ retry_limit = 1
 timeout_seconds = 0
 guidance = ["Let the human edit the final reply before posting.", "Keep the posted response succinct and avoid unnecessary caveats."]
 
-[workflow.transitions.create_draft_pr]
-from_state = "review"
+[workflow.transitions.auto_create_draft_pr]
+from_state = "worker_complete"
 to_state = "pr_ready"
-action = "codex.create_draft_pr"
-trigger = "human"
+action = "github.create_draft_pr"
+trigger = "automatic"
 parallel_group = ""
-description = "Ask Codex to create a draft pull request after human diff review."
+description = "Create a draft pull request automatically after the code worker finishes."
 condition = "task.type == \"code\""
-gate = "review_diff"
+gate = ""
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
-guidance = ["Have Codex write a specific PR title and description based on the actual diff.", "Require the PR description to include the GitHub issue URL and Symphony issue-link marker."]
+guidance = ["Use the worker's PR title and body when present.", "Create only a draft pull request.", "Require the PR description to include the GitHub issue URL and Symphony issue-link marker."]
+
+[workflow.transitions.auto_create_draft_pr.outputs]
+pull_request_number = "artifact.pull_request.number"
+pull_request_url = "artifact.pull_request.url"
+pull_request_title = "artifact.pull_request.title"
+head_ref = "artifact.pull_request.head_ref"
+head_sha = "artifact.pull_request.head_sha"
+
+[workflow.transitions.create_draft_pr]
+from_state = "review"
+to_state = "pr_ready"
+action = "github.create_draft_pr"
+trigger = "human"
+parallel_group = ""
+description = "Create a draft pull request from a reviewed code attempt."
+condition = "task.type == \"code\""
+gate = "review_diff"
+on_failure = "failed"
+retry_limit = 2
+timeout_seconds = 0
+guidance = ["Use the worker's PR title and body when present.", "Create only a draft pull request.", "Require the PR description to include the GitHub issue URL and Symphony issue-link marker."]
 
 [workflow.transitions.create_draft_pr.outputs]
 pull_request_number = "artifact.pull_request.number"

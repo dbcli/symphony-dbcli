@@ -225,6 +225,57 @@ def test_build_draft_pr_content_uses_issue_title_for_human_title() -> None:
     assert "## Issue" not in content.body
 
 
+def test_build_draft_pr_content_uses_worker_pr_title_and_body() -> None:
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        245,
+        """\
+Summary:
+- Expanded configured log paths.
+
+PR title: Expand log_file paths before validation
+
+PR body:
+## Changes
+
+- Expands configured log file paths before parent directory checks.
+- Adds regression coverage for the moved log file case.
+
+## Tests
+
+- `pytest tests/test_main.py` passed.
+""",
+        issue_title="Logging path support",
+    )
+
+    assert content.title == "Expand log_file paths before validation"
+    assert content.body.startswith("## Changes\n\n- Expands configured log file paths")
+    assert "Fixes https://github.com/dbcli/litecli/issues/245" in content.body
+    assert issue_link_marker("dbcli/litecli", 245) in content.body
+
+
+def test_build_draft_pr_content_strips_outer_markdown_fence() -> None:
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        236,
+        """\
+PR title: Add readonly database open support
+
+PR body:
+```md
+Fixes https://github.com/dbcli/litecli/issues/236
+
+<!-- symphony-dbcli:issue-link=https://github.com/dbcli/litecli/issues/236 -->
+```
+""",
+    )
+
+    assert content.title == "Add readonly database open support"
+    assert content.body.startswith("Fixes https://github.com/dbcli/litecli/issues/236")
+    assert "```" not in content.body
+    assert issue_link_marker("dbcli/litecli", 236) in content.body
+
+
 def test_build_commit_message_uses_issue_or_worker_summary() -> None:
     issue_message = build_commit_message(
         245,

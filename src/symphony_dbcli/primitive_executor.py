@@ -191,6 +191,8 @@ class PrimitiveExecutor:
             return self._run_codex(context)
         if context.transition.action == "codex.create_draft_pr":
             return self._create_draft_pr_with_codex(context)
+        if context.transition.action == "github.create_draft_pr":
+            return self._create_draft_pr(context)
         if context.transition.action == "github.push_pr_update":
             return self._push_pr_update(context)
         if context.transition.action == "github.post_issue_comment":
@@ -640,6 +642,16 @@ class PrimitiveExecutor:
                 link_source="created_by_codex",
                 marker=issue_link_marker(context.repo, context.issue_number),
             )
+        return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
+
+    def _create_draft_pr(self, context: PrimitiveContext) -> PrimitiveOutcome:
+        if self.config.policy.dry_run:
+            raise PrimitiveExecutionError("policy.dry_run is true; refusing to create a GitHub pull request.")
+        attempt_id = _required_attempt_id(context)
+        try:
+            pull_request = self.review_actions.create_draft_pr(attempt_id)
+        except ReviewActionError as exc:
+            raise PrimitiveExecutionError(str(exc)) from exc
         return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
 
     def _pull_request_created_by_codex(

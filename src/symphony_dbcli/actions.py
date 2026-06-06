@@ -155,6 +155,31 @@ def default_action_registry() -> ActionRegistry:
             ),
         ),
         PrimitiveSpec(
+            name="github.create_draft_pr",
+            input_type="DraftPullRequestRequest",
+            output_type="PullRequestSnapshot",
+            side_effect="github_write",
+            idempotency_strategy="pull_request",
+            automatic_allowed=True,
+            human_gate_allowed=True,
+            description="Commit, push, and create a draft pull request from a completed code attempt.",
+            input_fields=frozenset(
+                {"attempt_id", "repo", "issue_number", "worktree_path", "branch", "commit_sha"}
+            ),
+            output_fields=frozenset(
+                {
+                    "pull_request_number",
+                    "pull_request_url",
+                    "pull_request_title",
+                    "state",
+                    "merged_at",
+                    "head_ref",
+                    "head_sha",
+                    "issue_marker_present",
+                }
+            ),
+        ),
+        PrimitiveSpec(
             name="github.post_issue_comment",
             input_type="IssueCommentRequest",
             output_type="IssueCommentSnapshot",

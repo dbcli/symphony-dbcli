@@ -78,8 +78,8 @@ class ReviewActions:
             raise ReviewActionError(f"Attempt {attempt_id} does not exist.")
         if str(attempt["task_type"]) != "code":
             raise ReviewActionError("Only code attempts can create draft pull requests.")
-        if str(attempt["status"]) != "review":
-            raise ReviewActionError("Only attempts in review can create draft pull requests.")
+        if str(attempt["status"]) not in {"running", "review"}:
+            raise ReviewActionError("Only running or review attempts can create draft pull requests.")
         existing = self.store.pull_requests_for_attempt(attempt_id)
         if existing:
             row = existing[0]
@@ -292,9 +292,19 @@ def build_draft_pr_content(
     *,
     issue_title: str = "",
 ) -> DraftPullRequestContent:
+    explicit = _explicit_pr_content_from_worker_result(worker_result)
+    issue_url = f"https://github.com/{repo}/issues/{issue_number}"
+    if explicit is not None:
+        body = _strip_outer_markdown_fence(explicit.body)
+        if issue_url not in body:
+            body = body.rstrip() + f"\n\nFixes {issue_url}"
+        return DraftPullRequestContent(
+            title=_truncate(explicit.title, 72),
+            body=ensure_issue_link_marker(body, repo, issue_number),
+        )
+
     summary_lines = _summary_lines_from_worker_result(worker_result)
     verification_lines = _verification_lines_from_worker_result(worker_result)
-    issue_url = f"https://github.com/{repo}/issues/{issue_number}"
     body_parts = [
         "## Changes",
         "",
@@ -378,6 +388,89 @@ def _summary_lines_from_worker_result(worker_result: str) -> list[str]:
         if len(candidates) == 2:
             break
     return candidates
+
+
+def _explicit_pr_content_from_worker_result(worker_result: str) -> DraftPullRequestContent | None:
+    lines = worker_result.splitlines()
+    title = _explicit_pr_title(lines)
+    body = _explicit_pr_body(lines)
+    if not title or not body:
+        return None
+    return DraftPullRequestContent(title=title, body=body)
+
+
+def _explicit_pr_title(lines: list[str]) -> str:
+    for index, line in enumerate(lines):
+        inline = _inline_pr_field(line, {"pr title", "pull request title"})
+        if inline:
+            return _clean_result_line(inline)
+        if _explicit_heading_name(line) in {"pr title", "pull request title"}:
+            for value_line in lines[index + 1 :]:
+                if _explicit_heading_name(value_line):
+                    break
+                cleaned = _clean_result_line(value_line)
+                if cleaned:
+                    return cleaned
+    return ""
+
+
+def _explicit_pr_body(lines: list[str]) -> str:
+    collecting = False
+    body_lines: list[str] = []
+    for line in lines:
+        inline = _inline_pr_field(line, {"pr body", "pull request body"})
+        if inline:
+            collecting = True
+            body_lines.append(inline.rstrip())
+            continue
+        heading = _explicit_heading_name(line)
+        if heading in {"pr body", "pull request body"}:
+            collecting = True
+            continue
+        if collecting and heading:
+            break
+        if collecting:
+            body_lines.append(line.rstrip())
+    return "\n".join(body_lines).strip()
+
+
+def _strip_outer_markdown_fence(value: str) -> str:
+    lines = value.strip().splitlines()
+    if not lines:
+        return ""
+    first = lines[0].strip().lower()
+    if first not in {"```", "```md", "```markdown", "```text"}:
+        return value.strip()
+    lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _inline_pr_field(line: str, names: set[str]) -> str:
+    stripped = line.strip().lstrip("#").strip()
+    for name in names:
+        prefix = f"{name}:"
+        if stripped.lower().startswith(prefix):
+            return stripped[len(prefix) :].strip()
+    return ""
+
+
+def _explicit_heading_name(line: str) -> str:
+    normalized = line.strip().lstrip("#").strip().rstrip(":").lower()
+    if normalized in {
+        "pr title",
+        "pull request title",
+        "pr body",
+        "pull request body",
+        "summary",
+        "checks run",
+        "verification",
+        "remaining risks",
+        "risks",
+    }:
+        return normalized
+    return ""
 
 
 def _verification_lines_from_worker_result(worker_result: str) -> list[str]:
