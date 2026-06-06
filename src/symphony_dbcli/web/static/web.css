@@ -135,20 +135,12 @@ code {
   color: #176349;
 }
 
-.runtime-strip {
+.header-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
-  text-transform: uppercase;
-}
-
-.runtime-strip span {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px 7px;
-  background: var(--surface-subtle);
 }
 
 .theme-toggle {
@@ -1118,7 +1110,7 @@ h2 {
     padding: 12px 16px;
   }
 
-  .runtime-strip {
+  .header-actions {
     justify-content: flex-start;
   }
 

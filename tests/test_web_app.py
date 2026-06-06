@@ -106,7 +106,10 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'hx-push-url="true"' in response.text
     assert "dbcli/litecli" in response.text
     assert "Sync Source" in response.text
-    assert "auto dispatch" in response.text
+    assert 'aria-label="Runtime"' not in response.text
+    assert 'class="runtime-strip"' not in response.text
+    assert "auto dispatch" not in response.text
+    assert "dry run" not in response.text
     assert "data-theme-toggle" in response.text
     assert "Switch to dark mode" in response.text
     assert '<link rel="stylesheet" href="/web-static/web.css?v=' in response.text
