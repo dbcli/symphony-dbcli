@@ -22,10 +22,10 @@ from symphony_dbcli.github import (
 )
 from symphony_dbcli.models import SourceItemLink, WorkItem, WorkItemLink
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
-from symphony_dbcli.review_actions import issue_link_marker
-from symphony_dbcli.sources import SourceCreate, SourceItemUpsert
-from symphony_dbcli.store import Store
-from symphony_dbcli.work_items import WorkItemActivation
+from symphony_dbcli.review_actions import issue_link_marker, source_item_link_marker
+from symphony_dbcli.sources import LocalTicketCreate, SourceCreate, SourceItemUpsert
+from symphony_dbcli.store import IssueSnapshot, Store
+from symphony_dbcli.work_items import LOCAL_TICKET_ISSUE_NUMBER_OFFSET, WorkItemActivation
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
 
 
@@ -195,6 +195,222 @@ def test_codex_create_draft_pr_links_work_item_issue_and_pr_source_items(tmp_pat
     assert attempt["commit_sha"] == "abc123"
     assert "Create a draft pull request" in prompt_path.read_text(encoding="utf-8")
     assert issue_link_marker("dbcli/litecli", 245) in prompt_path.read_text(encoding="utf-8")
+
+
+def test_codex_create_draft_pr_links_local_ticket_without_issue_url(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    prompt_path = tmp_path / "prompt.txt"
+    config = replace(
+        _config_with_fake_codex(
+            tmp_path,
+            prompt_path,
+            "Pull request: https://github.com/dbcli/litecli/pull/12",
+        ),
+        policy=PolicyConfig(dry_run=False),
+    )
+    executor = PrimitiveExecutor(config, store, github=LocalTicketPrimitiveGitHub(source_item_id=1))
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+    ticket = executor.sources.create_local_ticket(
+        LocalTicketCreate(
+            source_id=source.id,
+            title="Remove codex review action",
+            body="Remove the GitHub action that runs Codex review on PRs.",
+        )
+    )
+    executor.github = LocalTicketPrimitiveGitHub(source_item_id=ticket.id)
+    work_item = executor.work_items.activate_source_item(
+        WorkItemActivation(source_item_id=ticket.id, task_type="code")
+    )
+    issue_number = LOCAL_TICKET_ISSUE_NUMBER_OFFSET + ticket.id
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=issue_number,
+            title=ticket.title,
+            url="",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+        work_item_id=work_item.id,
+    )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(tmp_path),
+        worktree_path=str(tmp_path),
+        branch="symphony/test",
+        commit_sha="base123",
+    )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        result_type="code_summary",
+        title="Code Worker Summary",
+        body="Summary:\n- Removed the Codex review workflow.\n\nChecks run:\n- `pytest` passed.",
+    )
+
+    output = executor.execute(
+        _context(
+            "codex.create_draft_pr",
+            attempt_id=attempt_id,
+            source_item_id=ticket.id,
+            source_item_kind="local_ticket",
+            source_item_number=ticket.number,
+            issue_number=issue_number,
+            issue_title=ticket.title,
+            work_item_id=work_item.id,
+            worktree_path=str(tmp_path),
+            branch="symphony/test",
+            commit_sha="base123",
+        )
+    ).output
+
+    source_links, saved_work_item, work_item_links = _source_work_item_links(executor)
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert output["pull_request_number"] == 12
+    assert output["issue_marker_present"] is True
+    assert saved_work_item.active_pr_source_item_id is not None
+    assert {link.relationship for link in source_links} == {"ticket_pr"}
+    assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
+    assert source_links[0].link_source == "created_by_codex"
+    assert source_links[0].marker == source_item_link_marker(ticket.id)
+    assert store.issue_pull_request_links("dbcli/litecli", issue_number) == []
+    assert "Local ticket: Ticket #1" in prompt
+    assert source_item_link_marker(ticket.id) in prompt
+    assert f"https://github.com/dbcli/litecli/issues/{issue_number}" not in prompt
+    assert "Issue link marker:" not in prompt
+
+
+def test_github_create_draft_pr_links_local_ticket_without_issue_url(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    _git(worktree, "init")
+    (worktree / "README.md").write_text("start\n", encoding="utf-8")
+    _git(worktree, "add", "README.md")
+    _git(worktree, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    _git(worktree, "checkout", "-b", "symphony/test")
+    base_sha = _git(worktree, "rev-parse", "HEAD")
+    (worktree / "README.md").write_text("changed\n", encoding="utf-8")
+    github = FakePrimitiveGitHub()
+    executor = PrimitiveExecutor(
+        replace(default_config(), policy=PolicyConfig(dry_run=False)),
+        store,
+        github=github,
+    )
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+    ticket = executor.sources.create_local_ticket(
+        LocalTicketCreate(
+            source_id=source.id,
+            title="Remove codex review action",
+            body="Remove the GitHub action that runs Codex review on PRs.",
+        )
+    )
+    work_item = executor.work_items.activate_source_item(
+        WorkItemActivation(source_item_id=ticket.id, task_type="code")
+    )
+    issue_number = LOCAL_TICKET_ISSUE_NUMBER_OFFSET + ticket.id
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=issue_number,
+            title=ticket.title,
+            url="",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+        work_item_id=work_item.id,
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="worker_complete",
+        attempt_id=attempt_id,
+        work_item_id=work_item.id,
+    )
+    store.record_workflow_artifacts(
+        instance_id,
+        {
+            "source.id": source.id,
+            "source.repo": "dbcli/litecli",
+            "source_item.id": ticket.id,
+            "source_item.kind": "local_ticket",
+            "source_item.number": ticket.number,
+            "source_item.title": ticket.title,
+            "source_item.url": "",
+        },
+        workflow_version_id=None,
+    )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(tmp_path),
+        worktree_path=str(worktree),
+        branch="symphony/test",
+        commit_sha=base_sha,
+    )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        result_type="code_summary",
+        title="Code Worker Summary",
+        body=(
+            "Summary:\n"
+            "- Removed the Codex review workflow.\n\n"
+            "PR title: Remove Codex review workflow\n\n"
+            "PR body:\n"
+            "## Changes\n\n"
+            "- Removes the GitHub action that runs Codex review on PRs.\n\n"
+            f"Fixes https://github.com/dbcli/litecli/issues/{issue_number}\n"
+        ),
+    )
+
+    output = executor.execute(
+        _context(
+            "github.create_draft_pr",
+            attempt_id=attempt_id,
+            source_item_id=ticket.id,
+            source_item_kind="local_ticket",
+            source_item_number=ticket.number,
+            issue_number=issue_number,
+            issue_title=ticket.title,
+            work_item_id=work_item.id,
+            worktree_path=str(worktree),
+            branch="symphony/test",
+            commit_sha=base_sha,
+        )
+    ).output
+
+    source_links, saved_work_item, work_item_links = _source_work_item_links(executor)
+    assert output["pull_request_number"] == 12
+    assert output["issue_marker_present"] is True
+    assert saved_work_item.active_pr_source_item_id is not None
+    assert {link.relationship for link in source_links} == {"ticket_pr"}
+    assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
+    assert source_links[0].link_source == "created_by_symphony"
+    assert source_links[0].marker == source_item_link_marker(ticket.id)
+    assert store.issue_pull_request_links("dbcli/litecli", issue_number) == []
+    assert github.created_pull_request_body is not None
+    assert source_item_link_marker(ticket.id) in github.created_pull_request_body
+    assert f"https://github.com/dbcli/litecli/issues/{issue_number}" not in github.created_pull_request_body
 
 
 def test_fetch_pull_request_records_attempt_pr(tmp_path: Path) -> None:
@@ -730,6 +946,8 @@ def test_cleanup_after_merge_removes_managed_worktree(tmp_path: Path) -> None:
 class FakePrimitiveGitHub:
     def __init__(self) -> None:
         self.pushed_branches: list[str] = []
+        self.created_pull_request_body: str | None = None
+        self.created_pull_request_title: str | None = None
 
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
         return [self.issue(repo, 245)]
@@ -836,6 +1054,32 @@ class FakePrimitiveGitHub:
             mergeable_state="dirty",
         )
 
+    def create_pull_request(
+        self,
+        *,
+        repo: str,
+        title: str,
+        head: str,
+        base: str,
+        body: str,
+        draft: bool = True,
+    ) -> PullRequest:
+        self.created_pull_request_title = title
+        self.created_pull_request_body = body
+        return PullRequest(
+            number=12,
+            url=f"https://github.com/{repo}/pull/12",
+            title=title,
+            state="open",
+            head_sha="abc123",
+            head_ref=head,
+            head_repo=repo,
+            body=body,
+        )
+
+    def default_branch(self, repo: str) -> str:
+        return "main"
+
     def merge_status(self, repo: str, pull_request_number: int) -> PullRequestMergeStatus:
         pull_request = self.pull_request(repo, pull_request_number)
         return PullRequestMergeStatus(
@@ -903,11 +1147,34 @@ class FakePrimitiveGitHub:
         self.pushed_branches.append(branch)
 
 
+class LocalTicketPrimitiveGitHub(FakePrimitiveGitHub):
+    def __init__(self, source_item_id: int) -> None:
+        super().__init__()
+        self.source_item_id = source_item_id
+
+    def pull_request(self, repo: str, number: int) -> PullRequest:
+        return PullRequest(
+            number=number,
+            url=f"https://github.com/{repo}/pull/{number}",
+            title="Remove Codex review workflow",
+            state="open",
+            head_sha="abc123",
+            head_ref="symphony/test",
+            head_repo=repo,
+            body=source_item_link_marker(self.source_item_id),
+        )
+
+
 def _context(
     action: str,
     *,
     attempt_id: int | None = None,
+    source_item_id: int | None = None,
+    source_item_kind: str = "",
+    source_item_number: int | None = None,
     work_item_id: int | None = None,
+    issue_number: int = 245,
+    issue_title: str = "Logging path support",
     worktree_path: str = "",
     branch: str = "",
     commit_sha: str = "",
@@ -922,10 +1189,13 @@ def _context(
             action=action,
         ),
         repo="dbcli/litecli",
-        issue_number=245,
+        issue_number=issue_number,
         task_type="code",
-        issue_title="Logging path support",
+        issue_title=issue_title,
         attempt_id=attempt_id,
+        source_item_id=source_item_id,
+        source_item_kind=source_item_kind,
+        source_item_number=source_item_number,
         work_item_id=work_item_id,
         worktree_path=worktree_path,
         branch=branch,

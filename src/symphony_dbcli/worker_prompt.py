@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from .config import WorkflowConfig
+from .review_actions import PullRequestSourceContext, pull_request_source_marker
 
 
 def build_worker_prompt(
@@ -14,17 +15,18 @@ def build_worker_prompt(
     follow_up_context: str = "",
     task_context: str = "",
     primitive_guidance: list[str] | None = None,
+    source_context: PullRequestSourceContext | None = None,
 ) -> str:
+    context = source_context or PullRequestSourceContext(title=title)
     follow_up_section = f"\nFollow-up context:\n{follow_up_context}\n" if follow_up_context else ""
     task_context_section = f"\nTask context:\n{task_context}\n" if task_context else ""
     guidance_section = _guidance_section(primitive_guidance or [])
-    code_pr_section = _code_pr_section(repo, issue_number) if task_type == "code" else ""
+    code_pr_section = _code_pr_section(repo, issue_number, context) if task_type == "code" else ""
     return f"""\
 You are a Symphony worker for {repo}.
 
 Task type: {task_type}
-GitHub issue: https://github.com/{repo}/issues/{issue_number}
-Issue title: {title}
+{_source_section(repo, issue_number, title, context)}
 {follow_up_section}
 {task_context_section}
 {guidance_section}
@@ -52,18 +54,18 @@ def build_pull_request_prompt(
     worker_result: str,
     issue_link_marker: str,
     primitive_guidance: list[str] | None = None,
+    source_context: PullRequestSourceContext | None = None,
 ) -> str:
+    context = source_context or PullRequestSourceContext(title=title)
     guidance_section = _guidance_section(primitive_guidance or [])
     return f"""\
 Create a draft pull request for this completed Symphony code task.
 
 Repository: {repo}
-GitHub issue: https://github.com/{repo}/issues/{issue_number}
-Issue title: {title}
+{_pull_request_source_section(repo, issue_number, title, issue_link_marker, context)}
 Worktree: {worktree_path}
 Branch: {branch}
 Last recorded commit: {commit_sha or "unknown"}
-Issue link marker: {issue_link_marker}
 {guidance_section}
 
 Worker result:
@@ -76,8 +78,10 @@ PR creation requirements:
 - Inspect the final diff and commit any uncommitted code changes.
 - Push the current branch to the GitHub repository.
 - Create a draft pull request.
-- Write a specific, reviewable pull request title and description based on the actual diff and worker result.
-- Include the GitHub issue URL and the issue link marker exactly as shown above in the pull request description.
+- Write a specific pull request title that names the actual code change, not just the issue number.
+- Write a reviewable pull request description with concrete change details and tests or checks run.
+- Do not make the pull request description only a closing issue line, source marker, or issue URL.
+- {_pull_request_marker_requirement(repo, issue_number, issue_link_marker, context)}
 - Do not create a second pull request if one already exists for this branch.
 - Before finishing, print a line exactly in this form: Pull request: https://github.com/{repo}/pull/NUMBER
 """
@@ -94,12 +98,82 @@ Primitive guidance:
 """
 
 
-def _code_pr_section(repo: str, issue_number: int) -> str:
+def _source_section(
+    repo: str,
+    issue_number: int,
+    title: str,
+    source_context: PullRequestSourceContext,
+) -> str:
+    if source_context.kind == "local_ticket":
+        return f"""\
+Local ticket: {_ticket_label(source_context)}
+Ticket title: {title}"""
     return f"""\
-- a `PR title:` line with a specific draft pull request title
-- a `PR body:` section with a reviewable draft pull request description based on the actual diff
+GitHub issue: https://github.com/{repo}/issues/{issue_number}
+Issue title: {title}"""
+
+
+def _pull_request_source_section(
+    repo: str,
+    issue_number: int,
+    title: str,
+    issue_link_marker: str,
+    source_context: PullRequestSourceContext,
+) -> str:
+    if source_context.kind == "local_ticket":
+        marker = pull_request_source_marker(repo, issue_number, source_context)
+        return f"""\
+Local ticket: {_ticket_label(source_context)}
+Ticket title: {title}
+Symphony ticket marker: {marker}"""
+    return f"""\
+GitHub issue: https://github.com/{repo}/issues/{issue_number}
+Issue title: {title}
+Issue link marker: {issue_link_marker}"""
+
+
+def _code_pr_section(repo: str, issue_number: int, source_context: PullRequestSourceContext) -> str:
+    if source_context.kind == "local_ticket":
+        marker = pull_request_source_marker(repo, issue_number, source_context)
+        return f"""\
+- a `PR title:` line that names the actual code change, not just the ticket number
+- a `PR body:` section with `## Changes` and, when checks were run, `## Tests`
+- at least one concrete change detail in the PR body; do not make it only a ticket marker or generic summary
+- the hidden Symphony ticket marker `{marker}` in the PR body
+- no GitHub issue closing keyword unless a real GitHub issue is associated with the work
+"""
+    return f"""\
+- a `PR title:` line that names the actual code change, not just the issue number
+- a `PR body:` section with `## Changes` and, when checks were run, `## Tests`
+- at least one concrete change detail in the PR body; do not make it only a `Fixes` line or issue URL
 - the issue URL `https://github.com/{repo}/issues/{issue_number}` in the PR body
 """
+
+
+def _pull_request_marker_requirement(
+    repo: str,
+    issue_number: int,
+    issue_link_marker: str,
+    source_context: PullRequestSourceContext,
+) -> str:
+    if source_context.kind == "local_ticket":
+        marker = pull_request_source_marker(repo, issue_number, source_context)
+        return (
+            f"Include the hidden Symphony ticket marker exactly as shown above in the pull request "
+            f"description: {marker}. Do not add a GitHub issue URL or closing keyword for this ticket."
+        )
+    return (
+        "Include the GitHub issue URL and the issue link marker exactly as shown above in the "
+        f"pull request description: {issue_link_marker}."
+    )
+
+
+def _ticket_label(source_context: PullRequestSourceContext) -> str:
+    if source_context.source_item_number is not None:
+        return f"Ticket #{source_context.source_item_number}"
+    if source_context.source_item_id is not None:
+        return f"Ticket source item #{source_context.source_item_id}"
+    return "Ticket"
 
 
 def format_follow_up_context(source_result: sqlite3.Row | None) -> str:

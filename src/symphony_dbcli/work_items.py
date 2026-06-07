@@ -756,13 +756,13 @@ class WorkItemRepository:
             _ensure_work_item_link(session, work_item.id, pull_request.id, "active_pr", now)
             work_item.active_pr_source_item_id = pull_request.id
             work_item.updated_at = now
-            if primary_source_item.kind == "issue":
+            if primary_source_item.kind in {"issue", LOCAL_TICKET_KIND}:
                 _ensure_source_item_link(
                     session,
                     source_id=work_item.source_id,
                     source_item_id=primary_source_item.id,
                     linked_source_item_id=pull_request.id,
-                    relationship="issue_pr",
+                    relationship=_source_item_pr_relationship(primary_source_item),
                     link_source=link_source,
                     marker=marker or body,
                     now=now,
@@ -988,6 +988,10 @@ def _active_pr_source_item_id(source_item: SourceItem, linked_prs: list[SourceIt
 
 def _primary_relationship(source_item: SourceItem) -> str:
     return "source_pr" if source_item.kind == "pull_request" else "primary_issue"
+
+
+def _source_item_pr_relationship(source_item: SourceItem) -> str:
+    return "ticket_pr" if source_item.kind == LOCAL_TICKET_KIND else "issue_pr"
 
 
 def _source_kind_label(kind: str) -> str:

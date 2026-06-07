@@ -369,9 +369,11 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "head_sha": "artifact.pull_request.head_sha",
                 },
                 guidance=[
-                    "Use the worker's PR title and body when present.",
+                    "Use the worker's PR title and body when they describe the actual code change.",
+                    "Generate a reviewable body from the worker result if the worker body is only a link or marker.",
                     "Create only a draft pull request.",
-                    "Require the PR description to include the GitHub issue URL and Symphony issue-link marker.",
+                    "Require the PR description to include the correct hidden Symphony source marker.",
+                    "Use a GitHub issue URL only when the source item is a real GitHub issue.",
                 ],
             ),
             "create_draft_pr": WorkflowTransitionConfig(
@@ -391,9 +393,11 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "head_sha": "artifact.pull_request.head_sha",
                 },
                 guidance=[
-                    "Use the worker's PR title and body when present.",
+                    "Use the worker's PR title and body when they describe the actual code change.",
+                    "Generate a reviewable body from the worker result if the worker body is only a link or marker.",
                     "Create only a draft pull request.",
-                    "Require the PR description to include the GitHub issue URL and Symphony issue-link marker.",
+                    "Require the PR description to include the correct hidden Symphony source marker.",
+                    "Use a GitHub issue URL only when the source item is a real GitHub issue.",
                 ],
             ),
             "wait_created_pr": WorkflowTransitionConfig(

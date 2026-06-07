@@ -450,7 +450,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
-guidance = ["Use the worker's PR title and body when present.", "Create only a draft pull request.", "Require the PR description to include the GitHub issue URL and Symphony issue-link marker."]
+guidance = ["Use the worker's PR title and body when they describe the actual code change.", "Generate a reviewable body from the worker result if the worker body is only a link or marker.", "Create only a draft pull request.", "Require the PR description to include the correct hidden Symphony source marker.", "Use a GitHub issue URL only when the source item is a real GitHub issue."]
 
 [workflow.transitions.auto_create_draft_pr.outputs]
 pull_request_number = "artifact.pull_request.number"
@@ -471,7 +471,7 @@ gate = "review_diff"
 on_failure = "failed"
 retry_limit = 2
 timeout_seconds = 0
-guidance = ["Use the worker's PR title and body when present.", "Create only a draft pull request.", "Require the PR description to include the GitHub issue URL and Symphony issue-link marker."]
+guidance = ["Use the worker's PR title and body when they describe the actual code change.", "Generate a reviewable body from the worker result if the worker body is only a link or marker.", "Create only a draft pull request.", "Require the PR description to include the correct hidden Symphony source marker.", "Use a GitHub issue URL only when the source item is a real GitHub issue."]
 
 [workflow.transitions.create_draft_pr.outputs]
 pull_request_number = "artifact.pull_request.number"

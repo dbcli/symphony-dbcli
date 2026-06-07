@@ -34,6 +34,15 @@ class GitHubReviewClient(Protocol):
 
 
 ISSUE_LINK_MARKER_PREFIX = "symphony-dbcli:issue-link="
+SOURCE_ITEM_LINK_MARKER_PREFIX = "symphony-dbcli:source-item="
+
+
+@dataclass(frozen=True)
+class PullRequestSourceContext:
+    kind: str = "issue"
+    source_item_id: int | None = None
+    source_item_number: int | None = None
+    title: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,11 +128,19 @@ class ReviewActions:
         )
         result = self.store.worker_result_for_attempt(attempt_id)
         result_body = str(result["body"]) if result else ""
-        issue = self.store.issue_detail(repo, issue_number)
-        issue_title = str(issue["issue"]["title"]) if issue else ""
-        content = build_draft_pr_content(repo, issue_number, result_body, issue_title=issue_title)
+        source_context = self._source_context(attempt_id, repo, issue_number)
+        content = build_draft_pr_content(
+            repo,
+            issue_number,
+            result_body,
+            issue_title=source_context.title,
+            source_context=source_context,
+        )
         pr_title = title.strip() or content.title
-        pr_body = ensure_issue_link_marker(body.strip() or content.body, repo, issue_number)
+        pr_body_input = body.strip() or content.body
+        if source_context.kind == "local_ticket":
+            pr_body_input = _strip_issue_link_for_local_ticket(pr_body_input, repo, issue_number)
+        pr_body = ensure_pull_request_marker(pr_body_input, repo, issue_number, source_context)
         pr = self.github.create_pull_request(
             repo=repo,
             title=pr_title,
@@ -141,16 +158,17 @@ class ReviewActions:
             state=pr.state,
             merged_at=pr.merged_at,
         )
-        self.store.record_issue_pull_request_link(
-            repo=repo,
-            issue_number=issue_number,
-            pull_request_number=pr.number,
-            pull_request_url=pr.url,
-            pull_request_title=pr.title,
-            state=pr.state,
-            link_source="created_by_symphony",
-            marker=issue_link_marker(repo, issue_number),
-        )
+        if source_context.kind != "local_ticket":
+            self.store.record_issue_pull_request_link(
+                repo=repo,
+                issue_number=issue_number,
+                pull_request_number=pr.number,
+                pull_request_url=pr.url,
+                pull_request_title=pr.title,
+                state=pr.state,
+                link_source="created_by_symphony",
+                marker=issue_link_marker(repo, issue_number),
+            )
         self.store.update_attempt_outcome(attempt_id, "draft_pr_created")
         self.store.record_timeline_event(
             attempt_id,
@@ -160,6 +178,24 @@ class ReviewActions:
             data={"number": pr.number},
         )
         return pr
+
+    def _source_context(self, attempt_id: int, repo: str, issue_number: int) -> PullRequestSourceContext:
+        instance = self.store.workflow_instance_for_attempt(attempt_id)
+        artifacts = self.store.workflow_artifacts(int(instance["id"])) if instance else {}
+        source_item_kind = str(artifacts.get("source_item.kind") or "issue")
+        source_item_id = _optional_int(artifacts.get("source_item.id"))
+        source_item_number = _optional_int(artifacts.get("source_item.number"))
+        source_item_title = str(artifacts.get("source_item.title") or "")
+        if source_item_kind == "local_ticket":
+            return PullRequestSourceContext(
+                kind=source_item_kind,
+                source_item_id=source_item_id,
+                source_item_number=source_item_number,
+                title=source_item_title,
+            )
+        issue = self.store.issue_detail(repo, issue_number)
+        issue_title = str(issue["issue"]["title"]) if issue else ""
+        return PullRequestSourceContext(title=issue_title)
 
     def push_pr_update(self, attempt_id: int) -> PullRequestBranchUpdate:
         attempt = self.store.attempt_by_id(attempt_id)
@@ -280,9 +316,13 @@ class ReviewActions:
     def _commit_message(self, attempt_id: int, repo: str, issue_number: int) -> str:
         result = self.store.worker_result_for_attempt(attempt_id)
         worker_result = str(result["body"]) if result else ""
-        issue = self.store.issue_detail(repo, issue_number)
-        issue_title = str(issue["issue"]["title"]) if issue else ""
-        return build_commit_message(issue_number, worker_result, issue_title=issue_title)
+        source_context = self._source_context(attempt_id, repo, issue_number)
+        return build_commit_message(
+            issue_number,
+            worker_result,
+            issue_title=source_context.title,
+            source_context=source_context,
+        )
 
 
 def build_draft_pr_content(
@@ -291,24 +331,37 @@ def build_draft_pr_content(
     worker_result: str,
     *,
     issue_title: str = "",
+    source_context: PullRequestSourceContext | None = None,
 ) -> DraftPullRequestContent:
+    context = source_context or PullRequestSourceContext(title=issue_title)
     explicit = _explicit_pr_content_from_worker_result(worker_result)
     issue_url = f"https://github.com/{repo}/issues/{issue_number}"
+    source_marker = pull_request_source_marker(repo, issue_number, context)
+    explicit_title = ""
     if explicit is not None:
+        explicit_title = _truncate(explicit.title, 72)
         body = _strip_outer_markdown_fence(explicit.body)
-        if issue_url not in body:
+        if context.kind == "local_ticket":
+            body = _strip_issue_link_for_local_ticket(body, repo, issue_number)
+        elif issue_url not in body:
             body = body.rstrip() + f"\n\nFixes {issue_url}"
-        return DraftPullRequestContent(
-            title=_truncate(explicit.title, 72),
-            body=ensure_issue_link_marker(body, repo, issue_number),
-        )
+        if _pr_body_has_reviewable_content(body, repo, issue_number, context):
+            return DraftPullRequestContent(
+                title=explicit_title,
+                body=ensure_pull_request_marker(body, repo, issue_number, context),
+            )
 
     summary_lines = _summary_lines_from_worker_result(worker_result)
     verification_lines = _verification_lines_from_worker_result(worker_result)
+    fallback_summary_lines = (
+        _fallback_ticket_summary_lines(context)
+        if context.kind == "local_ticket"
+        else _fallback_summary_lines(context.title, issue_number)
+    )
     body_parts = [
         "## Changes",
         "",
-        _format_lines(summary_lines or _fallback_summary_lines(issue_title, issue_number)),
+        _format_lines(summary_lines or fallback_summary_lines),
     ]
     if verification_lines:
         body_parts.extend(
@@ -319,17 +372,13 @@ def build_draft_pr_content(
                 _format_lines(verification_lines),
             ]
         )
-    body_parts.extend(
-        [
-            "",
-            f"Fixes {issue_url}",
-            "",
-            issue_link_marker(repo, issue_number),
-        ]
-    )
+    if context.kind == "local_ticket":
+        body_parts.extend(["", "## Ticket", "", _ticket_label(context), "", source_marker])
+    else:
+        body_parts.extend(["", f"Fixes {issue_url}", "", source_marker])
     body_parts.append("")
     return DraftPullRequestContent(
-        title=_title_from_issue(issue_number, issue_title, summary_lines),
+        title=explicit_title or _title_from_source(issue_number, context, summary_lines),
         body="\n".join(body_parts),
     )
 
@@ -339,9 +388,12 @@ def build_commit_message(
     worker_result: str,
     *,
     issue_title: str = "",
+    source_context: PullRequestSourceContext | None = None,
 ) -> str:
     summary_lines = _summary_lines_from_worker_result(worker_result)
-    return _title_from_issue(issue_number, issue_title, summary_lines)
+    return _title_from_source(
+        issue_number, source_context or PullRequestSourceContext(title=issue_title), summary_lines
+    )
 
 
 def build_draft_pr_body(
@@ -350,12 +402,33 @@ def build_draft_pr_body(
     worker_result: str,
     *,
     issue_title: str = "",
+    source_context: PullRequestSourceContext | None = None,
 ) -> str:
-    return build_draft_pr_content(repo, issue_number, worker_result, issue_title=issue_title).body
+    return build_draft_pr_content(
+        repo,
+        issue_number,
+        worker_result,
+        issue_title=issue_title,
+        source_context=source_context,
+    ).body
 
 
 def issue_link_marker(repo: str, issue_number: int) -> str:
     return f"<!-- {ISSUE_LINK_MARKER_PREFIX}https://github.com/{repo}/issues/{issue_number} -->"
+
+
+def source_item_link_marker(source_item_id: int) -> str:
+    return f"<!-- {SOURCE_ITEM_LINK_MARKER_PREFIX}{source_item_id} -->"
+
+
+def pull_request_source_marker(
+    repo: str,
+    issue_number: int,
+    source_context: PullRequestSourceContext | None,
+) -> str:
+    if source_context and source_context.kind == "local_ticket" and source_context.source_item_id is not None:
+        return source_item_link_marker(source_context.source_item_id)
+    return issue_link_marker(repo, issue_number)
 
 
 def ensure_issue_link_marker(body: str, repo: str, issue_number: int) -> str:
@@ -365,8 +438,24 @@ def ensure_issue_link_marker(body: str, repo: str, issue_number: int) -> str:
     return body.rstrip() + "\n\n" + marker + "\n"
 
 
+def ensure_pull_request_marker(
+    body: str,
+    repo: str,
+    issue_number: int,
+    source_context: PullRequestSourceContext | None,
+) -> str:
+    marker = pull_request_source_marker(repo, issue_number, source_context)
+    if marker in body:
+        return body
+    return body.rstrip() + "\n\n" + marker + "\n"
+
+
 def body_links_issue(body: str, repo: str, issue_number: int) -> bool:
     return issue_link_marker(repo, issue_number) in body
+
+
+def body_links_source_item(body: str, source_item_id: int) -> bool:
+    return source_item_link_marker(source_item_id) in body
 
 
 def _summary_lines_from_worker_result(worker_result: str) -> list[str]:
@@ -539,6 +628,13 @@ def _fallback_summary_lines(issue_title: str, issue_number: int) -> list[str]:
     return [f"Updates the code for issue #{issue_number}."]
 
 
+def _fallback_ticket_summary_lines(source_context: PullRequestSourceContext) -> list[str]:
+    ticket_summary = _issue_title_summary(source_context.title)
+    if ticket_summary:
+        return [f"Addresses {ticket_summary}."]
+    return [f"Updates the code for {_ticket_label(source_context)}."]
+
+
 def _format_lines(lines: list[str]) -> str:
     if len(lines) == 1:
         return lines[0]
@@ -552,11 +648,79 @@ def _title_from_issue(issue_number: int, issue_title: str, summary_lines: list[s
     return _title_from_summary(issue_number, summary_lines)
 
 
+def _title_from_source(
+    issue_number: int,
+    source_context: PullRequestSourceContext,
+    summary_lines: list[str],
+) -> str:
+    if source_context.kind == "local_ticket":
+        ticket_summary = _issue_title_summary(source_context.title)
+        if ticket_summary:
+            return _truncate(f"Ticket #{source_context.source_item_number or '?'}: {ticket_summary}", 72)
+        return _title_from_ticket_summary(source_context, summary_lines)
+    return _title_from_issue(issue_number, source_context.title, summary_lines)
+
+
 def _title_from_summary(issue_number: int, summary_lines: list[str]) -> str:
     if not summary_lines:
         return f"Fix #{issue_number}"
     plain_summary = _compact_title(summary_lines[0].replace("`", "").rstrip("."))
     return _truncate(f"Fix #{issue_number}: {plain_summary}", 72)
+
+
+def _title_from_ticket_summary(source_context: PullRequestSourceContext, summary_lines: list[str]) -> str:
+    label = _ticket_label(source_context)
+    if not summary_lines:
+        return label
+    plain_summary = _compact_title(summary_lines[0].replace("`", "").rstrip("."))
+    return _truncate(f"{label}: {plain_summary}", 72)
+
+
+def _ticket_label(source_context: PullRequestSourceContext) -> str:
+    if source_context.source_item_number is not None:
+        return f"Ticket #{source_context.source_item_number}"
+    if source_context.source_item_id is not None:
+        return f"Ticket source item #{source_context.source_item_id}"
+    return "Ticket"
+
+
+def _strip_issue_link_for_local_ticket(body: str, repo: str, issue_number: int) -> str:
+    issue_url = re.escape(f"https://github.com/{repo}/issues/{issue_number}")
+    without_closer = re.sub(rf"(?im)^\s*(?:fixes|closes|resolves)\s+{issue_url}\s*$\n?", "", body)
+    return without_closer.replace(issue_link_marker(repo, issue_number), "").rstrip()
+
+
+def _pr_body_has_reviewable_content(
+    body: str,
+    repo: str,
+    issue_number: int,
+    source_context: PullRequestSourceContext,
+) -> bool:
+    issue_url = f"https://github.com/{repo}/issues/{issue_number}"
+    source_marker = pull_request_source_marker(repo, issue_number, source_context)
+    for line in body.splitlines():
+        cleaned = _clean_result_line(line)
+        if not cleaned or cleaned in {"```", "```md", "```markdown", "```text"}:
+            continue
+        if cleaned == source_marker or cleaned == issue_link_marker(repo, issue_number):
+            continue
+        if source_context.source_item_id is not None and cleaned == source_item_link_marker(
+            source_context.source_item_id
+        ):
+            continue
+        if cleaned.startswith("<!--") and cleaned.endswith("-->"):
+            continue
+        if cleaned.lstrip("#").strip().lower() in {"changes", "tests", "ticket", "summary"}:
+            continue
+        lowered = cleaned.lower()
+        if issue_url in cleaned and re.match(r"^(?:fixes|closes|resolves)\b", lowered):
+            continue
+        if re.match(r"^(?:fixes|closes|resolves)\s+(?:issue\s+)?#?\d+\b", lowered):
+            continue
+        if cleaned == _ticket_label(source_context):
+            continue
+        return True
+    return False
 
 
 def _issue_title_summary(issue_title: str) -> str:

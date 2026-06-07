@@ -8,10 +8,12 @@ import pytest
 from symphony_dbcli.config import default_config
 from symphony_dbcli.github import PullRequest
 from symphony_dbcli.review_actions import (
+    PullRequestSourceContext,
     ReviewActions,
     build_commit_message,
     build_draft_pr_content,
     issue_link_marker,
+    source_item_link_marker,
 )
 from symphony_dbcli.store import IssueSnapshot, Store
 
@@ -263,6 +265,10 @@ PR title: Add readonly database open support
 
 PR body:
 ```md
+## Changes
+
+- Adds read-only database opening support.
+
 Fixes https://github.com/dbcli/litecli/issues/236
 
 <!-- symphony-dbcli:issue-link=https://github.com/dbcli/litecli/issues/236 -->
@@ -271,9 +277,97 @@ Fixes https://github.com/dbcli/litecli/issues/236
     )
 
     assert content.title == "Add readonly database open support"
-    assert content.body.startswith("Fixes https://github.com/dbcli/litecli/issues/236")
+    assert content.body.startswith("## Changes\n\n- Adds read-only database opening support.")
     assert "```" not in content.body
     assert issue_link_marker("dbcli/litecli", 236) in content.body
+
+
+def test_build_draft_pr_content_ignores_closing_only_worker_pr_body() -> None:
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        245,
+        """\
+Summary:
+- Expanded configured log paths before validation.
+
+Checks run:
+- `pytest tests/test_main.py` passed.
+
+PR title: Expand log_file paths before validation
+
+PR body:
+Fixes https://github.com/dbcli/litecli/issues/245
+
+<!-- symphony-dbcli:issue-link=https://github.com/dbcli/litecli/issues/245 -->
+""",
+        issue_title="Logging path support",
+    )
+
+    assert content.title == "Expand log_file paths before validation"
+    assert content.body.startswith("## Changes\n\nExpanded configured log paths before validation.")
+    assert "## Tests" in content.body
+    assert "`pytest tests/test_main.py` passed." in content.body
+    assert "Fixes https://github.com/dbcli/litecli/issues/245" in content.body
+    assert not content.body.startswith("Fixes https://github.com/dbcli/litecli/issues/245")
+    assert issue_link_marker("dbcli/litecli", 245) in content.body
+
+
+def test_build_draft_pr_content_links_local_ticket_without_fake_issue_url() -> None:
+    source_context = PullRequestSourceContext(
+        kind="local_ticket",
+        source_item_id=36,
+        source_item_number=1,
+        title="Remove codex review action",
+    )
+
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        1_000_000_036,
+        """\
+Summary:
+- Removed the Codex review workflow.
+
+PR title: Remove Codex review GitHub Actions workflow
+
+PR body:
+## Changes
+
+- Removes the Codex review workflow from GitHub Actions.
+
+Fixes https://github.com/dbcli/litecli/issues/1000000036
+
+<!-- symphony-dbcli:issue-link=https://github.com/dbcli/litecli/issues/1000000036 -->
+""",
+        source_context=source_context,
+    )
+
+    assert content.title == "Remove Codex review GitHub Actions workflow"
+    assert "issues/1000000036" not in content.body
+    assert "Fixes https://github.com/dbcli/litecli/issues" not in content.body
+    assert issue_link_marker("dbcli/litecli", 1_000_000_036) not in content.body
+    assert source_item_link_marker(36) in content.body
+
+
+def test_build_draft_pr_content_generates_ticket_section_for_local_ticket() -> None:
+    source_context = PullRequestSourceContext(
+        kind="local_ticket",
+        source_item_id=36,
+        source_item_number=1,
+        title="Remove codex review action",
+    )
+
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        1_000_000_036,
+        "Summary:\n- Removed the Codex review workflow.\n\nChecks run:\n- `pytest` passed.",
+        source_context=source_context,
+    )
+
+    assert content.title == "Ticket #1: Remove codex review action"
+    assert "## Ticket" in content.body
+    assert "Ticket #1" in content.body
+    assert "Fixes https://github.com/dbcli/litecli/issues/1000000036" not in content.body
+    assert source_item_link_marker(36) in content.body
 
 
 def test_build_commit_message_uses_issue_or_worker_summary() -> None:
@@ -289,6 +383,21 @@ def test_build_commit_message_uses_issue_or_worker_summary() -> None:
 
     assert issue_message == "Fix #245: Unable to open log file outside default directory"
     assert summary_message == "Fix #245: Added regression coverage for expanded log_file paths"
+
+
+def test_build_commit_message_uses_local_ticket_title() -> None:
+    message = build_commit_message(
+        1_000_000_036,
+        "Summary:\n- Removed the Codex review workflow.",
+        source_context=PullRequestSourceContext(
+            kind="local_ticket",
+            source_item_id=36,
+            source_item_number=1,
+            title="Remove codex review action",
+        ),
+    )
+
+    assert message == "Ticket #1: Remove codex review action"
 
 
 def test_review_actions_create_draft_pr_uses_edited_content(tmp_path: Path) -> None:

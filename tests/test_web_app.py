@@ -23,7 +23,7 @@ from symphony_dbcli.models import (
     WorkItemRun,
     WorkItemStateEvent,
 )
-from symphony_dbcli.review_actions import issue_link_marker
+from symphony_dbcli.review_actions import issue_link_marker, source_item_link_marker
 from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus, RuntimeWorkerView
 from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import IssueSnapshot, Store
@@ -920,6 +920,33 @@ def test_fastapi_sync_attaches_newly_linked_pr_to_active_issue_work_item(tmp_pat
     assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
 
 
+def test_fastapi_sync_attaches_marker_linked_pr_to_active_local_ticket_work_item(tmp_path: Path) -> None:
+    sync_client = LocalTicketLinkedPullRequestSyncClient()
+    client = _client(tmp_path, source_sync_client=sync_client)
+    source_id = _add_source(client, "dbcli/litecli")
+    client.post(
+        f"/board/source/{source_id}/tickets",
+        data={
+            "title": "Remove codex review action",
+            "body": "Remove the GitHub action that runs Codex review on PRs.",
+            "task_type": "code",
+        },
+        follow_redirects=False,
+    )
+    source_items, _, _, _ = _local_ticket_records(tmp_path)
+    sync_client.source_item_id = source_items[0].id
+
+    _sync_source(client, source_id)
+    detail = client.get("/work-items/1")
+    source_links, work_item, work_item_links = _linked_pr_records(tmp_path)
+
+    assert "Active PR" in detail.text
+    assert work_item.active_pr_source_item_id == source_links[0].linked_source_item_id
+    assert {link.relationship for link in source_links} == {"ticket_pr"}
+    assert source_links[0].marker == source_item_link_marker(source_items[0].id)
+    assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
+
+
 def test_fastapi_source_item_ignore_hides_backlog_card(tmp_path: Path) -> None:
     client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
     source_id = _add_source(client, "dbcli/litecli")
@@ -1781,6 +1808,30 @@ class LinkedPullRequestSyncClient:
                 updated_at="2026-05-25T02:00:00Z",
                 body="regular body",
             ),
+        ]
+
+
+class LocalTicketLinkedPullRequestSyncClient:
+    def __init__(self) -> None:
+        self.source_item_id: int | None = None
+
+    def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
+        return []
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        body = "regular body"
+        if self.source_item_id is not None:
+            body = source_item_link_marker(self.source_item_id)
+        return [
+            PullRequest(
+                number=12,
+                url=f"https://github.com/{repo}/pull/12",
+                title="Remove Codex review workflow",
+                state=state,
+                author="alice",
+                updated_at="2026-05-25T02:00:00Z",
+                body=body,
+            )
         ]
 
 

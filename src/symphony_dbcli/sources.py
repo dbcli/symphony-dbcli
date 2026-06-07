@@ -23,7 +23,12 @@ from .models import (
     WorkItemLink,
     WorkItemStateEvent,
 )
-from .review_actions import body_links_issue, issue_link_marker
+from .review_actions import (
+    body_links_issue,
+    body_links_source_item,
+    issue_link_marker,
+    source_item_link_marker,
+)
 from .search import matching_source_item_ids, rebuild_source_item_search
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -788,6 +793,15 @@ def _record_issue_pr_links(session: Session, source_id: int, now: str) -> None:
             )
         )
     )
+    local_tickets = list(
+        session.scalars(
+            select(SourceItem).where(
+                SourceItem.source_id == source_id,
+                SourceItem.kind == LOCAL_TICKET_KIND,
+                SourceItem.state == "open",
+            )
+        )
+    )
     pull_requests = list(
         session.scalars(
             select(SourceItem).where(
@@ -801,7 +815,7 @@ def _record_issue_pr_links(session: Session, source_id: int, now: str) -> None:
         session.scalars(
             select(SourceItemLink).where(
                 SourceItemLink.source_id == source_id,
-                SourceItemLink.relationship == "issue_pr",
+                SourceItemLink.relationship.in_(("issue_pr", "ticket_pr")),
             )
         )
     )
@@ -831,6 +845,30 @@ def _record_issue_pr_links(session: Session, source_id: int, now: str) -> None:
                         verified_at=now,
                     )
                 )
+    for ticket in local_tickets:
+        marker = source_item_link_marker(ticket.id)
+        for pull_request in pull_requests:
+            if not body_links_source_item(pull_request.body, ticket.id):
+                continue
+            pair = (ticket.id, pull_request.id)
+            verified_pairs.add(pair)
+            existing = existing_by_pair.get(pair)
+            if existing:
+                existing.link_source = "description_marker"
+                existing.marker = marker
+                existing.verified_at = now
+            else:
+                session.add(
+                    SourceItemLink(
+                        source_id=source_id,
+                        source_item_id=ticket.id,
+                        linked_source_item_id=pull_request.id,
+                        relationship="ticket_pr",
+                        link_source="description_marker",
+                        marker=marker,
+                        verified_at=now,
+                    )
+                )
     for pair, link in existing_by_pair.items():
         if link.link_source == "description_marker" and pair not in verified_pairs:
             session.delete(link)
@@ -845,7 +883,7 @@ def _attach_linked_prs_to_active_work_items(session: Session, source_id: int, no
         .where(
             WorkItem.source_id == source_id,
             WorkItem.state != "done",
-            SourceItemLink.relationship == "issue_pr",
+            SourceItemLink.relationship.in_(("issue_pr", "ticket_pr")),
         )
     ).all()
     for work_item, source_item_link in rows:

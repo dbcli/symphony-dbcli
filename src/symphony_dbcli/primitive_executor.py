@@ -23,10 +23,13 @@ from .github import (
 from .models import create_model_tables
 from .review_actions import (
     GitHubReviewClient,
+    PullRequestSourceContext,
     ReviewActionError,
     ReviewActions,
     body_links_issue,
+    body_links_source_item,
     issue_link_marker,
+    pull_request_source_marker,
 )
 from .runner import CodexRunner
 from .sources import SourceRepository, SourceSyncService
@@ -88,6 +91,9 @@ class PrimitiveContext:
     attempt_id: int | None = None
     source_id: int | None = None
     source_item_id: int | None = None
+    source_item_kind: str = ""
+    source_item_number: int | None = None
+    source_item_url: str = ""
     work_item_id: int | None = None
     active_pr_source_item_id: int | None = None
     user_hint: str = ""
@@ -503,6 +509,7 @@ class PrimitiveExecutor:
             follow_up_context=format_follow_up_context(self.store.follow_up_source_result(attempt_id)),
             task_context=task_context,
             primitive_guidance=context.transition.guidance,
+            source_context=_pull_request_source_context(context),
         )
         result = CodexRunner(self.config.codex).run(
             prompt=prompt,
@@ -564,6 +571,7 @@ class PrimitiveExecutor:
 
         result = self.store.worker_result_for_attempt(attempt_id)
         worker_result = str(result["body"]) if result else ""
+        source_context = _pull_request_source_context(context)
         prompt = build_pull_request_prompt(
             self.config,
             context.repo,
@@ -575,6 +583,7 @@ class PrimitiveExecutor:
             worker_result=worker_result,
             issue_link_marker=issue_link_marker(context.repo, context.issue_number),
             primitive_guidance=context.transition.guidance,
+            source_context=source_context,
         )
         codex_result = CodexRunner(self.config.codex).run(
             prompt=prompt,
@@ -585,13 +594,14 @@ class PrimitiveExecutor:
         final_message = codex_result.final_message.strip()
         self.store.record_worker_log(attempt_id, "info", final_message)
         pull_request = self._pull_request_created_by_codex(context, final_message)
-        marker_present = body_links_issue(pull_request.body, context.repo, context.issue_number)
+        marker = pull_request_source_marker(context.repo, context.issue_number, source_context)
+        marker_present = _body_links_source(pull_request.body, context, source_context)
         if not marker_present:
             self.store.record_error(
                 attempt_id,
                 phase="github",
                 error_type="PullRequestMarkerMissing",
-                message="Codex-created pull request body is missing the Symphony issue-link marker.",
+                message="Codex-created pull request body is missing the Symphony source marker.",
                 recoverable=True,
             )
         self.store.record_pr(
@@ -603,16 +613,17 @@ class PrimitiveExecutor:
             state=pull_request.state,
             merged_at=pull_request.merged_at,
         )
-        self.store.record_issue_pull_request_link(
-            repo=context.repo,
-            issue_number=context.issue_number,
-            pull_request_number=pull_request.number,
-            pull_request_url=pull_request.url,
-            pull_request_title=pull_request.title,
-            state=pull_request.state,
-            link_source="created_by_codex",
-            marker=issue_link_marker(context.repo, context.issue_number),
-        )
+        if source_context.kind != "local_ticket":
+            self.store.record_issue_pull_request_link(
+                repo=context.repo,
+                issue_number=context.issue_number,
+                pull_request_number=pull_request.number,
+                pull_request_url=pull_request.url,
+                pull_request_title=pull_request.title,
+                state=pull_request.state,
+                link_source="created_by_codex",
+                marker=marker,
+            )
         self.store.update_attempt_workspace(
             attempt_id,
             base_repo_path=context.base_repo_path,
@@ -638,9 +649,9 @@ class PrimitiveExecutor:
                 number=pull_request.number,
                 url=pull_request.url,
                 title=pull_request.title,
-                body=pull_request.body or issue_link_marker(context.repo, context.issue_number),
+                body=pull_request.body or marker,
                 link_source="created_by_codex",
-                marker=issue_link_marker(context.repo, context.issue_number),
+                marker=marker,
             )
         return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
 
@@ -652,6 +663,18 @@ class PrimitiveExecutor:
             pull_request = self.review_actions.create_draft_pr(attempt_id)
         except ReviewActionError as exc:
             raise PrimitiveExecutionError(str(exc)) from exc
+        source_context = _pull_request_source_context(context)
+        marker = pull_request_source_marker(context.repo, context.issue_number, source_context)
+        if context.work_item_id is not None:
+            self.work_items.record_created_pull_request(
+                work_item_id=context.work_item_id,
+                number=pull_request.number,
+                url=pull_request.url,
+                title=pull_request.title,
+                body=pull_request.body or marker,
+                link_source="created_by_symphony",
+                marker=marker,
+            )
         return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
 
     def _pull_request_created_by_codex(
@@ -664,11 +687,12 @@ class PrimitiveExecutor:
             return self.github.pull_request(context.repo, number)
         branch_match = None
         marker_match = None
+        source_context = _pull_request_source_context(context)
         for pull_request in self.github.list_pull_requests(context.repo, state="open"):
             if context.branch and pull_request.head_ref == context.branch:
                 branch_match = pull_request
                 break
-            if body_links_issue(pull_request.body, context.repo, context.issue_number):
+            if _body_links_source(pull_request.body, context, source_context):
                 marker_match = pull_request
         if branch_match is not None:
             return self.github.pull_request(context.repo, branch_match.number)
@@ -851,6 +875,27 @@ def _work_item_output(work_item: WorkItemView) -> dict[str, Any]:
     }
 
 
+def _pull_request_source_context(context: PrimitiveContext) -> PullRequestSourceContext:
+    if context.source_item_kind == "local_ticket":
+        return PullRequestSourceContext(
+            kind=context.source_item_kind,
+            source_item_id=context.source_item_id,
+            source_item_number=context.source_item_number,
+            title=context.issue_title,
+        )
+    return PullRequestSourceContext(title=context.issue_title)
+
+
+def _body_links_source(
+    body: str,
+    context: PrimitiveContext,
+    source_context: PullRequestSourceContext,
+) -> bool:
+    if source_context.kind == "local_ticket" and source_context.source_item_id is not None:
+        return body_links_source_item(body, source_context.source_item_id)
+    return body_links_issue(body, context.repo, context.issue_number)
+
+
 def _pull_request_for_cleanup(
     store: Store,
     attempt_id: int,
@@ -882,6 +927,7 @@ def _pull_request_output(pull_request: PullRequest) -> dict[str, Any]:
 
 
 def _codex_created_pr_output(pull_request: PullRequest, context: PrimitiveContext) -> dict[str, Any]:
+    source_context = _pull_request_source_context(context)
     return {
         "pull_request_number": pull_request.number,
         "pull_request_url": pull_request.url,
@@ -890,7 +936,7 @@ def _codex_created_pr_output(pull_request: PullRequest, context: PrimitiveContex
         "merged_at": pull_request.merged_at,
         "head_ref": pull_request.head_ref,
         "head_sha": pull_request.head_sha,
-        "issue_marker_present": body_links_issue(pull_request.body, context.repo, context.issue_number),
+        "issue_marker_present": _body_links_source(pull_request.body, context, source_context),
     }
 
 
