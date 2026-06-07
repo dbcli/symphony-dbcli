@@ -15,6 +15,7 @@ def test_worker_prompt_requests_reviewable_pr_title_and_body_for_issue() -> None
     )
 
     assert "GitHub issue: https://github.com/dbcli/litecli/issues/245" in prompt
+    assert "a succinct work summary, no more than 5 bullets total" in prompt
     assert "a `PR title:` line that names the actual code change" in prompt
     assert "a `PR body:` section with `## Changes`" in prompt
     assert "do not make it only a `Fixes` line or issue URL" in prompt

@@ -34,6 +34,17 @@ def _format_ms(value: object) -> str:
     return f"{minutes}m {remaining}s"
 
 
+def _format_tokens(value: object) -> str:
+    if value is None:
+        return "-"
+    tokens = int(str(value))
+    if tokens < 1_000:
+        return f"{tokens:,}"
+    if tokens < 1_000_000:
+        return f"{tokens / 1_000:.1f}K".replace(".0K", "K")
+    return f"{tokens / 1_000_000:.1f}M".replace(".0M", "M")
+
+
 def _format_localtime(value: object) -> str:
     if value is None:
         return "-"
@@ -51,6 +62,23 @@ def _format_localtime(value: object) -> str:
     return f"{local_time:%Y-%m-%d} {hour}:{local_time:%M:%S} {local_time:%p} {local_time:%Z}"
 
 
+def _format_compact_localtime(value: object) -> str:
+    if value is None:
+        return "-"
+    raw_value = str(value).strip()
+    if not raw_value:
+        return "-"
+    try:
+        timestamp = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return raw_value
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    local_time = timestamp.astimezone(PACIFIC_TIME)
+    hour = local_time.strftime("%I").lstrip("0") or "0"
+    return f"{local_time:%b %d} {hour}:{local_time:%M:%S} {local_time:%p}"
+
+
 def _numbered_lines(value: object) -> list[dict[str, object]]:
     lines = str(value).splitlines()
     if not lines:
@@ -59,7 +87,9 @@ def _numbered_lines(value: object) -> list[dict[str, object]]:
 
 
 templates.env.filters["ms"] = _format_ms
+templates.env.filters["tokens"] = _format_tokens
 templates.env.filters["localtime"] = _format_localtime
+templates.env.filters["compact_localtime"] = _format_compact_localtime
 templates.env.filters["numbered_lines"] = _numbered_lines
 
 

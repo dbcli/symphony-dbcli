@@ -35,7 +35,7 @@ Follow this workflow:
 {config.instructions}
 
 Before finishing, provide:
-- a concise summary of what you did
+- a succinct work summary, no more than 5 bullets total
 - tests or checks run, if any
 - remaining risks or blockers
 {code_pr_section}

@@ -168,6 +168,28 @@ function setupMoveWorkForm() {
 
 setupMoveWorkForm();
 
+function setupAccordions(root = document) {
+  const toggles = [...root.querySelectorAll("[data-accordion-toggle]")];
+  for (const toggle of toggles) {
+    if (toggle.dataset.accordionReady === "true") {
+      continue;
+    }
+    toggle.dataset.accordionReady = "true";
+    toggle.addEventListener("click", () => {
+      const bodyId = toggle.getAttribute("aria-controls");
+      const body = bodyId ? document.getElementById(bodyId) : null;
+      if (!body) {
+        return;
+      }
+      const isExpanded = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", String(!isExpanded));
+      body.hidden = isExpanded;
+    });
+  }
+}
+
+setupAccordions();
+
 function setupLineNumberedEditors() {
   const editors = [...document.querySelectorAll("[data-line-numbered-editor]")];
   for (const editor of editors) {
@@ -321,6 +343,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   if (event.target.id === "dashboard-main") {
     setupKanbanDrag();
     setupMoveWorkForm();
+    setupAccordions(event.target);
     setupLineNumberedEditors();
     setupWorkflowFlowchart();
   }

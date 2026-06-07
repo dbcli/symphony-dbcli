@@ -4,7 +4,7 @@ import difflib
 import json
 import socket
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +31,15 @@ class IssueSnapshot:
     body: str = ""
     author: str = ""
     updated_at: str = ""
+
+
+@dataclass(frozen=True)
+class CodexTokenUsage:
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cached_input_tokens: int = 0
+    reasoning_output_tokens: int = 0
 
 
 class Store:
@@ -1828,6 +1837,7 @@ class Store:
                         (attempt_id,),
                     )
                 ),
+                "token_usage": _codex_token_usage_for_attempt(conn, attempt_id),
                 "prompts": _codex_prompts_for_attempt(conn, attempt_id),
                 "errors": list(
                     conn.execute(
@@ -2004,6 +2014,100 @@ def _codex_prompts_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> lis
             }
         )
     return prompts
+
+
+def _codex_token_usage_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> CodexTokenUsage | None:
+    event_usage = _codex_token_usage_from_events(conn, attempt_id)
+    if event_usage:
+        return event_usage
+    row = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
+            COUNT(input_tokens) + COUNT(output_tokens) AS token_field_count
+        FROM codex_turns
+        WHERE attempt_id = ?
+        """,
+        (attempt_id,),
+    ).fetchone()
+    if not row or int(row["token_field_count"] or 0) == 0:
+        return None
+    input_tokens = int(row["input_tokens"] or 0)
+    output_tokens = int(row["output_tokens"] or 0)
+    return CodexTokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+
+
+def _codex_token_usage_from_events(conn: sqlite3.Connection, attempt_id: int) -> CodexTokenUsage | None:
+    rows = conn.execute(
+        """
+        SELECT thread_id, payload_json
+        FROM codex_events
+        WHERE attempt_id = ? AND event_type = 'thread/tokenUsage/updated'
+        ORDER BY id ASC
+        """,
+        (attempt_id,),
+    )
+    latest_by_thread: dict[str, CodexTokenUsage] = {}
+    for row in rows:
+        usage = codex_token_usage_from_payload(_json_object(row["payload_json"]))
+        if usage:
+            latest_by_thread[str(row["thread_id"])] = usage
+    if not latest_by_thread:
+        return None
+    return CodexTokenUsage(
+        input_tokens=sum(usage.input_tokens for usage in latest_by_thread.values()),
+        output_tokens=sum(usage.output_tokens for usage in latest_by_thread.values()),
+        total_tokens=sum(usage.total_tokens for usage in latest_by_thread.values()),
+        cached_input_tokens=sum(usage.cached_input_tokens for usage in latest_by_thread.values()),
+        reasoning_output_tokens=sum(usage.reasoning_output_tokens for usage in latest_by_thread.values()),
+    )
+
+
+def codex_token_usage_from_payload(payload: Mapping[str, Any]) -> CodexTokenUsage | None:
+    usage = _mapping_value(payload, "tokenUsage") or _mapping_value(payload, "token_usage")
+    if usage is None:
+        return None
+    total = _mapping_value(usage, "total") or usage
+    input_tokens = _int_value(total, "inputTokens", "input_tokens")
+    output_tokens = _int_value(total, "outputTokens", "output_tokens")
+    total_tokens = _int_value(total, "totalTokens", "total_tokens")
+    cached_input_tokens = _int_value(total, "cachedInputTokens", "cached_input_tokens")
+    reasoning_output_tokens = _int_value(total, "reasoningOutputTokens", "reasoning_output_tokens")
+    if input_tokens == 0 and output_tokens == 0 and total_tokens == 0:
+        return None
+    if total_tokens == 0:
+        total_tokens = input_tokens + output_tokens
+    return CodexTokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=cached_input_tokens,
+        reasoning_output_tokens=reasoning_output_tokens,
+    )
+
+
+def _mapping_value(payload: Mapping[str, Any], key: str) -> Mapping[str, Any] | None:
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        return None
+    return value
+
+
+def _int_value(payload: Mapping[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            return int(str(value))
+        except ValueError:
+            continue
+    return 0
 
 
 def _json_object(raw_value: object) -> dict[str, Any]:

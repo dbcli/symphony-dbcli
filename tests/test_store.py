@@ -68,6 +68,23 @@ def test_store_records_workflow_versions_and_attempt_metrics(tmp_path: Path) -> 
             "input": [{"type": "text", "text": "Fix the failing tests."}],
         },
     )
+    store.record_codex_event(
+        attempt_id,
+        thread_id="thread-1",
+        event_type="thread/tokenUsage/updated",
+        payload={
+            "threadId": "thread-1",
+            "tokenUsage": {
+                "total": {
+                    "cachedInputTokens": 50,
+                    "inputTokens": 1200,
+                    "outputTokens": 300,
+                    "reasoningOutputTokens": 40,
+                    "totalTokens": 1500,
+                }
+            },
+        },
+    )
     store.record_error(
         attempt_id,
         phase="test",
@@ -104,6 +121,11 @@ def test_store_records_workflow_versions_and_attempt_metrics(tmp_path: Path) -> 
     assert detail["comments"][0]["body"] == "Draft response"
     assert detail["prompts"][0]["prompt"] == "Fix the failing tests."
     assert detail["prompts"][0]["model"] == "gpt-5.4-mini"
+    assert detail["token_usage"].input_tokens == 1200
+    assert detail["token_usage"].output_tokens == 300
+    assert detail["token_usage"].total_tokens == 1500
+    assert detail["token_usage"].cached_input_tokens == 50
+    assert detail["token_usage"].reasoning_output_tokens == 40
 
 
 def test_eligible_issues_use_labels(tmp_path: Path) -> None:

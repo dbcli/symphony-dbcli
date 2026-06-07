@@ -1,0 +1,35 @@
+<form
+  class="stacked-form"
+  method="post"
+  action="/work-items/{{ work_item.id }}/archive"
+  {% if is_modal %}
+  hx-post="/work-items/{{ work_item.id }}/archive"
+  hx-target="#modal-root"
+  hx-swap="innerHTML"
+  {% endif %}
+>
+  <label for="{{ 'modal-' if is_modal else '' }}archive-note">Note</label>
+  <textarea
+    id="{{ 'modal-' if is_modal else '' }}archive-note"
+    name="note"
+    rows="3"
+    placeholder="Optional archive reason"
+  ></textarea>
+
+  {% if archive_return_to %}
+  <input type="hidden" name="return_to" value="{{ archive_return_to }}" />
+  {% endif %}
+
+  {% if error %}
+  <p class="form-error">{{ error }}</p>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit">Archive Work Item</button>
+    {% if is_modal %}
+    <button class="quiet" type="button" data-modal-close>Cancel</button>
+    {% else %}
+    <a class="button-link quiet" href="/board/source/{{ work_item.source_id }}">Cancel</a>
+    {% endif %}
+  </div>
+</form>

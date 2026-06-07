@@ -28,7 +28,12 @@ from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus, RuntimeWor
 from symphony_dbcli.sources import SourceSyncClient
 from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.web.app import create_app
-from symphony_dbcli.web.dependencies import WebRuntime, _format_localtime
+from symphony_dbcli.web.dependencies import (
+    WebRuntime,
+    _format_compact_localtime,
+    _format_localtime,
+    _format_tokens,
+)
 from symphony_dbcli.web.routers import attempts, work_items
 from symphony_dbcli.work_items import WorkItemRepository
 
@@ -149,6 +154,19 @@ def test_localtime_filter_formats_utc_timestamps_as_pacific_time() -> None:
     assert _format_localtime("2026-01-25T12:00:00Z") == "2026-01-25 4:00:00 AM PST"
     assert _format_localtime("") == "-"
     assert _format_localtime("not-a-date") == "not-a-date"
+
+
+def test_compact_localtime_filter_formats_utc_timestamps_as_pacific_time() -> None:
+    assert _format_compact_localtime("2026-06-06T18:01:09+00:00") == "Jun 06 11:01:09 AM"
+    assert _format_compact_localtime("2026-01-25T12:00:00Z") == "Jan 25 4:00:00 AM"
+    assert _format_compact_localtime("") == "-"
+    assert _format_compact_localtime("not-a-date") == "not-a-date"
+
+
+def test_tokens_filter_formats_large_counts() -> None:
+    assert _format_tokens(999) == "999"
+    assert _format_tokens(42_500) == "42.5K"
+    assert _format_tokens(4_213_116) == "4.2M"
 
 
 def test_fastapi_workflow_page_renders_vertical_flowchart(tmp_path: Path) -> None:
@@ -515,6 +533,12 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "<dt>ID</dt>" not in detail.text
     assert "Runs / Attempts" in detail.text
     assert "not claimed" in detail.text
+    assert "Actions" in detail.text
+    assert "Move Work Item" in detail.text
+    assert 'hx-get="/work-items/1/move-form?target_state=todo&return_to=/work-items/1"' in detail.text
+    assert f'hx-get="/work-items/1/archive-form?return_to=/board/source/{source_id}"' in detail.text
+    assert 'id="move-work"' not in detail.text
+    assert '<form class="stacked-form" method="post" action="/work-items/1/archive">' not in detail.text
 
 
 def test_fastapi_source_item_activate_form_renders_modal(tmp_path: Path) -> None:
@@ -817,8 +841,11 @@ def test_fastapi_work_item_move_form_presets_review_rerun_target(tmp_path: Path)
     response = client.get("/work-items/1?target_state=in_progress")
 
     assert response.status_code == 200
-    assert "Add rerun reasons and optional model context" in response.text
-    assert '<option value="in_progress" selected>In Progress</option>' in response.text
+    assert (
+        'hx-get="/work-items/1/move-form?target_state=in_progress&return_to=/work-items/1"' in response.text
+    )
+    assert "Add rerun reasons and optional model context" not in response.text
+    assert '<option value="in_progress" selected>In Progress</option>' not in response.text
 
 
 def test_fastapi_work_item_move_form_renders_modal(tmp_path: Path) -> None:
@@ -845,6 +872,25 @@ def test_fastapi_work_item_move_form_renders_modal(tmp_path: Path) -> None:
     assert f'name="return_to" value="/board/source/{source_id}"' in response.text
     assert '<option value="in_progress" selected>In Progress</option>' in response.text
     assert "Add rerun reasons and optional model context" in response.text
+
+
+def test_fastapi_work_item_archive_form_renders_modal(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+
+    response = client.get(f"/work-items/1/archive-form?return_to=/board/source/{source_id}")
+
+    assert response.status_code == 200
+    assert 'class="modal-backdrop"' in response.text
+    assert 'role="dialog"' in response.text
+    assert 'hx-post="/work-items/1/archive"' in response.text
+    assert 'hx-target="#modal-root"' in response.text
+    assert f'name="return_to" value="/board/source/{source_id}"' in response.text
+    assert "Archive Work" in response.text
+    assert "Optional archive reason" in response.text
 
 
 def test_fastapi_htmx_work_item_move_redirects_to_return_target(tmp_path: Path) -> None:
@@ -984,6 +1030,28 @@ def test_fastapi_archive_work_item_hides_card(tmp_path: Path) -> None:
 
     assert response.status_code == 303
     assert "work item #1" not in board.text
+    assert work_item.state == "done"
+    assert work_item.disposition == "archived"
+    assert work_item.outcome == "archived_by_user"
+
+
+def test_fastapi_htmx_archive_work_item_redirects_to_return_target(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+
+    response = client.post(
+        "/work-items/1/archive",
+        data={"note": "Handled elsewhere.", "return_to": f"/board/source/{source_id}"},
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    work_item = _work_item(tmp_path, 1)
+
+    assert response.status_code == 204
+    assert response.headers["HX-Redirect"] == f"/board/source/{source_id}"
     assert work_item.state == "done"
     assert work_item.disposition == "archived"
     assert work_item.outcome == "archived_by_user"
@@ -1133,10 +1201,20 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
         event_type="started",
         message="Started codex exec",
     )
+    completed_timeline_id = store.record_timeline_event(
+        attempt_id,
+        phase="codex",
+        event_type="completed",
+        message="Finished codex exec",
+    )
     with store.connect() as conn:
         conn.execute(
             "UPDATE worker_timeline_events SET started_at = ? WHERE id = ?",
             ("2026-01-25T12:00:00Z", timeline_id),
+        )
+        conn.execute(
+            "UPDATE worker_timeline_events SET started_at = ? WHERE id = ?",
+            ("2026-01-25T12:01:00Z", completed_timeline_id),
         )
     store.record_comment(
         attempt_id,
@@ -1165,6 +1243,29 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
             "input": [{"type": "text", "text": "Draft a reply for issue 245."}],
         },
     )
+    store.record_codex_event(
+        attempt_id,
+        thread_id="thread-245",
+        event_type="thread/tokenUsage/updated",
+        payload={
+            "threadId": "thread-245",
+            "tokenUsage": {
+                "total": {
+                    "inputTokens": 40_000,
+                    "outputTokens": 2_500,
+                    "totalTokens": 42_500,
+                }
+            },
+        },
+    )
+    store.record_pr(
+        attempt_id,
+        "dbcli/litecli",
+        257,
+        "https://github.com/dbcli/litecli/pull/257",
+        "Draft pull request",
+        state="open",
+    )
     gate_id = _open_attempt_gate(store, attempt_id, transition_name="post_answer", gate="review_answer")
 
     attempt = client.get(f"/attempts/{attempt_id}")
@@ -1172,12 +1273,29 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
 
     assert attempt.status_code == 200
     assert "Worker Result" in attempt.text
+    assert attempt.text.index("Timeline") < attempt.text.index("Pending Workflow Gates")
+    assert (
+        '<time datetime="2026-01-25T12:00:00Z" title="2026-01-25 4:00:00 AM PST">Jan 25 4:00:00 AM</time>'
+    ) in attempt.text
     assert "Pending Workflow Gates" in attempt.text
     assert "post_answer" in attempt.text
+    assert "42.5K tokens" in attempt.text
+    assert "PR #257" in attempt.text
+    assert 'class="metric-link" href="https://github.com/dbcli/litecli/pull/257"' in attempt.text
+    assert f'aria-controls="timeline-detail-{timeline_id}"' in attempt.text
+    assert f'id="timeline-detail-{timeline_id}"' in attempt.text
+    assert 'data-timeline-detail="codex-started" hidden' in attempt.text
+    assert f'aria-controls="timeline-detail-{completed_timeline_id}"' in attempt.text
+    assert f'id="timeline-detail-{completed_timeline_id}"' in attempt.text
+    assert 'data-timeline-detail="codex-completed" hidden' in attempt.text
     assert "Worker result body" in attempt.text
     assert "Suggested reply body" in attempt.text
     assert "Started codex exec" in attempt.text
-    assert "Codex Prompts" in attempt.text
+    assert "Finished codex exec" in attempt.text
+    assert '<section class="panel accordion-panel" data-collapsible="codex-prompts">' not in attempt.text
+    assert '<div class="panel accordion-panel" data-collapsible="worker-result">' not in attempt.text
+    assert 'class="timeline-toggle"' in attempt.text
+    assert 'aria-expanded="false"' in attempt.text
     assert "Draft a reply for issue 245." in attempt.text
     assert "/tmp/litecli" in attempt.text
     assert "2026-01-25 4:00:00 AM PST" in attempt.text

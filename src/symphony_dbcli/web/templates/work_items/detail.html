@@ -119,19 +119,29 @@
   {% endif %}
 </section>
 
-<section id="move-work" class="panel flow-panel">
-  <h2>Move Work</h2>
-  {% include "work_items/_move_form.html" %}
-</section>
-
 <section class="panel flow-panel">
-  <h2>Archive</h2>
-  <form class="stacked-form" method="post" action="/work-items/{{ work_item.id }}/archive">
-    <label for="archive-note">Note</label>
-    <textarea id="archive-note" name="note" rows="2" placeholder="Optional archive reason"></textarea>
-    <div class="form-actions">
-      <button type="submit">Archive Work Item</button>
-    </div>
-  </form>
+  <div class="section-heading">
+    <h2>Actions</h2>
+  </div>
+  <div class="form-actions">
+    <button
+      type="button"
+      hx-get="/work-items/{{ work_item.id }}/move-form?target_state={{ selected_target_state }}&return_to=/work-items/{{ work_item.id }}"
+      hx-target="#modal-root"
+      hx-swap="innerHTML"
+    >
+      Move Work Item
+    </button>
+    <button
+      class="quiet"
+      type="button"
+      hx-get="/work-items/{{ work_item.id }}/archive-form?return_to=/board/source/{{ work_item.source_id }}"
+      hx-target="#modal-root"
+      hx-swap="innerHTML"
+    >
+      Archive Work Item
+    </button>
+    <a class="button-link quiet" href="/board/source/{{ work_item.source_id }}">Board</a>
+  </div>
 </section>
 {% endblock %}

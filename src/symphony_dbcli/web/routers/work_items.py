@@ -76,6 +76,27 @@ def move_form(
     )
 
 
+@router.get("/work-items/{work_item_id}/archive-form")
+def archive_form(
+    request: Request,
+    work_item_id: int,
+    return_to: str = "",
+) -> Response:
+    context = _detail_context(
+        request,
+        work_item_id,
+        error="",
+        return_to="",
+        is_modal=True,
+    )
+    context["archive_return_to"] = _safe_return_to(return_to) or str(context["archive_return_to"])
+    return templates.TemplateResponse(
+        request=request,
+        name="work_items/_archive_modal.html",
+        context=context,
+    )
+
+
 @router.post("/work-items/{work_item_id}/move")
 def move(
     request: Request,
@@ -148,21 +169,25 @@ def archive_work_item(
     request: Request,
     work_item_id: int,
     note: Annotated[str, Form()] = "",
+    return_to: Annotated[str, Form()] = "",
 ) -> Response:
+    safe_return_to = _safe_return_to(return_to)
     try:
         work_item = work_item_repository(request).archive_work_item(work_item_id, note)
     except WorkItemError as exc:
-        context = _detail_context(request, work_item_id, error=str(exc))
+        context = _detail_context(request, work_item_id, error=str(exc), is_modal=_is_htmx(request))
+        context["archive_return_to"] = safe_return_to or str(context["archive_return_to"])
+        template_name = "work_items/_archive_modal.html" if _is_htmx(request) else "work_items/detail.html"
         return templates.TemplateResponse(
             request=request,
-            name="work_items/detail.html",
+            name=template_name,
             context=context,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
-    return RedirectResponse(
-        f"/board/source/{work_item.source_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
+    target = safe_return_to or f"/board/source/{work_item.source_id}"
+    if _is_htmx(request):
+        return Response(status_code=204, headers={"HX-Redirect": target})
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/source-items/{source_item_id}/activate")
@@ -280,6 +305,7 @@ def _detail_context(
     context["show_rerun_prompt"] = work_item.state == "in_review" and selected_target_state == "in_progress"
     context["review_reasons"] = REVIEW_RERUN_REASONS.items()
     context["return_to"] = return_to
+    context["archive_return_to"] = f"/board/source/{work_item.source_id}"
     context["is_modal"] = is_modal
     context["error"] = error
     return context

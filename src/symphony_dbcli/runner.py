@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from .clock import elapsed_ms, monotonic_ns
 from .config import CodexConfig
-from .store import Store
+from .store import CodexTokenUsage, Store, codex_token_usage_from_payload
 
 
 class CodexRunnerError(RuntimeError):
@@ -121,6 +121,8 @@ class CodexRunner:
                 turn_index=1,
                 status="completed",
                 model=self.config.model,
+                input_tokens=client.latest_token_usage.input_tokens if client.latest_token_usage else None,
+                output_tokens=client.latest_token_usage.output_tokens if client.latest_token_usage else None,
                 started_monotonic_ns=started,
                 ended_monotonic_ns=ended,
             )
@@ -168,6 +170,7 @@ class _AppServerClient:
         self.process: subprocess.Popen[str] | None = None
         self.next_id = 1
         self.final_message_parts: list[str] = []
+        self.latest_token_usage: CodexTokenUsage | None = None
 
     def start(self) -> None:
         self.process = subprocess.Popen(
@@ -284,6 +287,10 @@ class _AppServerClient:
             self.store.record_codex_event(
                 self.attempt_id, thread_id=thread_id, event_type=method, payload=params
             )
+        if method == "thread/tokenUsage/updated":
+            usage = codex_token_usage_from_payload(params)
+            if usage:
+                self.latest_token_usage = usage
         if method in {
             "agent/message/delta",
             "agent_message/delta",

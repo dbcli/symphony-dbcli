@@ -1,0 +1,12 @@
+<div class="modal-backdrop" data-modal-backdrop>
+  <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="archive-work-title">
+    <div class="modal-header">
+      <div>
+        <span class="kicker">{{ work_item.source_label }} #{{ work_item.source_number }}</span>
+        <h2 id="archive-work-title">Archive Work</h2>
+      </div>
+      <button class="modal-close" type="button" aria-label="Close modal" data-modal-close>&times;</button>
+    </div>
+    {% include "work_items/_archive_form.html" %}
+  </section>
+</div>
