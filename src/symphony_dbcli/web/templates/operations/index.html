@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_time.html" import compact_time %}
 {% block body %}
 <section class="panel">
   {% if runs %}
@@ -19,7 +20,7 @@
         <td><a href="/work-items/{{ run.work_item_id }}">#{{ run.work_item_id }}</a> {{ run.title }}</td>
         <td>{{ run.status }}</td>
         <td>{{ run.user_hint or "-" }}</td>
-        <td>{{ run.updated_at|localtime }}</td>
+        <td>{{ compact_time(run.updated_at) }}</td>
       </tr>
       {% endfor %}
     </tbody>

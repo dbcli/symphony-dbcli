@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_time.html" import compact_time %}
 {% block page_actions %}
 <a class="button-link" href="/sources/new">Add Source</a>
 {% endblock %}
@@ -31,7 +32,7 @@
         <td>{{ source.sync_status }}</td>
         <td>{{ "Yes" if source.enabled else "No" }}</td>
         <td>{{ source.filter_summary }}</td>
-        <td>{{ source.last_synced_at|localtime if source.last_synced_at else "Never" }}</td>
+        <td>{{ compact_time(source.last_synced_at, empty="Never") }}</td>
         <td>
           <form method="post" action="/sources/{{ source.id }}/sync">
             <button type="submit">Sync</button>
@@ -39,7 +40,7 @@
         </td>
         <td><a href="/board/source/{{ source.id }}">Open Board</a></td>
         <td><a href="/sources/{{ source.id }}/edit">Edit</a></td>
-        <td>{{ source.created_at|localtime }}</td>
+        <td>{{ compact_time(source.created_at) }}</td>
       </tr>
       {% endfor %}
     </tbody>

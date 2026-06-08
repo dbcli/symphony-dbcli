@@ -1,0 +1,12 @@
+<div class="modal-backdrop" data-modal-backdrop>
+  <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="adjustment-title">
+    <div class="section-heading">
+      <div>
+        <h2 id="adjustment-title">Request Adjustment</h2>
+        <p class="muted">Attempt {{ detail.attempt.id }}</p>
+      </div>
+      <button class="modal-close" type="button" aria-label="Close modal" data-modal-close>&times;</button>
+    </div>
+    {% include "attempts/_adjustment_form.html" %}
+  </section>
+</div>

@@ -1,0 +1,11 @@
+{% macro compact_time(value, empty="-", seconds=False) -%}
+{% if value -%}
+{% if seconds -%}
+<time datetime="{{ value }}" title="{{ value|localtime }}">{{ value|compact_localtime_seconds }}</time>
+{%- else -%}
+<time datetime="{{ value }}" title="{{ value|localtime }}">{{ value|compact_localtime }}</time>
+{%- endif %}
+{%- else -%}
+{{ empty }}
+{%- endif %}
+{%- endmacro %}

@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request, status
 from starlette.background import BackgroundTask
@@ -12,7 +13,15 @@ from starlette.datastructures import FormData
 from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.orchestrator import Orchestrator, OrchestratorError
-from symphony_dbcli.web.dependencies import WebAppState, get_app_state, page_context, templates
+from symphony_dbcli.web.dependencies import (
+    BreadcrumbItem,
+    WebAppState,
+    get_app_state,
+    page_context,
+    templates,
+    work_item_repository,
+)
+from symphony_dbcli.work_items import WorkItemAdjustment, WorkItemError
 
 router = APIRouter(tags=["attempts"])
 MAX_WORKSPACE_DIFF_CHARS = 120_000
@@ -52,6 +61,68 @@ def create_code_follow_up(request: Request, attempt_id: int) -> Response:
         f"/attempts/{target_attempt_id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+@router.get("/attempts/{attempt_id}/adjustment-form")
+def adjustment_form(request: Request, attempt_id: int, return_to: str = "") -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="attempts/_adjustment_modal.html",
+        context=_adjustment_context(
+            request,
+            attempt_id,
+            error="",
+            note="",
+            return_to=_safe_path(return_to),
+        ),
+    )
+
+
+@router.post("/attempts/{attempt_id}/adjustment")
+def request_adjustment(
+    request: Request,
+    attempt_id: int,
+    note: Annotated[str, Form()],
+    return_to: Annotated[str, Form()] = "",
+) -> Response:
+    state = get_app_state(request)
+    attempt = state.store.attempt_by_id(attempt_id)
+    if not attempt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attempt not found")
+    work_item_id = _attempt_work_item_id(attempt)
+    if work_item_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only work-item attempts can request adjustments.",
+        )
+    try:
+        work_item_repository(request).request_adjustment(
+            WorkItemAdjustment(
+                work_item_id=work_item_id,
+                source_attempt_id=attempt_id,
+                note=note,
+            )
+        )
+    except WorkItemError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="attempts/_adjustment_modal.html",
+            context=_adjustment_context(
+                request,
+                attempt_id,
+                error=str(exc),
+                note=note,
+                return_to=_safe_path(return_to),
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    safe_return_to = _safe_path(return_to) or f"/work-items/{work_item_id}"
+    if _is_htmx(request):
+        response: Response = Response(status_code=204, headers={"HX-Redirect": safe_return_to})
+    else:
+        response = RedirectResponse(safe_return_to, status_code=status.HTTP_303_SEE_OTHER)
+    response.background = _schedule_runtime_cycle(request, trigger="attempt_adjustment")
+    return response
 
 
 @router.post("/attempts/{attempt_id}/draft-pr")
@@ -144,6 +215,63 @@ def _attempt_context(request: Request, attempt_id: int) -> dict[str, object]:
     context["workspace_diff"] = _attempt_workspace_diff(detail)
     context["post_answer_gate"] = gate_transitions.get("post_answer")
     context["return_to"] = f"/attempts/{attempt_id}"
+    context["can_request_adjustment"] = _can_request_adjustment(detail)
+    context["breadcrumbs"] = _attempt_breadcrumbs(request, detail, attempt_id)
+    return context
+
+
+def _can_request_adjustment(detail: dict[str, Any] | None) -> bool:
+    if not detail:
+        return False
+    attempt = detail["attempt"]
+    return _attempt_work_item_id(attempt) is not None and str(attempt["status"]) not in {"queued", "running"}
+
+
+def _attempt_breadcrumbs(
+    request: Request,
+    detail: dict[str, Any] | None,
+    attempt_id: int,
+) -> list[BreadcrumbItem]:
+    if not detail:
+        return [BreadcrumbItem("Work Items", "/work-items"), BreadcrumbItem(f"Attempt {attempt_id}")]
+    work_item_id = _attempt_work_item_id(detail["attempt"])
+    if work_item_id is None:
+        return [BreadcrumbItem("Work Items", "/work-items"), BreadcrumbItem(f"Attempt {attempt_id}")]
+    work_item = work_item_repository(request).detail(work_item_id)
+    if work_item is None:
+        return [
+            BreadcrumbItem("Work Items", "/work-items"),
+            BreadcrumbItem(f"Work Item #{work_item_id}", f"/work-items/{work_item_id}"),
+            BreadcrumbItem(f"Attempt {attempt_id}"),
+        ]
+    return [
+        BreadcrumbItem("Board", f"/board/source/{work_item.source_id}"),
+        BreadcrumbItem(f"Work Item #{work_item.id}", f"/work-items/{work_item.id}"),
+        BreadcrumbItem(f"Attempt {attempt_id}"),
+    ]
+
+
+def _adjustment_context(
+    request: Request,
+    attempt_id: int,
+    *,
+    error: str,
+    note: str,
+    return_to: str,
+) -> dict[str, object]:
+    detail = get_app_state(request).store.attempt_detail(attempt_id)
+    if not detail:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attempt not found")
+    if not _can_request_adjustment(detail):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This attempt cannot request a Codex adjustment.",
+        )
+    context = page_context(request, title=f"Adjust Attempt {attempt_id}", active="work_items")
+    context["detail"] = detail
+    context["error"] = error
+    context["note"] = note
+    context["return_to"] = return_to or f"/attempts/{attempt_id}"
     return context
 
 
@@ -297,6 +425,34 @@ def _git(worktree: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
 
 def _git_error(result: subprocess.CompletedProcess[str]) -> str:
     return result.stderr.strip() or result.stdout.strip() or "git command failed"
+
+
+def _attempt_work_item_id(attempt: sqlite3.Row) -> int | None:
+    value = attempt["work_item_id"]
+    if value is None:
+        return None
+    return int(value)
+
+
+def _is_htmx(request: Request) -> bool:
+    return request.headers.get("HX-Request", "").lower() == "true"
+
+
+def _safe_path(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc or not candidate.startswith("/"):
+        return ""
+    return candidate
+
+
+def _schedule_runtime_cycle(request: Request, *, trigger: str) -> BackgroundTask | None:
+    state = get_app_state(request)
+    if state.runtime is None:
+        return None
+    return BackgroundTask(state.runtime.run_cycle, trigger=trigger)
 
 
 def _run_or_schedule_gate(

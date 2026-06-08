@@ -21,7 +21,7 @@ from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutionError, PrimitiveOutcome
 from symphony_dbcli.sources import SourceCreate, SourceItemUpsert, SourceRepository
 from symphony_dbcli.store import IssueSnapshot, Store
-from symphony_dbcli.work_items import WorkItemActivation, WorkItemRepository
+from symphony_dbcli.work_items import WorkItemActivation, WorkItemAdjustment, WorkItemRepository
 
 
 def test_code_follow_up_prompt_includes_research_context() -> None:
@@ -76,6 +76,73 @@ def test_orchestrator_claim_records_workflow_runtime_state(tmp_path: Path) -> No
     assert transition is not None
     assert transition["from_state"] == "todo"
     assert transition["to_state"] == "claimed"
+
+
+def test_orchestrator_links_adjustment_attempt_to_source_attempt(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    source_repo, work_item_repo = _source_work_item_repositories(tmp_path)
+    source = source_repo.create_source(SourceCreate(repo="dbcli/litecli"))
+    source_repo.upsert_source_items(
+        source_id=source.id,
+        items=[
+            SourceItemUpsert(
+                kind="issue",
+                number=245,
+                title="Logging support question",
+                url="https://github.com/dbcli/litecli/issues/245",
+                state="open",
+                author="amjith",
+                labels=[],
+                body="The log_file option does not expand ~.",
+                github_updated_at="2026-05-24T11:00:00Z",
+            )
+        ],
+    )
+    source_item = source_repo.backlog_source_items(source.id)[0]
+    work_item = work_item_repo.activate_source_item(
+        WorkItemActivation(source_item_id=source_item.id, task_type="code")
+    )
+    source_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        work_item_id=work_item.id,
+        work_item_run_id=1,
+        status="review",
+    )
+    store.record_worker_result(
+        attempt_id=source_attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        result_type="code_changes",
+        title="Code Changes",
+        body="Changed the parser.",
+    )
+    with create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))() as session:
+        run = session.get_one(WorkItemRun, 1)
+        run.attempt_id = source_attempt_id
+        run.status = "needs_review"
+        session.commit()
+    work_item_repo.request_adjustment(
+        WorkItemAdjustment(
+            work_item_id=work_item.id,
+            source_attempt_id=source_attempt_id,
+            note="Tighten validation.",
+        )
+    )
+
+    adjustment_attempt_id = Orchestrator(default_config(), store, github=FakeCleanupGitHub()).claim_next()
+
+    assert adjustment_attempt_id is not None
+    source_detail = store.attempt_detail(source_attempt_id)
+    adjustment_detail = store.attempt_detail(adjustment_attempt_id)
+    assert source_detail is not None
+    assert adjustment_detail is not None
+    assert source_detail["follow_up_targets"][0]["id"] == adjustment_attempt_id
+    assert source_detail["follow_up_targets"][0]["relationship"] == "attempt_adjustment"
+    assert adjustment_detail["source_result"]["source_attempt_id"] == source_attempt_id
+    assert adjustment_detail["source_result"]["relationship"] == "attempt_adjustment"
 
 
 def test_orchestrator_runs_attempt_from_workflow_transitions(tmp_path: Path) -> None:

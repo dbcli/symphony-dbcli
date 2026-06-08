@@ -1,0 +1,34 @@
+<form
+  class="stacked-form"
+  method="post"
+  action="/attempts/{{ detail.attempt.id }}/adjustment"
+  hx-post="/attempts/{{ detail.attempt.id }}/adjustment"
+  hx-target="#modal-root"
+  hx-swap="innerHTML"
+>
+  <p class="form-hint">
+    This queues a focused follow-up Codex run for the same work item.
+  </p>
+
+  <label for="adjustment-note">Adjustment</label>
+  <textarea
+    id="adjustment-note"
+    name="note"
+    rows="5"
+    placeholder="Describe the small follow-up change Codex should make"
+    required
+  >{{ note }}</textarea>
+
+  {% if return_to %}
+  <input type="hidden" name="return_to" value="{{ return_to }}" />
+  {% endif %}
+
+  {% if error %}
+  <p class="form-error">{{ error }}</p>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit">Queue Adjustment</button>
+    <button class="quiet" type="button" data-modal-close>Cancel</button>
+  </div>
+</form>

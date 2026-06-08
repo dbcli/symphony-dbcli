@@ -1,3 +1,4 @@
+{% from "_time.html" import compact_time %}
 {% macro draft_replies(comments, show_attempt_link=False, post_gate_id=None, return_to="", legacy_post=True) %}
 <section class="panel">
   <div class="section-heading">
@@ -10,7 +11,7 @@
     <article class="draft-reply">
       <div class="draft-meta">
         <strong>{{ row.status }}</strong>
-        <span>{{ row.created_at|localtime }}</span>
+        <span>{{ compact_time(row.created_at) }}</span>
         {% if show_attempt_link and row.attempt_id %}
         <a href="/attempts/{{ row.attempt_id }}">Attempt {{ row.attempt_id }}</a>
         {% endif %}

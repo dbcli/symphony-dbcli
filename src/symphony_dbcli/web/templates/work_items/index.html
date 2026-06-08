@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_time.html" import compact_time %}
 {% block body %}
 <section class="panel">
   {% if work_items %}
@@ -25,7 +26,7 @@
           <span>{{ item.source_label }} #{{ item.source_number }}</span>
           {% endif %}
         </td>
-        <td>{{ item.updated_at|localtime }}</td>
+        <td>{{ compact_time(item.updated_at) }}</td>
       </tr>
       {% endfor %}
     </tbody>

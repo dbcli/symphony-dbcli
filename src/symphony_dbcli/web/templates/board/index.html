@@ -43,7 +43,18 @@
   </div>
   <div>
     <span class="kicker">Last Sync</span>
-    <strong>{{ selected_source.last_synced_at|localtime if selected_source.last_synced_at else "Never" }}</strong>
+    {% if selected_source.last_synced_at %}
+    <strong>
+      <time
+        datetime="{{ selected_source.last_synced_at }}"
+        title="{{ selected_source.last_synced_at|localtime }}"
+      >
+        {{ selected_source.last_synced_at|relative_time }}
+      </time>
+    </strong>
+    {% else %}
+    <strong>Never</strong>
+    {% endif %}
   </div>
 </section>
 

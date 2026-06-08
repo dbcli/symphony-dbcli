@@ -8,6 +8,7 @@ from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.web.dependencies import (
+    BreadcrumbItem,
     get_app_state,
     page_context,
     source_repository,
@@ -293,6 +294,10 @@ def _detail_context(
     if work_item is None:
         raise HTTPException(status_code=404, detail="Work item not found")
     context = page_context(request, title=f"Work Item #{work_item_id}", active="work_items")
+    context["breadcrumbs"] = [
+        BreadcrumbItem("Board", f"/board/source/{work_item.source_id}"),
+        BreadcrumbItem(f"Work Item #{work_item.id}"),
+    ]
     context["work_item"] = work_item
     context["runs"] = work_item_repository(request).list_runs(work_item_id)
     linked_source_items = work_item_repository(request).linked_source_items(work_item_id)

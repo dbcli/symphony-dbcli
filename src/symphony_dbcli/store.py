@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
@@ -15,8 +15,19 @@ from .types import AttemptSummary
 
 SCHEMA_VERSION = 10
 FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
+ATTEMPT_ADJUSTMENT_RELATIONSHIP = "attempt_adjustment"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 CODEX_PROMPT_EVENT_TYPES = ("turn/start/request", "exec/request")
+CODEX_AGENT_MESSAGE_DELTA_EVENT_TYPES = frozenset(
+    {
+        "agent/message/delta",
+        "agent_message/delta",
+        "item/agentMessage/delta",
+        "item/agent_message/delta",
+    }
+)
+
+type AttemptLiveEventSource = Literal["codex", "timeline", "error"]
 
 
 @dataclass(frozen=True)
@@ -40,6 +51,27 @@ class CodexTokenUsage:
     total_tokens: int
     cached_input_tokens: int = 0
     reasoning_output_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class AttemptLiveEvent:
+    source: AttemptLiveEventSource
+    id: int
+    event_type: str
+    created_at: str
+    title: str
+    message: str
+    payload: dict[str, Any]
+    output_delta: str = ""
+
+
+@dataclass(frozen=True)
+class AttemptLiveSnapshot:
+    attempt_id: int
+    status: str
+    current_phase: str
+    updated_at: str
+    events: list[AttemptLiveEvent]
 
 
 class Store:
@@ -1705,11 +1737,15 @@ class Store:
                     JOIN attempts source ON source.id = link.source_attempt_id
                     JOIN worker_results result ON result.attempt_id = source.id
                     WHERE link.target_attempt_id = ?
-                      AND link.relationship = ?
+                      AND link.relationship IN (?, ?)
                     ORDER BY link.id DESC
                     LIMIT 1
                     """,
-                    (target_attempt_id, FOLLOW_UP_CODE_RELATIONSHIP),
+                    (
+                        target_attempt_id,
+                        FOLLOW_UP_CODE_RELATIONSHIP,
+                        ATTEMPT_ADJUSTMENT_RELATIONSHIP,
+                    ),
                 ).fetchone(),
             )
 
@@ -1857,6 +1893,36 @@ class Store:
                     )
                 ),
             }
+
+    def attempt_live_events(
+        self,
+        attempt_id: int,
+        *,
+        after_codex_id: int = 0,
+        after_timeline_id: int = 0,
+        after_error_id: int = 0,
+        limit: int = 100,
+    ) -> AttemptLiveSnapshot | None:
+        with self.connect() as conn:
+            attempt = conn.execute(
+                "SELECT id, status, current_phase, updated_at FROM attempts WHERE id = ?",
+                (attempt_id,),
+            ).fetchone()
+            if not attempt:
+                return None
+            bounded_limit = max(1, min(limit, 500))
+            events: list[AttemptLiveEvent] = []
+            events.extend(_live_timeline_events(conn, attempt_id, after_timeline_id, bounded_limit))
+            events.extend(_live_codex_events(conn, attempt_id, after_codex_id, bounded_limit))
+            events.extend(_live_error_events(conn, attempt_id, after_error_id, bounded_limit))
+            events.sort(key=lambda event: (event.created_at, event.source, event.id))
+            return AttemptLiveSnapshot(
+                attempt_id=int(attempt["id"]),
+                status=str(attempt["status"]),
+                current_phase=str(attempt["current_phase"] or ""),
+                updated_at=str(attempt["updated_at"]),
+                events=events[:bounded_limit],
+            )
 
     def issue_detail(self, repo: str, number: int) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -2014,6 +2080,164 @@ def _codex_prompts_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> lis
             }
         )
     return prompts
+
+
+def _live_timeline_events(
+    conn: sqlite3.Connection, attempt_id: int, after_id: int, limit: int
+) -> list[AttemptLiveEvent]:
+    rows = conn.execute(
+        """
+        SELECT id, phase, event_type, message, data_json, started_at, duration_ms
+        FROM worker_timeline_events
+        WHERE attempt_id = ? AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (attempt_id, after_id, limit),
+    )
+    events: list[AttemptLiveEvent] = []
+    for row in rows:
+        phase = str(row["phase"])
+        event_type = str(row["event_type"])
+        events.append(
+            AttemptLiveEvent(
+                source="timeline",
+                id=int(row["id"]),
+                event_type=event_type,
+                created_at=str(row["started_at"]),
+                title=f"{phase}/{event_type}",
+                message=str(row["message"] or ""),
+                payload={
+                    "phase": phase,
+                    "eventType": event_type,
+                    "message": str(row["message"] or ""),
+                    "durationMs": row["duration_ms"],
+                    "data": _json_object(row["data_json"]),
+                },
+            )
+        )
+    return events
+
+
+def _live_codex_events(
+    conn: sqlite3.Connection, attempt_id: int, after_id: int, limit: int
+) -> list[AttemptLiveEvent]:
+    rows = conn.execute(
+        """
+        SELECT id, thread_id, event_type, payload_json, created_at
+        FROM codex_events
+        WHERE attempt_id = ? AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (attempt_id, after_id, limit),
+    )
+    events: list[AttemptLiveEvent] = []
+    for row in rows:
+        event_type = str(row["event_type"])
+        payload = _json_object(row["payload_json"])
+        output_delta = _codex_output_delta(event_type, payload)
+        events.append(
+            AttemptLiveEvent(
+                source="codex",
+                id=int(row["id"]),
+                event_type=event_type,
+                created_at=str(row["created_at"]),
+                title=_codex_live_title(event_type),
+                message=_codex_live_message(event_type, payload, output_delta),
+                payload={
+                    "threadId": str(row["thread_id"]),
+                    "eventType": event_type,
+                    "payload": payload,
+                },
+                output_delta=output_delta,
+            )
+        )
+    return events
+
+
+def _live_error_events(
+    conn: sqlite3.Connection, attempt_id: int, after_id: int, limit: int
+) -> list[AttemptLiveEvent]:
+    rows = conn.execute(
+        """
+        SELECT id, phase, error_type, message, recoverable, log_excerpt, created_at
+        FROM worker_errors
+        WHERE attempt_id = ? AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (attempt_id, after_id, limit),
+    )
+    events: list[AttemptLiveEvent] = []
+    for row in rows:
+        phase = str(row["phase"])
+        error_type = str(row["error_type"])
+        events.append(
+            AttemptLiveEvent(
+                source="error",
+                id=int(row["id"]),
+                event_type=error_type,
+                created_at=str(row["created_at"]),
+                title=f"{phase}/{error_type}",
+                message=str(row["message"]),
+                payload={
+                    "phase": phase,
+                    "errorType": error_type,
+                    "message": str(row["message"]),
+                    "recoverable": bool(row["recoverable"]),
+                    "logExcerpt": str(row["log_excerpt"] or ""),
+                },
+            )
+        )
+    return events
+
+
+def _codex_live_title(event_type: str) -> str:
+    if event_type in CODEX_PROMPT_EVENT_TYPES:
+        return "Prompt sent"
+    if event_type == "thread/start":
+        return "Thread started"
+    if event_type == "thread/tokenUsage/updated":
+        return "Token usage updated"
+    if event_type in CODEX_AGENT_MESSAGE_DELTA_EVENT_TYPES:
+        return "Assistant output"
+    if event_type == "turn/completed":
+        return "Turn completed"
+    return event_type.replace("_", " ").replace("/", " / ")
+
+
+def _codex_live_message(event_type: str, payload: dict[str, Any], output_delta: str) -> str:
+    if output_delta:
+        return _clip_live_text(output_delta)
+    if event_type in CODEX_PROMPT_EVENT_TYPES:
+        prompt = _prompt_text_from_codex_payload(payload)
+        return _clip_live_text(prompt) if prompt else "Prompt sent to Codex."
+    if event_type == "thread/tokenUsage/updated":
+        usage = codex_token_usage_from_payload(payload)
+        if usage:
+            return f"{usage.total_tokens:,} tokens"
+    if event_type == "turn/completed":
+        return "Codex turn completed."
+    for key in ("message", "text", "title", "name", "status"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return _clip_live_text(value)
+    return ""
+
+
+def _codex_output_delta(event_type: str, payload: dict[str, Any]) -> str:
+    if event_type not in CODEX_AGENT_MESSAGE_DELTA_EVENT_TYPES:
+        return ""
+    value = payload.get("delta") or payload.get("text") or ""
+    return str(value)
+
+
+def _clip_live_text(value: str, *, limit: int = 220) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1]}..."
 
 
 def _codex_token_usage_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> CodexTokenUsage | None:

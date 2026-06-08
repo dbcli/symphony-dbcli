@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import anyio
@@ -31,7 +32,9 @@ from symphony_dbcli.web.app import create_app
 from symphony_dbcli.web.dependencies import (
     WebRuntime,
     _format_compact_localtime,
+    _format_compact_localtime_seconds,
     _format_localtime,
+    _format_relative_time,
     _format_tokens,
 )
 from symphony_dbcli.web.routers import attempts, work_items
@@ -157,10 +160,25 @@ def test_localtime_filter_formats_utc_timestamps_as_pacific_time() -> None:
 
 
 def test_compact_localtime_filter_formats_utc_timestamps_as_pacific_time() -> None:
-    assert _format_compact_localtime("2026-06-06T18:01:09+00:00") == "Jun 06 11:01:09 AM"
-    assert _format_compact_localtime("2026-01-25T12:00:00Z") == "Jan 25 4:00:00 AM"
+    assert _format_compact_localtime("2026-06-06T18:01:09+00:00") == "Jun 06, 11:01am"
+    assert _format_compact_localtime("2026-01-25T12:00:00Z") == "Jan 25, 4:00am"
     assert _format_compact_localtime("") == "-"
     assert _format_compact_localtime("not-a-date") == "not-a-date"
+
+
+def test_compact_localtime_seconds_filter_formats_utc_timestamps_as_pacific_time() -> None:
+    assert _format_compact_localtime_seconds("2026-06-06T18:01:09+00:00") == "Jun 06, 11:01:09am"
+    assert _format_compact_localtime_seconds("2026-01-25T12:00:00Z") == "Jan 25, 4:00:00am"
+    assert _format_compact_localtime_seconds("") == "-"
+    assert _format_compact_localtime_seconds("not-a-date") == "not-a-date"
+
+
+def test_relative_time_filter_formats_recent_timestamps() -> None:
+    assert _format_relative_time((datetime.now(UTC) - timedelta(hours=2, minutes=5)).isoformat()) == "~2h ago"
+    assert _format_relative_time((datetime.now(UTC) - timedelta(days=3, hours=2)).isoformat()) == "~3d ago"
+    assert _format_relative_time(datetime.now(UTC).isoformat()) == "just now"
+    assert _format_relative_time("") == "-"
+    assert _format_relative_time("not-a-date") == "not-a-date"
 
 
 def test_tokens_filter_formats_large_counts() -> None:
@@ -259,6 +277,51 @@ def test_fastapi_health_reports_runtime_context(tmp_path: Path) -> None:
     }
 
 
+def test_fastapi_attempt_events_stream_replays_live_events(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    store = _legacy_store(tmp_path)
+    _seed_legacy_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+    )
+    store.record_timeline_event(
+        attempt_id,
+        phase="codex",
+        event_type="started",
+        message="Started codex app-server",
+    )
+    store.record_codex_event(
+        attempt_id,
+        thread_id="thread-245",
+        event_type="agent/message/delta",
+        payload={"threadId": "thread-245", "delta": "Hello from Codex."},
+    )
+    store.record_error(
+        attempt_id,
+        phase="codex",
+        error_type="CodexRunnerError",
+        message="app-server failed",
+    )
+
+    response = client.get(f"/api/attempts/{attempt_id}/events?once=true")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: attempt" in response.text
+    assert '"status":"running"' in response.text
+    assert "event: timeline" in response.text
+    assert '"message":"Started codex app-server"' in response.text
+    assert "event: codex" in response.text
+    assert '"eventType":"agent/message/delta"' in response.text
+    assert '"outputDelta":"Hello from Codex."' in response.text
+    assert "event: error" in response.text
+    assert '"message":"app-server failed"' in response.text
+
+
 def test_fastapi_favicon_does_not_generate_console_noise(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
@@ -331,6 +394,9 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     assert "synced" in sources.text
     assert "Fix completion crash" in board.text
     assert "Improve docs" in board.text
+    assert "<time" in board.text
+    assert 'title="' in board.text
+    assert "just now" in board.text
     assert "#245" in board.text
     assert "#8" in board.text
     assert "data-source-item-id=" in board.text
@@ -627,16 +693,27 @@ def test_fastapi_work_item_detail_links_attempts(tmp_path: Path) -> None:
         run.attempt_id = attempt_id
         run.workflow_instance_id = workflow_instance_id
         run.status = "needs_review"
+        run.started_at = "2026-06-06T18:01:00Z"
+        run.completed_at = "2026-06-06T18:02:00Z"
         session.commit()
 
     detail = client.get("/work-items/1")
 
     assert detail.status_code == 200
+    assert '<nav class="breadcrumbs" aria-label="Breadcrumb">' in detail.text
+    assert f'href="/board/source/{source_id}">Board</a>' in detail.text
+    assert '<span aria-current="page">Work Item #1</span>' in detail.text
     assert "Runs / Attempts" in detail.text
     assert "<th>Run</th>" not in detail.text
     assert f'href="/attempts/{attempt_id}"' in detail.text
     assert f"Attempt #{attempt_id}" in detail.text
     assert "needs_review" in detail.text
+    assert (
+        '<time datetime="2026-06-06T18:01:00Z" title="2026-06-06 11:01:00 AM PDT">Jun 06, 11:01am</time>'
+    ) in detail.text
+    assert (
+        '<time datetime="2026-06-06T18:02:00Z" title="2026-06-06 11:02:00 AM PDT">Jun 06, 11:02am</time>'
+    ) in detail.text
 
 
 def test_fastapi_work_item_detail_includes_related_attempts_without_runs(tmp_path: Path) -> None:
@@ -682,6 +759,117 @@ def test_fastapi_work_item_detail_includes_related_attempts_without_runs(tmp_pat
     assert f"Attempt #{legacy_attempt_id}" in detail.text
     assert "<th>Run</th>" not in detail.text
     assert "no run" not in detail.text
+
+
+def test_fastapi_attempt_page_queues_codex_adjustment(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient(), runtime=runtime)
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="code")
+    store = Store(str(tmp_path / "symphony.db"))
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=245,
+            title="Fix completion crash",
+            url="https://github.com/dbcli/litecli/issues/245",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        work_item_id=1,
+        work_item_run_id=1,
+        status="review",
+    )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        result_type="code_changes",
+        title="Code Changes",
+        body="Changed the parser.",
+    )
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        run = session.get(WorkItemRun, 1)
+        assert run is not None
+        run.attempt_id = attempt_id
+        run.status = "needs_review"
+        session.commit()
+
+    detail = client.get(f"/attempts/{attempt_id}")
+    form = client.get(f"/attempts/{attempt_id}/adjustment-form?return_to=/attempts/{attempt_id}")
+    response = client.post(
+        f"/attempts/{attempt_id}/adjustment",
+        data={
+            "note": "Tighten the validation edge case.",
+            "return_to": f"/attempts/{attempt_id}",
+        },
+        follow_redirects=False,
+    )
+    _, runs = _work_item_events_and_runs(tmp_path)
+    work_item = _work_item(tmp_path, 1)
+
+    assert detail.status_code == 200
+    assert "Request Adjustment" in detail.text
+    assert '<nav class="breadcrumbs" aria-label="Breadcrumb">' in detail.text
+    assert f'href="/board/source/{source_id}">Board</a>' in detail.text
+    assert 'href="/work-items/1">Work Item #1</a>' in detail.text
+    assert f'<span aria-current="page">Attempt {attempt_id}</span>' in detail.text
+    assert form.status_code == 200
+    assert "Queue Adjustment" in form.text
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/attempts/{attempt_id}"
+    assert runtime.triggers == ["attempt_adjustment"]
+    assert work_item.state == "in_progress"
+    assert runs[-1].trigger == "adjustment"
+    assert runs[-1].source_attempt_id == attempt_id
+    assert runs[-1].status == "queued"
+    assert "Tighten the validation edge case." in runs[-1].user_hint
+    assert json.loads(runs[-1].reasons_json) == ["revise_implementation"]
+
+
+def test_fastapi_attempt_page_allows_adjustment_for_research_attempt(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
+    _activate_source_item(client, source_item_id, task_type="research")
+    store = Store(str(tmp_path / "symphony.db"))
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=245,
+            title="Fix completion crash",
+            url="https://github.com/dbcli/litecli/issues/245",
+            state="open",
+            labels=[],
+            task_type="research",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+        work_item_id=1,
+        work_item_run_id=1,
+        status="review",
+    )
+
+    detail = client.get(f"/attempts/{attempt_id}")
+
+    assert detail.status_code == 200
+    assert "Request Adjustment" in detail.text
+    assert f'hx-get="/attempts/{attempt_id}/adjustment-form?return_to=/attempts/{attempt_id}"' in detail.text
 
 
 def test_fastapi_operations_page_lists_operation_runs(tmp_path: Path) -> None:
@@ -1207,6 +1395,12 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
         event_type="completed",
         message="Finished codex exec",
     )
+    store.record_timeline_event(
+        attempt_id,
+        phase="github",
+        event_type="pull_request_created",
+        message="https://github.com/dbcli/litecli/pull/258",
+    )
     with store.connect() as conn:
         conn.execute(
             "UPDATE worker_timeline_events SET started_at = ? WHERE id = ?",
@@ -1267,21 +1461,44 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
         state="open",
     )
     gate_id = _open_attempt_gate(store, attempt_id, transition_name="post_answer", gate="review_answer")
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE pull_requests SET created_at = ? WHERE attempt_id = ?",
+            ("2026-01-25T12:02:00Z", attempt_id),
+        )
+        conn.execute(
+            "UPDATE workflow_gates SET created_at = ? WHERE id = ?",
+            ("2026-01-25T12:03:00Z", gate_id),
+        )
 
     attempt = client.get(f"/attempts/{attempt_id}")
     issue = client.get("/issues/dbcli/litecli/245")
 
     assert attempt.status_code == 200
     assert "Worker Result" in attempt.text
+    assert "Live Codex Session" in attempt.text
+    assert f'data-live-events-url="/api/attempts/{attempt_id}/events"' in attempt.text
+    assert 'data-live-output-mode="rendered" aria-pressed="true"' in attempt.text
+    assert 'data-live-output-mode="raw" aria-pressed="false"' in attempt.text
+    assert "data-live-codex-raw" in attempt.text
+    assert "No streamed Codex output yet." in attempt.text
     assert attempt.text.index("Timeline") < attempt.text.index("Pending Workflow Gates")
     assert (
-        '<time datetime="2026-01-25T12:00:00Z" title="2026-01-25 4:00:00 AM PST">Jan 25 4:00:00 AM</time>'
+        '<time datetime="2026-01-25T12:00:00Z" title="2026-01-25 4:00:00 AM PST">Jan 25, 4:00:00am</time>'
     ) in attempt.text
     assert "Pending Workflow Gates" in attempt.text
     assert "post_answer" in attempt.text
     assert "42.5K tokens" in attempt.text
     assert "PR #257" in attempt.text
     assert 'class="metric-link" href="https://github.com/dbcli/litecli/pull/257"' in attempt.text
+    assert (
+        '<time datetime="2026-01-25T12:02:00Z" title="2026-01-25 4:02:00 AM PST">Jan 25, 4:02am</time>'
+    ) in attempt.text
+    assert (
+        '<time datetime="2026-01-25T12:03:00Z" title="2026-01-25 4:03:00 AM PST">Jan 25, 4:03am</time>'
+    ) in attempt.text
+    assert 'href="https://github.com/dbcli/litecli/pull/258"' in attempt.text
+    assert 'target="_blank" rel="noreferrer">https://github.com/dbcli/litecli/pull/258</a>' in attempt.text
     assert f'aria-controls="timeline-detail-{timeline_id}"' in attempt.text
     assert f'id="timeline-detail-{timeline_id}"' in attempt.text
     assert 'data-timeline-detail="codex-started" hidden' in attempt.text
@@ -1294,6 +1511,9 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     assert "Finished codex exec" in attempt.text
     assert '<section class="panel accordion-panel" data-collapsible="codex-prompts">' not in attempt.text
     assert '<div class="panel accordion-panel" data-collapsible="worker-result">' not in attempt.text
+    assert 'class="timeline-toggle-row"' in attempt.text
+    assert 'role="button"' in attempt.text
+    assert 'tabindex="0"' in attempt.text
     assert 'class="timeline-toggle"' in attempt.text
     assert 'aria-expanded="false"' in attempt.text
     assert "Draft a reply for issue 245." in attempt.text

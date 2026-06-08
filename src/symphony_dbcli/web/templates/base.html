@@ -31,6 +31,21 @@
     </div>
   </header>
   <main id="dashboard-main" class="app-shell">
+    {% if breadcrumbs %}
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        {% for crumb in breadcrumbs %}
+        <li>
+          {% if crumb.href and not loop.last %}
+          <a href="{{ crumb.href }}">{{ crumb.label }}</a>
+          {% else %}
+          <span aria-current="page">{{ crumb.label }}</span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ol>
+    </nav>
+    {% endif %}
     <div class="page-title">
       <h1>{{ title }}</h1>
       {% block page_actions %}{% endblock %}

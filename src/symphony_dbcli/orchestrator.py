@@ -33,7 +33,7 @@ from .primitive_executor import (
     PrimitiveExecutor,
     WorkflowPrimitiveExecutor,
 )
-from .store import IssueSnapshot, Store
+from .store import ATTEMPT_ADJUSTMENT_RELATIONSHIP, IssueSnapshot, Store
 from .work_items import WorkItemRepository, WorkItemRunClaim
 from .worker_prompt import build_worker_prompt as build_worker_prompt
 from .workflow_definition import WorkflowTransitionConfig
@@ -418,6 +418,20 @@ class Orchestrator:
             assigned.workflow_artifacts(),
             workflow_version_id=self.workflow_version_id,
         )
+        if run.source_attempt_id is not None:
+            self.store.record_attempt_link(
+                source_attempt_id=run.source_attempt_id,
+                target_attempt_id=attempt_id,
+                relationship=ATTEMPT_ADJUSTMENT_RELATIONSHIP,
+                metadata={"work_item_run_id": run.id},
+            )
+            self.store.record_timeline_event(
+                attempt_id,
+                phase="queue",
+                event_type="created_from_adjustment",
+                message=f"attempt {run.source_attempt_id}",
+                data={"source_attempt_id": run.source_attempt_id, "work_item_run_id": run.id},
+            )
         return attempt_id
 
     def run_issue(self, repo: str, issue_number: int, *, task_type: str | None = None) -> int:

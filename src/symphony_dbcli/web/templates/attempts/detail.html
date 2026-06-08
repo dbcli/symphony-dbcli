@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_draft_replies.html" import draft_replies %}
+{% from "_time.html" import compact_time %}
 {% block body %}
 {% if not detail %}
 <section class="panel empty-state">Attempt not found.</section>
@@ -26,6 +27,59 @@
   </div>
 </section>
 
+{% if can_request_adjustment %}
+<section class="panel flow-panel">
+  <div class="section-heading">
+    <h2>Actions</h2>
+  </div>
+  <div class="form-actions">
+    <button
+      type="button"
+      hx-get="/attempts/{{ detail.attempt.id }}/adjustment-form?return_to=/attempts/{{ detail.attempt.id }}"
+      hx-target="#modal-root"
+      hx-swap="innerHTML"
+    >
+      Request Adjustment
+    </button>
+    <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
+  </div>
+</section>
+{% endif %}
+
+<section
+  class="panel live-codex-panel"
+  data-live-attempt-id="{{ detail.attempt.id }}"
+  data-live-events-url="/api/attempts/{{ detail.attempt.id }}/events"
+>
+  <div class="section-heading">
+    <h2>Live Codex Session</h2>
+    <span class="status-pill" data-live-status>{{ detail.attempt.status }}</span>
+  </div>
+  <div class="live-codex-grid">
+    <div class="live-codex-output">
+      <div class="live-codex-label">
+        <span>Output</span>
+        <div class="live-output-mode" role="group" aria-label="Output format">
+          <button type="button" data-live-output-mode="rendered" aria-pressed="true">Rendered</button>
+          <button type="button" data-live-output-mode="raw" aria-pressed="false">Raw</button>
+        </div>
+      </div>
+      <div class="live-codex-transcript markdown-body" data-live-codex-transcript></div>
+      <pre class="live-codex-transcript live-codex-raw" data-live-codex-raw hidden></pre>
+      <div class="empty-state" data-live-output-empty>No streamed Codex output yet.</div>
+    </div>
+    <div class="live-codex-events">
+      <div class="live-codex-label">
+        <span>Events</span>
+        <span class="muted"><span data-live-event-count>0</span></span>
+      </div>
+      <ol class="live-event-list" data-live-event-list aria-live="polite">
+        <li class="empty-state" data-live-event-empty>No live events yet.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
 <section class="panel">
   <div class="section-heading">
     <h2>Timeline</h2>
@@ -39,22 +93,28 @@
         {% for row in detail.timeline %}
         {% set is_codex_started = row.phase == "codex" and row.event_type == "started" %}
         {% set is_codex_completed = row.phase == "codex" and row.event_type == "completed" %}
-        <tr>
-          <td><time datetime="{{ row.started_at }}" title="{{ row.started_at|localtime }}">{{ row.started_at|compact_localtime }}</time></td>
+        {% set timeline_message = row.message|string %}
+        <tr
+          {% if is_codex_started or is_codex_completed %}
+          class="timeline-toggle-row"
+          role="button"
+          tabindex="0"
+          aria-expanded="false"
+          aria-controls="timeline-detail-{{ row.id }}"
+          data-accordion-toggle
+          {% endif %}
+        >
+          <td>{{ compact_time(row.started_at, seconds=True) }}</td>
           <td>{{ row.phase }}</td>
           <td>{{ row.event_type }}</td>
           <td>
             {% if is_codex_started or is_codex_completed %}
-            <button
-              class="timeline-toggle"
-              type="button"
-              aria-expanded="false"
-              aria-controls="timeline-detail-{{ row.id }}"
-              data-accordion-toggle
-            >
+            <span class="timeline-toggle">
               <span class="accordion-chevron" aria-hidden="true"></span>
               <span>{{ row.message }}</span>
-            </button>
+            </span>
+            {% elif timeline_message.startswith("http://") or timeline_message.startswith("https://") %}
+            <a href="{{ timeline_message }}" target="_blank" rel="noreferrer">{{ timeline_message }}</a>
             {% else %}
             {{ row.message }}
             {% endif %}
@@ -72,7 +132,7 @@
                 <article class="gate-card">
                   <div class="draft-meta">
                     <strong>Prompt {{ loop.index }}</strong>
-                    <span>{{ prompt.created_at|localtime }}</span>
+                    <span>{{ compact_time(prompt.created_at) }}</span>
                     <span>{{ prompt.event_type }}</span>
                     {% if prompt.model %}<span>{{ prompt.model }}</span>{% endif %}
                     {% if prompt.approval_policy %}<span>approval: {{ prompt.approval_policy }}</span>{% endif %}
@@ -97,7 +157,7 @@
               <div class="draft-meta">
                 <strong>{{ detail.result.title }}</strong>
                 <span>{{ detail.result.result_type|replace("_", " ") }}</span>
-                <span>{{ detail.result.updated_at|localtime }}</span>
+                <span>{{ compact_time(detail.result.updated_at) }}</span>
                 <span class="status-pill is-ok">{{ detail.result.status }}</span>
               </div>
               {% if detail.result.body %}
@@ -147,7 +207,7 @@
       <div class="draft-meta">
         <strong>{{ gate.transition_name }}</strong>
         <span>{{ gate.gate }}</span>
-        <span>{{ gate.created_at|localtime }}</span>
+        <span>{{ compact_time(gate.created_at) }}</span>
       </div>
       {% if gate.transition_name == "create_draft_pr" %}
       <p>Create a draft pull request from the reviewed worker result and workspace.</p>
@@ -224,18 +284,18 @@
           <td>{{ row.title }}</td>
           <td>
             {{ row.state or "unknown" }}
-            {% if row.merged_at %}<div class="muted">merged {{ row.merged_at|localtime }}</div>{% endif %}
+            {% if row.merged_at %}<div class="muted">merged {{ compact_time(row.merged_at) }}</div>{% endif %}
           </td>
           <td>
             {% if row.worktree_cleaned_at %}
-            cleaned {{ row.worktree_cleaned_at|localtime }}
+            cleaned {{ compact_time(row.worktree_cleaned_at) }}
             {% elif row.cleanup_error %}
             <span class="form-error">{{ row.cleanup_error }}</span>
             {% else %}
             pending merge
             {% endif %}
           </td>
-          <td>{{ row.created_at|localtime }}</td>
+          <td>{{ compact_time(row.created_at) }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -266,7 +326,7 @@
       Attempt {{ detail.source_result.source_attempt_id }}
     </a></strong>
     <span>{{ detail.source_result.result_type|replace("_", " ") }}</span>
-    <span>{{ detail.source_result.result_updated_at|localtime }}</span>
+    <span>{{ compact_time(detail.source_result.result_updated_at) }}</span>
   </div>
   <pre class="result-body">{{ detail.source_result.body }}</pre>
 </section>
@@ -288,7 +348,7 @@
           <td>{{ row.relationship|replace("_", " ") }}</td>
           <td>{{ row.status }}</td>
           <td>{{ row.task_type }}</td>
-          <td>{{ row.linked_at|localtime }}</td>
+          <td>{{ compact_time(row.linked_at) }}</td>
         </tr>
         {% endfor %}
       </tbody>

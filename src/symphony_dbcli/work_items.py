@@ -61,6 +61,13 @@ class WorkItemMove:
 
 
 @dataclass(frozen=True)
+class WorkItemAdjustment:
+    work_item_id: int
+    source_attempt_id: int
+    note: str
+
+
+@dataclass(frozen=True)
 class WorkItemView:
     id: int
     source_id: int
@@ -117,6 +124,7 @@ class WorkItemRunView:
     id: int | None
     attempt_id: int | None
     workflow_instance_id: int | None
+    source_attempt_id: int | None
     task_type: str
     trigger: str
     status: str
@@ -132,6 +140,7 @@ class WorkItemRunView:
 class WorkItemRunClaim:
     id: int
     work_item_id: int
+    source_attempt_id: int | None
     source_id: int
     repo: str
     task_type: str
@@ -820,6 +829,55 @@ class WorkItemRepository:
             session.refresh(work_item)
             return _work_item_view(work_item, source_item)
 
+    def request_adjustment(self, adjustment: WorkItemAdjustment) -> WorkItemView:
+        note = adjustment.note.strip()
+        if not note:
+            raise WorkItemError("Adjustment instructions are required.")
+        now = utc_now()
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItem, SourceItem)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .where(WorkItem.id == adjustment.work_item_id)
+            ).one_or_none()
+            if row is None:
+                raise WorkItemError("Work item not found.")
+            work_item, source_item = row
+            if work_item.disposition != "active":
+                raise WorkItemError("Archived work items cannot be adjusted.")
+            previous_state = work_item.state
+            work_item.state = "in_progress"
+            work_item.updated_at = now
+            if previous_state != "in_progress":
+                session.add(
+                    WorkItemStateEvent(
+                        work_item_id=work_item.id,
+                        from_state=previous_state,
+                        to_state="in_progress",
+                        reasons_json=reasons_json(["revise_implementation"]),
+                        note=note,
+                        created_at=now,
+                    )
+                )
+            session.add(
+                WorkItemRun(
+                    work_item_id=work_item.id,
+                    source_attempt_id=adjustment.source_attempt_id,
+                    task_type=work_item.task_type,
+                    trigger="adjustment",
+                    status="queued",
+                    reasons_json=reasons_json(["revise_implementation"]),
+                    user_hint=_adjustment_user_hint(adjustment.source_attempt_id, note),
+                    started_at=None,
+                    completed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+            session.refresh(work_item)
+            return _work_item_view(work_item, source_item)
+
 
 def _validated_task_type(task_type: str) -> str:
     if task_type not in TASK_TYPES:
@@ -844,6 +902,14 @@ def _move_run_user_hint(previous_state: str, note: str, existing_hint: str) -> s
     if previous_state == "in_review":
         return note
     return note or existing_hint
+
+
+def _adjustment_user_hint(source_attempt_id: int, note: str) -> str:
+    return f"""\
+Follow-up adjustment for attempt #{source_attempt_id}.
+Keep the change focused on this request:
+{note.strip()}
+"""
 
 
 def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemView:
@@ -895,6 +961,7 @@ def _work_item_run_claim(
     return WorkItemRunClaim(
         id=run.id,
         work_item_id=work_item.id,
+        source_attempt_id=run.source_attempt_id,
         source_id=work_item.source_id,
         repo=source.repo,
         task_type=run.task_type,
@@ -917,6 +984,7 @@ def _work_item_run_view(run: WorkItemRun) -> WorkItemRunView:
         id=run.id,
         attempt_id=run.attempt_id,
         workflow_instance_id=run.workflow_instance_id,
+        source_attempt_id=run.source_attempt_id,
         task_type=run.task_type,
         trigger=run.trigger,
         status=run.status,
@@ -934,6 +1002,7 @@ def _work_item_attempt_view(row: RowMapping) -> WorkItemRunView:
         id=None,
         attempt_id=int(row["attempt_id"]),
         workflow_instance_id=_optional_int(row["workflow_instance_id"]),
+        source_attempt_id=None,
         task_type=str(row["task_type"]),
         trigger=str(row["trigger"]),
         status=str(row["status"]),

@@ -57,6 +57,7 @@ _SQLITE_COLUMN_REPAIRS = (
     SQLiteColumnRepair("work_items", "disposition_at", "disposition_at VARCHAR(32)"),
     SQLiteColumnRepair("work_item_runs", "attempt_id", "attempt_id INTEGER"),
     SQLiteColumnRepair("work_item_runs", "workflow_instance_id", "workflow_instance_id INTEGER"),
+    SQLiteColumnRepair("work_item_runs", "source_attempt_id", "source_attempt_id INTEGER"),
 )
 
 
@@ -214,6 +215,7 @@ class WorkItemRun(Base):
     work_item_id: Mapped[int] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), nullable=False)
     attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     workflow_instance_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     task_type: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

@@ -45,38 +45,83 @@ def _format_tokens(value: object) -> str:
     return f"{tokens / 1_000_000:.1f}M".replace(".0M", "M")
 
 
-def _format_localtime(value: object) -> str:
+def _timestamp_text(value: object) -> str | None:
     if value is None:
-        return "-"
+        return None
     raw_value = str(value).strip()
     if not raw_value:
-        return "-"
+        return None
+    return raw_value
+
+
+def _parse_timestamp(raw_value: str) -> datetime | None:
     try:
         timestamp = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
     except ValueError:
-        return raw_value
+        return None
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp
+
+
+def _format_localtime(value: object) -> str:
+    raw_value = _timestamp_text(value)
+    if raw_value is None:
+        return "-"
+    timestamp = _parse_timestamp(raw_value)
+    if timestamp is None:
+        return raw_value
     local_time = timestamp.astimezone(PACIFIC_TIME)
     hour = local_time.strftime("%I").lstrip("0") or "0"
     return f"{local_time:%Y-%m-%d} {hour}:{local_time:%M:%S} {local_time:%p} {local_time:%Z}"
 
 
 def _format_compact_localtime(value: object) -> str:
-    if value is None:
+    return _format_compact_localtime_value(value, include_seconds=False)
+
+
+def _format_compact_localtime_seconds(value: object) -> str:
+    return _format_compact_localtime_value(value, include_seconds=True)
+
+
+def _format_compact_localtime_value(value: object, *, include_seconds: bool) -> str:
+    raw_value = _timestamp_text(value)
+    if raw_value is None:
         return "-"
-    raw_value = str(value).strip()
-    if not raw_value:
-        return "-"
-    try:
-        timestamp = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
-    except ValueError:
+    timestamp = _parse_timestamp(raw_value)
+    if timestamp is None:
         return raw_value
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=UTC)
     local_time = timestamp.astimezone(PACIFIC_TIME)
     hour = local_time.strftime("%I").lstrip("0") or "0"
-    return f"{local_time:%b %d} {hour}:{local_time:%M:%S} {local_time:%p}"
+    meridiem = local_time.strftime("%p").lower()
+    if include_seconds:
+        return f"{local_time:%b %d}, {hour}:{local_time:%M}:{local_time:%S}{meridiem}"
+    return f"{local_time:%b %d}, {hour}:{local_time:%M}{meridiem}"
+
+
+def _format_relative_time(value: object) -> str:
+    raw_value = _timestamp_text(value)
+    if raw_value is None:
+        return "-"
+    timestamp = _parse_timestamp(raw_value)
+    if timestamp is None:
+        return raw_value
+
+    seconds = int((datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds())
+    if seconds < 60:
+        return "just now"
+
+    units = (
+        (365 * 24 * 60 * 60, "y"),
+        (30 * 24 * 60 * 60, "mo"),
+        (24 * 60 * 60, "d"),
+        (60 * 60, "h"),
+        (60, "m"),
+    )
+    for unit_seconds, suffix in units:
+        if seconds >= unit_seconds:
+            return f"~{max(1, seconds // unit_seconds)}{suffix} ago"
+    return "just now"
 
 
 def _numbered_lines(value: object) -> list[dict[str, object]]:
@@ -90,6 +135,8 @@ templates.env.filters["ms"] = _format_ms
 templates.env.filters["tokens"] = _format_tokens
 templates.env.filters["localtime"] = _format_localtime
 templates.env.filters["compact_localtime"] = _format_compact_localtime
+templates.env.filters["compact_localtime_seconds"] = _format_compact_localtime_seconds
+templates.env.filters["relative_time"] = _format_relative_time
 templates.env.filters["numbered_lines"] = _numbered_lines
 
 
@@ -131,6 +178,12 @@ class NavItem:
     href: str
 
 
+@dataclass(frozen=True)
+class BreadcrumbItem:
+    label: str
+    href: str = ""
+
+
 NAV_ITEMS = (
     NavItem("board", "Board", "/board"),
     NavItem("sources", "Sources", "/sources"),
@@ -162,7 +215,18 @@ def page_context(request: Request, *, title: str, active: str) -> dict[str, obje
         "title": title,
         "active": active,
         "nav_items": NAV_ITEMS,
+        "breadcrumbs": _default_breadcrumbs(title, active),
         "runtime": RuntimeConfigView.from_config(state.config),
         "workflow_path": state.workflow_path,
         "static_version": _static_version(),
     }
+
+
+def _default_breadcrumbs(title: str, active: str) -> list[BreadcrumbItem]:
+    section = next((item for item in NAV_ITEMS if item.key == active), None)
+    if section is None or section.label == title:
+        return []
+    return [
+        BreadcrumbItem(section.label, section.href),
+        BreadcrumbItem(title),
+    ]
