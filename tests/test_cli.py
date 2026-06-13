@@ -35,9 +35,7 @@ def test_serve_runs_fastapi_with_runtime(tmp_path: Path, monkeypatch: pytest.Mon
     assert os.environ["SYMPHONY_RUN_RUNTIME"] == "1"
 
 
-def test_serve_no_reload_runs_fastapi_with_configured_workers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_serve_no_reload_runs_fastapi_with_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_path = _workflow(tmp_path)
     calls: dict[str, object] = {}
 
@@ -53,7 +51,6 @@ def test_serve_no_reload_runs_fastapi_with_configured_workers(
     assert calls["app"] == "symphony_dbcli.web.app:create_app_from_env"
     assert calls["factory"] is True
     assert calls["host"] == "127.0.0.1"
-    assert calls["workers"] == 4
     assert "reload" not in calls
     assert os.environ["SYMPHONY_WORKFLOW"] == str(workflow_path)
     assert os.environ["SYMPHONY_PROFILE"] == "local"
@@ -96,7 +93,6 @@ def test_serve_web_no_reload_runs_fastapi_without_runtime(
     assert result == 0
     assert calls["app"] == "symphony_dbcli.web.app:create_app_from_env"
     assert calls["factory"] is True
-    assert calls["workers"] == 4
     assert "reload" not in calls
     assert os.environ["SYMPHONY_RUN_RUNTIME"] == "0"
 

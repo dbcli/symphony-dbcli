@@ -447,9 +447,15 @@ def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
             factory=True,
             host=config.dashboard.host,
             port=config.dashboard.port,
-            workers=config.dashboard.uvicorn_workers,
+            workers=_uvicorn_worker_count(config),
         )
     return 0
+
+
+def _uvicorn_worker_count(config: WorkflowConfig) -> int:
+    if config.profile.active == "local":
+        return 1
+    return config.dashboard.uvicorn_workers
 
 
 def _set_fastapi_factory_env(workflow_path: str, profile: str, *, run_runtime: bool) -> None:
