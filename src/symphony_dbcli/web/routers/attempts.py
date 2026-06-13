@@ -22,6 +22,7 @@ from symphony_dbcli.web.dependencies import (
     templates,
     work_item_repository,
 )
+from symphony_dbcli.web.result_formatting import FormattedResult, format_result_body
 from symphony_dbcli.work_items import WorkItemAdjustment, WorkItemError
 
 router = APIRouter(tags=["attempts"])
@@ -38,6 +39,16 @@ class WorkspaceDiffView:
     text: str
     error: str = ""
     truncated: bool = False
+
+
+@dataclass(frozen=True)
+class AttemptResultView:
+    title: str
+    body: str
+    result_type: str
+    status: str
+    updated_at: str
+    formatted: FormattedResult
 
 
 @router.get("/attempts/{attempt_id}")
@@ -241,6 +252,7 @@ def _attempt_context(request: Request, attempt_id: int) -> dict[str, object]:
     context["running_create_draft_pr_gate"] = (
         state.store.running_workflow_gate_for_attempt(attempt_id, "create_draft_pr") if detail else None
     )
+    context["attempt_result"] = _attempt_result(detail)
     context["workspace_diff"] = _attempt_workspace_diff(detail)
     context["post_answer_gate"] = gate_transitions.get("post_answer")
     context["return_to"] = f"/attempts/{attempt_id}"
@@ -248,6 +260,46 @@ def _attempt_context(request: Request, attempt_id: int) -> dict[str, object]:
     context["retryable_failed_workflow_actions"] = _retryable_failed_workflow_actions(state, detail)
     context["breadcrumbs"] = _attempt_breadcrumbs(request, detail, attempt_id)
     return context
+
+
+def _attempt_result(detail: dict[str, Any] | None) -> AttemptResultView | None:
+    if not detail:
+        return None
+    attempt = detail["attempt"]
+    result = detail.get("result")
+    if result is not None:
+        body = str(result["body"] or "").strip() or "The worker completed without a final message."
+        return AttemptResultView(
+            title=str(result["title"] or "Worker result"),
+            body=body,
+            result_type=str(result["result_type"] or "worker_result"),
+            status=str(result["status"] or attempt["status"]),
+            updated_at=str(result["updated_at"] or attempt["updated_at"]),
+            formatted=format_result_body(body),
+        )
+    attempt_status = str(attempt["status"])
+    if attempt_status in {"queued", "running"}:
+        return None
+    body = str(attempt["outcome"] or "").strip()
+    if not body:
+        errors = detail.get("errors") or []
+        latest_error = errors[-1] if errors else None
+        if latest_error is not None:
+            message = str(latest_error["message"] or "").strip()
+            log_excerpt = str(latest_error["log_excerpt"] or "").strip()
+            body = message if message else f"The worker finished with status {attempt_status}."
+            if log_excerpt:
+                body = f"{body}\n\n{log_excerpt}"
+        else:
+            body = f"The worker finished with status {attempt_status}."
+    return AttemptResultView(
+        title="Worker outcome",
+        body=body,
+        result_type="worker_outcome",
+        status=attempt_status,
+        updated_at=str(attempt["updated_at"]),
+        formatted=format_result_body(body),
+    )
 
 
 def _retryable_failed_workflow_actions(

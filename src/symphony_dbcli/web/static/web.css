@@ -708,9 +708,18 @@ h2 {
   background: var(--accent-soft);
 }
 
+.chat-message.is-system {
+  background: var(--surface);
+}
+
 .chat-message.is-final {
   border-color: rgb(38 130 82 / 28%);
   background: rgb(38 130 82 / 7%);
+}
+
+.chat-message.is-error {
+  border-color: rgb(185 74 72 / 35%);
+  background: rgb(185 74 72 / 7%);
 }
 
 .chat-message.is-pending {
@@ -834,6 +843,68 @@ h2 {
 .chat-run-updates li {
   padding-left: 2px;
   line-height: 1.45;
+}
+
+.attempt-thread {
+  justify-items: start;
+}
+
+.attempt-thread .chat-message {
+  width: min(100%, 920px);
+}
+
+.attempt-thread .chat-message.is-user {
+  justify-self: end;
+}
+
+.attempt-live-message {
+  max-width: min(100%, 920px);
+}
+
+.attempt-message-details {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.attempt-message-details summary {
+  width: max-content;
+  max-width: 100%;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attempt-message-details[open] summary {
+  margin-bottom: 8px;
+}
+
+.compact-settings-list {
+  margin: 0;
+}
+
+.attempt-action-row,
+.attempt-action-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.attempt-action-item {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.attempt-action-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.attempt-action-item p {
+  margin: 0;
 }
 
 .form-section-title {

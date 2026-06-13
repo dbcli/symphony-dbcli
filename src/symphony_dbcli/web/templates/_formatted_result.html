@@ -1,0 +1,41 @@
+{% macro formatted_result(formatted, empty_message="The worker completed without a final message.") %}
+{% if formatted.updates %}
+<details class="chat-run-updates">
+  <summary>
+    <span>Run updates</span>
+    <span>{{ formatted.updates|length }}</span>
+  </summary>
+  <ol>
+    {% for update in formatted.updates %}
+    <li>{{ update|inline_markdown }}</li>
+    {% endfor %}
+  </ol>
+</details>
+{% endif %}
+{% if formatted.sections %}
+<div class="chat-result-sections">
+  {% for section in formatted.sections %}
+  <section class="chat-result-section is-{{ section.kind }}">
+    <div class="chat-result-section-title">
+      {% if section.kind == "summary" %}<span>Final result</span>{% endif %}
+      <strong>{{ section.title }}</strong>
+    </div>
+    {% for paragraph in section.paragraphs %}
+    <p>{{ paragraph|inline_markdown }}</p>
+    {% endfor %}
+    {% if section.bullets %}
+    <ul>
+      {% for item in section.bullets %}
+      <li>{{ item|inline_markdown }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<div class="chat-result-section is-section">
+  <p>{{ empty_message }}</p>
+</div>
+{% endif %}
+{% endmacro %}

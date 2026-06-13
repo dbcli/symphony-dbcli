@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_draft_replies.html" import draft_replies %}
+{% from "_formatted_result.html" import formatted_result %}
 {% from "_time.html" import compact_time %}
 {% block body %}
 {% if not detail %}
@@ -27,344 +28,350 @@
   </div>
 </section>
 
-{% if can_request_adjustment or retryable_failed_workflow_actions %}
-<section class="panel flow-panel">
-  <div class="section-heading">
-    <h2>Actions</h2>
-  </div>
-  <div class="form-actions">
-    {% for action in retryable_failed_workflow_actions %}
-    <form action="/workflow-actions/{{ action.id }}/retry" method="post" class="inline-form">
-      <input type="hidden" name="return_to" value="{{ return_to }}" />
-      <button type="submit">Retry {{ action.transition_name }}</button>
-      <span class="muted">failed retry {{ action.retry_count }}{% if action.completed_at %} · {{ compact_time(action.completed_at) }}{% endif %}</span>
-    </form>
-    {% endfor %}
-    {% if can_request_adjustment %}
-    <button
-      type="button"
-      hx-get="/attempts/{{ detail.attempt.id }}/adjustment-form?return_to=/attempts/{{ detail.attempt.id }}"
-      hx-target="#modal-root"
-      hx-swap="innerHTML"
-    >
-      Request Adjustment
-    </button>
-    <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
-    {% endif %}
-  </div>
-</section>
-{% endif %}
-
-<section
-  class="panel live-codex-panel"
-  data-live-attempt-id="{{ detail.attempt.id }}"
-  data-live-events-url="/api/attempts/{{ detail.attempt.id }}/events"
->
-  <div class="section-heading">
-    <h2>Live Codex Session</h2>
-    <span class="status-pill" data-live-status>{{ detail.attempt.status }}</span>
-  </div>
-  <div class="live-codex-grid">
-    <div class="live-codex-output">
-      <div class="live-codex-label">
-        <span>Output</span>
-        <div class="live-output-mode" role="group" aria-label="Output format">
-          <button type="button" data-live-output-mode="rendered" aria-pressed="true">Rendered</button>
-          <button type="button" data-live-output-mode="raw" aria-pressed="false">Raw</button>
-        </div>
-      </div>
-      <div class="live-codex-transcript markdown-body" data-live-codex-transcript></div>
-      <pre class="live-codex-transcript live-codex-raw" data-live-codex-raw hidden></pre>
-      <div class="empty-state" data-live-output-empty>No streamed Codex output yet.</div>
+<section class="panel chat-thread attempt-thread" aria-label="Attempt conversation">
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>System</strong>
+      <span>{{ compact_time(detail.attempt.created_at, seconds=True) }}</span>
     </div>
-    <div class="live-codex-events">
-      <div class="live-codex-label">
-        <span>Events</span>
-        <span class="muted"><span data-live-event-count>0</span></span>
-      </div>
-      <ol class="live-event-list" data-live-event-list aria-live="polite">
-        <li class="empty-state" data-live-event-empty>No live events yet.</li>
-      </ol>
+    <div class="chat-result-meta">
+      <strong>Attempt #{{ detail.attempt.id }}</strong>
+      <span>{{ detail.attempt.task_type }}</span>
+      <span class="status-pill">{{ detail.attempt.status }}</span>
     </div>
-  </div>
-</section>
+    <p>Prepared a {{ detail.attempt.task_type }} run for {{ detail.attempt.repo }}#{{ detail.attempt.issue_number }}.</p>
+    <details class="attempt-message-details">
+      <summary>Worktree setup</summary>
+      <dl class="settings-list compact-settings-list">
+        <div><dt>Repo</dt><dd>{{ detail.attempt.repo }}#{{ detail.attempt.issue_number }}</dd></div>
+        <div><dt>Branch</dt><dd>{{ detail.attempt.branch or "-" }}</dd></div>
+        <div><dt>Worktree</dt><dd>{{ detail.attempt.worktree_path or "-" }}</dd></div>
+        <div><dt>Workflow</dt><dd>{{ detail.attempt.workflow_version_id or "unknown" }}</dd></div>
+      </dl>
+    </details>
+  </article>
 
-<section class="panel">
-  <div class="section-heading">
-    <h2>Timeline</h2>
-    <span class="muted">{{ detail.timeline|length }}</span>
-  </div>
-  {% if detail.timeline %}
-  <div class="compact-table-wrap">
-    <table class="data-table compact-table">
-      <thead><tr><th>Time</th><th>Phase</th><th>Event</th><th>Message</th><th>Duration</th></tr></thead>
-      <tbody>
-        {% for row in detail.timeline %}
-        {% set is_codex_started = row.phase == "codex" and row.event_type == "started" %}
-        {% set is_codex_completed = row.phase == "codex" and row.event_type == "completed" %}
-        {% set timeline_message = row.message|string %}
-        <tr
-          {% if is_codex_started or is_codex_completed %}
-          class="timeline-toggle-row"
-          role="button"
-          tabindex="0"
-          aria-expanded="false"
-          aria-controls="timeline-detail-{{ row.id }}"
-          data-accordion-toggle
-          {% endif %}
-        >
-          <td>{{ compact_time(row.started_at, seconds=True) }}</td>
-          <td>{{ row.phase }}</td>
-          <td>{{ row.event_type }}</td>
-          <td>
-            {% if is_codex_started or is_codex_completed %}
-            <span class="timeline-toggle">
-              <span class="accordion-chevron" aria-hidden="true"></span>
-              <span>{{ row.message }}</span>
-            </span>
-            {% elif timeline_message.startswith("http://") or timeline_message.startswith("https://") %}
-            <a href="{{ timeline_message }}" target="_blank" rel="noreferrer">{{ timeline_message }}</a>
-            {% else %}
-            {{ row.message }}
-            {% endif %}
-          </td>
-          <td>{{ row.duration_ms|ms }}</td>
-        </tr>
-        {% if is_codex_started %}
-        <tr id="timeline-detail-{{ row.id }}" class="timeline-detail-row" data-timeline-detail="codex-started" hidden>
-          <td colspan="5">
-            <div class="timeline-detail-content">
-              {% if detail.prompts %}
-              <div class="timeline-detail-label">Codex Prompts</div>
-              <div class="gate-list">
-                {% for prompt in detail.prompts %}
-                <article class="gate-card">
-                  <div class="draft-meta">
-                    <strong>Prompt {{ loop.index }}</strong>
-                    <span>{{ compact_time(prompt.created_at) }}</span>
-                    <span>{{ prompt.event_type }}</span>
-                    {% if prompt.model %}<span>{{ prompt.model }}</span>{% endif %}
-                    {% if prompt.approval_policy %}<span>approval: {{ prompt.approval_policy }}</span>{% endif %}
-                    {% if prompt.cwd %}<span>{{ prompt.cwd }}</span>{% endif %}
-                  </div>
-                  <pre class="result-body">{{ prompt.prompt }}</pre>
-                </article>
-                {% endfor %}
-              </div>
-              {% else %}
-              <div class="empty-state">No Codex prompts recorded.</div>
-              {% endif %}
-            </div>
-          </td>
-        </tr>
-        {% elif is_codex_completed %}
-        <tr id="timeline-detail-{{ row.id }}" class="timeline-detail-row" data-timeline-detail="codex-completed" hidden>
-          <td colspan="5">
-            <div class="timeline-detail-content">
-              {% if detail.result %}
-              <div class="timeline-detail-label">Worker Result</div>
-              <div class="draft-meta">
-                <strong>{{ detail.result.title }}</strong>
-                <span>{{ detail.result.result_type|replace("_", " ") }}</span>
-                <span>{{ compact_time(detail.result.updated_at) }}</span>
-                <span class="status-pill is-ok">{{ detail.result.status }}</span>
-              </div>
-              {% if detail.result.body %}
-              <pre class="result-body">{{ detail.result.body }}</pre>
-              {% else %}
-              <div class="empty-state">The worker completed without a final message.</div>
-              {% endif %}
-              {% if detail.attempt.task_type == "research" and detail.result.body %}
-              <div class="form-actions">
-                {% if detail.code_follow_up %}
-                <a class="button-link" href="/attempts/{{ detail.code_follow_up.id }}">
-                  Code follow-up attempt {{ detail.code_follow_up.id }}
-                </a>
-                <span class="muted">{{ detail.code_follow_up.status }}</span>
-                {% else %}
-                <form action="/attempts/{{ detail.attempt.id }}/follow-up-code" method="post">
-                  <button type="submit">Create Code Follow-up</button>
-                </form>
-                {% endif %}
-              </div>
-              {% endif %}
-              {% else %}
-              <div class="empty-state">No worker result recorded.</div>
-              {% endif %}
-            </div>
-          </td>
-        </tr>
-        {% endif %}
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">No timeline events.</div>
+  {% if detail.source_result %}
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Source Research</strong>
+      <span>{{ compact_time(detail.source_result.result_updated_at) }}</span>
+    </div>
+    <div class="chat-result-meta">
+      <strong><a href="/attempts/{{ detail.source_result.source_attempt_id }}">
+        Attempt {{ detail.source_result.source_attempt_id }}
+      </a></strong>
+      <span>{{ detail.source_result.result_type|replace("_", " ") }}</span>
+    </div>
+    <pre class="result-body">{{ detail.source_result.body }}</pre>
+  </article>
   {% endif %}
-</section>
 
-{% if pending_gates %}
-<section class="panel">
-  <div class="section-heading">
-    <h2>Pending Workflow Gates</h2>
-    <span class="muted">{{ pending_gates|length }}</span>
-  </div>
-  <div class="gate-list">
-    {% for gate in pending_gates %}
-    <article class="gate-card">
+  {% if detail.prompts %}
+  {% for prompt in detail.prompts %}
+  <article class="chat-message is-user">
+    <div class="chat-message-meta">
+      <strong>User</strong>
+      <span>{{ compact_time(prompt.created_at, seconds=True) }}</span>
+    </div>
+    <details class="attempt-message-details">
+      <summary>{% if loop.first %}Initial prompt{% else %}Prompt {{ loop.index }}{% endif %}</summary>
       <div class="draft-meta">
-        <strong>{{ gate.transition_name }}</strong>
-        <span>{{ gate.gate }}</span>
-        <span>{{ compact_time(gate.created_at) }}</span>
+        <span>{{ prompt.event_type }}</span>
+        {% if prompt.model %}<span>{{ prompt.model }}</span>{% endif %}
+        {% if prompt.approval_policy %}<span>approval: {{ prompt.approval_policy }}</span>{% endif %}
+        {% if prompt.cwd %}<span>{{ prompt.cwd }}</span>{% endif %}
       </div>
-      {% if gate.transition_name == "create_draft_pr" %}
-      <p>Create a draft pull request from the reviewed worker result and workspace.</p>
-      {% elif gate.prompt %}
-      <p>{{ gate.prompt }}</p>
+      <pre class="result-body">{{ prompt.prompt }}</pre>
+    </details>
+  </article>
+  {% endfor %}
+  {% endif %}
+
+  <article
+    class="chat-message is-assistant{% if not attempt_result %} is-pending{% endif %} attempt-live-message live-codex-panel"
+    data-live-attempt-id="{{ detail.attempt.id }}"
+    data-live-events-url="/api/attempts/{{ detail.attempt.id }}/events"
+  >
+    <div class="chat-message-meta">
+      <strong>Assistant</strong>
+      <span class="status-pill" data-live-status>{{ detail.attempt.status }}</span>
+    </div>
+    <div class="chat-result-meta">
+      <strong>Live worker stream</strong>
+      {% if detail.token_usage %}
+      <span>{{ detail.token_usage.total_tokens|tokens }} tokens</span>
       {% endif %}
-      {% if gate.transition_name == "post_answer" %}
-      <p class="muted">Review the editable output below before continuing.</p>
-      {% elif gate.transition_name == "create_draft_pr" %}
-      <p class="muted">Symphony will commit and push the branch if needed, then create a draft PR from the worker's title and description.</p>
+    </div>
+    {% if attempt_result %}
+    <details class="attempt-message-details">
+      <summary>
+        <span>Run transcript</span>
+        <span><span data-live-event-count>0</span> events</span>
+      </summary>
+    {% endif %}
+      <div class="live-codex-output">
+        <div class="live-codex-label">
+          <span>Output</span>
+          <div class="live-output-mode" role="group" aria-label="Output format">
+            <button type="button" data-live-output-mode="rendered" aria-pressed="true">Rendered</button>
+            <button type="button" data-live-output-mode="raw" aria-pressed="false">Raw</button>
+          </div>
+        </div>
+        <div class="live-codex-transcript markdown-body" data-live-codex-transcript></div>
+        <pre class="live-codex-transcript live-codex-raw" data-live-codex-raw hidden></pre>
+        <div class="empty-state" data-live-output-empty>No streamed Codex output yet.</div>
+      </div>
+      <details class="attempt-message-details live-event-details">
+        <summary>
+          <span>Run events</span>
+          <span>{% if not attempt_result %}<span data-live-event-count>0</span>{% endif %}</span>
+        </summary>
+        <ol class="live-event-list" data-live-event-list aria-live="polite">
+          <li class="empty-state" data-live-event-empty>No live events yet.</li>
+        </ol>
+      </details>
+    {% if attempt_result %}
+    </details>
+    {% endif %}
+  </article>
+
+  {% if attempt_result %}
+  <article class="chat-message is-assistant is-final">
+    <div class="chat-message-meta">
+      <strong>Assistant</strong>
+      <span>{{ compact_time(attempt_result.updated_at, seconds=True) }}</span>
+    </div>
+    <div class="chat-result-meta">
+      <strong>{{ attempt_result.title }}</strong>
+      <span>{{ attempt_result.result_type|replace("_", " ") }}</span>
+      <span class="status-pill is-ok">{{ attempt_result.status }}</span>
+    </div>
+    {{ formatted_result(attempt_result.formatted) }}
+    {% if detail.attempt.task_type == "research" and attempt_result.body %}
+    <div class="attempt-action-row">
+      {% if detail.code_follow_up %}
+      <a class="button-link" href="/attempts/{{ detail.code_follow_up.id }}">
+        Code follow-up attempt {{ detail.code_follow_up.id }}
+      </a>
+      <span class="muted">{{ detail.code_follow_up.status }}</span>
       {% else %}
-      <form action="/workflow-gates/{{ gate.id }}/run" method="post" class="inline-form">
-        <input type="hidden" name="return_to" value="{{ return_to }}" />
-        {% if gate.transition_name == "push_pr_feedback_fix" %}
-        <button type="submit">Push Fix to Existing PR</button>
-        {% else %}
-        <button type="submit">Run Workflow Gate</button>
-        {% endif %}
+      <form action="/attempts/{{ detail.attempt.id }}/follow-up-code" method="post">
+        <button type="submit">Create Code Follow-up</button>
       </form>
       {% endif %}
-    </article>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-
-<section class="panel">
-  <div class="section-heading">
-    <h2>Workspace</h2>
-  </div>
-  <dl class="settings-list">
-    <div><dt>Repo</dt><dd>{{ detail.attempt.repo }}#{{ detail.attempt.issue_number }}</dd></div>
-    <div><dt>Branch</dt><dd>{{ detail.attempt.branch or "-" }}</dd></div>
-    <div><dt>Worktree</dt><dd>{{ detail.attempt.worktree_path or "-" }}</dd></div>
-    <div><dt>Workflow</dt><dd>{{ detail.attempt.workflow_version_id or "unknown" }}</dd></div>
-  </dl>
-</section>
-
-{% if workspace_diff %}
-<section class="panel">
-  <div class="section-heading">
-    <h2>Workspace Diff</h2>
-    <span class="muted">{{ workspace_diff.changed_files|length }} changed file(s)</span>
-  </div>
-  <div class="draft-meta">
-    <strong>{{ workspace_diff.worktree_path }}</strong>
-    {% if workspace_diff.base_commit_sha %}<span>base {{ workspace_diff.base_commit_sha[:12] }}</span>{% endif %}
-    {% if workspace_diff.head_commit_sha %}<span>head {{ workspace_diff.head_commit_sha[:12] }}</span>{% endif %}
-    {% if workspace_diff.truncated %}<span>truncated</span>{% endif %}
-  </div>
-  {% if workspace_diff.error %}
-  <p class="form-error">{{ workspace_diff.error }}</p>
-  {% endif %}
-  {% if workspace_diff.text %}
-  <pre class="result-body diff-body">{{ workspace_diff.text }}</pre>
-  {% else %}
-  <div class="empty-state">No workspace diff detected.</div>
-  {% endif %}
-</section>
-{% endif %}
-
-<section class="panel">
-  <div class="section-heading">
-    <h2>Pull Request</h2>
-  </div>
-  {% if detail.pull_requests %}
-  <div class="compact-table-wrap">
-    <table class="data-table compact-table">
-      <thead><tr><th>PR</th><th>Title</th><th>State</th><th>Worktree</th><th>Created</th></tr></thead>
-      <tbody>
-        {% for row in detail.pull_requests %}
-        <tr>
-          <td><a href="{{ row.url }}" target="_blank" rel="noreferrer">#{{ row.number }}</a></td>
-          <td>{{ row.title }}</td>
-          <td>
-            {{ row.state or "unknown" }}
-            {% if row.merged_at %}<div class="muted">merged {{ compact_time(row.merged_at) }}</div>{% endif %}
-          </td>
-          <td>
-            {% if row.worktree_cleaned_at %}
-            cleaned {{ compact_time(row.worktree_cleaned_at) }}
-            {% elif row.cleanup_error %}
-            <span class="form-error">{{ row.cleanup_error }}</span>
-            {% else %}
-            pending merge
-            {% endif %}
-          </td>
-          <td>{{ compact_time(row.created_at) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% elif running_create_draft_pr_gate %}
-  <div class="empty-state">Draft pull request creation is running.</div>
-  {% elif detail.attempt.task_type == "code" and create_draft_pr_gate and detail.attempt.worktree_path and detail.attempt.branch %}
-  <form action="/workflow-gates/{{ create_draft_pr_gate.id }}/run" method="post" class="stacked-form draft-form">
-    <input type="hidden" name="return_to" value="{{ return_to }}" />
-    <p class="muted">Symphony will commit and push the branch if needed, then create a draft PR from the worker's title and description.</p>
-    <div class="form-actions">
-      <button type="submit">Create Draft PR</button>
     </div>
-  </form>
-  {% else %}
-  <div class="empty-state">No pull request.</div>
+    {% endif %}
+  </article>
+  {% endif %}
+
+  {% if pending_gates %}
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Pending Workflow Gates</strong>
+      <span>{{ pending_gates|length }}</span>
+    </div>
+    <div class="attempt-action-list">
+      {% for gate in pending_gates %}
+      <div class="attempt-action-item">
+        <div class="draft-meta">
+          <strong>{{ gate.transition_name }}</strong>
+          <span>{{ gate.gate }}</span>
+          <span>{{ compact_time(gate.created_at) }}</span>
+        </div>
+        {% if gate.transition_name == "create_draft_pr" %}
+        <p>Symphony will commit and push the branch if needed, then create a draft PR from the worker's title and description.</p>
+        {% elif gate.transition_name == "post_answer" %}
+        <p>Review the editable GitHub reply below before continuing.</p>
+        {% elif gate.prompt %}
+        <p>{{ gate.prompt }}</p>
+        {% endif %}
+        {% if gate.transition_name != "post_answer" %}
+        <form action="/workflow-gates/{{ gate.id }}/run" method="post" class="inline-form">
+          <input type="hidden" name="return_to" value="{{ return_to }}" />
+          {% if gate.transition_name == "create_draft_pr" %}
+          <button type="submit">Create Draft PR</button>
+          {% elif gate.transition_name == "push_pr_feedback_fix" %}
+          <button type="submit">Push Fix to Existing PR</button>
+          {% else %}
+          <button type="submit">Run Workflow Gate</button>
+          {% endif %}
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+  {% endif %}
+
+  {% if can_request_adjustment or retryable_failed_workflow_actions %}
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Actions</strong>
+      <span>{{ retryable_failed_workflow_actions|length + (1 if can_request_adjustment else 0) }}</span>
+    </div>
+    <div class="attempt-action-list">
+      {% for action in retryable_failed_workflow_actions %}
+      <form action="/workflow-actions/{{ action.id }}/retry" method="post" class="inline-form attempt-action-item">
+        <input type="hidden" name="return_to" value="{{ return_to }}" />
+        <button type="submit">Retry {{ action.transition_name }}</button>
+        <span class="muted">failed retry {{ action.retry_count }}{% if action.completed_at %} · {{ compact_time(action.completed_at) }}{% endif %}</span>
+      </form>
+      {% endfor %}
+      {% if can_request_adjustment %}
+      <div class="attempt-action-item">
+        <button
+          type="button"
+          hx-get="/attempts/{{ detail.attempt.id }}/adjustment-form?return_to=/attempts/{{ detail.attempt.id }}"
+          hx-target="#modal-root"
+          hx-swap="innerHTML"
+        >
+          Request Adjustment
+        </button>
+        <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
+      </div>
+      {% endif %}
+    </div>
+  </article>
+  {% endif %}
+
+  {% if detail.pull_requests or running_create_draft_pr_gate %}
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Pull Request</strong>
+      <span>{{ detail.pull_requests|length }}</span>
+    </div>
+    {% if detail.pull_requests %}
+    <div class="attempt-action-list">
+      {% for row in detail.pull_requests %}
+      <div class="attempt-action-item">
+        <div class="draft-meta">
+          <strong><a href="{{ row.url }}" target="_blank" rel="noreferrer">PR #{{ row.number }}</a></strong>
+          <span>{{ row.state or "unknown" }}</span>
+          <span>{{ compact_time(row.created_at) }}</span>
+        </div>
+        <p>{{ row.title }}</p>
+        {% if row.merged_at %}
+        <p class="muted">merged {{ compact_time(row.merged_at) }}</p>
+        {% elif row.worktree_cleaned_at %}
+        <p class="muted">worktree cleaned {{ compact_time(row.worktree_cleaned_at) }}</p>
+        {% elif row.cleanup_error %}
+        <p class="form-error">{{ row.cleanup_error }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p>Draft pull request creation is running.</p>
+    {% endif %}
+  </article>
+  {% endif %}
+
+  {% if workspace_diff %}
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Workspace Diff</strong>
+      <span>{{ workspace_diff.changed_files|length }} changed file(s)</span>
+    </div>
+    <details class="attempt-message-details">
+      <summary>{{ workspace_diff.worktree_path }}</summary>
+      <div class="draft-meta">
+        {% if workspace_diff.base_commit_sha %}<span>base {{ workspace_diff.base_commit_sha[:12] }}</span>{% endif %}
+        {% if workspace_diff.head_commit_sha %}<span>head {{ workspace_diff.head_commit_sha[:12] }}</span>{% endif %}
+        {% if workspace_diff.truncated %}<span>truncated</span>{% endif %}
+      </div>
+      {% if workspace_diff.error %}
+      <p class="form-error">{{ workspace_diff.error }}</p>
+      {% endif %}
+      {% if workspace_diff.text %}
+      <pre class="result-body diff-body">{{ workspace_diff.text }}</pre>
+      {% else %}
+      <div class="empty-state">No workspace diff detected.</div>
+      {% endif %}
+    </details>
+  </article>
+  {% endif %}
+
+  {% if detail.follow_up_targets %}
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Follow-up Tasks</strong>
+      <span>{{ detail.follow_up_targets|length }}</span>
+    </div>
+    <div class="attempt-action-list">
+      {% for row in detail.follow_up_targets %}
+      <div class="attempt-action-item">
+        <div class="draft-meta">
+          <strong><a href="/attempts/{{ row.id }}">Attempt {{ row.id }}</a></strong>
+          <span>{{ row.relationship|replace("_", " ") }}</span>
+          <span>{{ row.status }}</span>
+          <span>{{ row.task_type }}</span>
+          <span>{{ compact_time(row.linked_at) }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+  {% endif %}
+
+  <article class="chat-message is-system">
+    <div class="chat-message-meta">
+      <strong>Timeline</strong>
+      <span>{{ detail.timeline|length }}</span>
+    </div>
+    <details class="attempt-message-details">
+      <summary>Run timeline</summary>
+      {% if detail.timeline %}
+      <div class="compact-table-wrap">
+        <table class="data-table compact-table">
+          <thead><tr><th>Time</th><th>Phase</th><th>Event</th><th>Message</th><th>Duration</th></tr></thead>
+          <tbody>
+            {% for row in detail.timeline %}
+            {% set timeline_message = row.message|string %}
+            <tr>
+              <td>{{ compact_time(row.started_at, seconds=True) }}</td>
+              <td>{{ row.phase }}</td>
+              <td>{{ row.event_type }}</td>
+              <td>
+                {% if timeline_message.startswith("http://") or timeline_message.startswith("https://") %}
+                <a href="{{ timeline_message }}" target="_blank" rel="noreferrer">{{ timeline_message }}</a>
+                {% else %}
+                {{ row.message }}
+                {% endif %}
+              </td>
+              <td>{{ row.duration_ms|ms }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">No timeline events.</div>
+      {% endif %}
+    </details>
+  </article>
+
+  {% if detail.errors %}
+  <article class="chat-message is-assistant is-error">
+    <div class="chat-message-meta">
+      <strong>Assistant</strong>
+      <span>{{ detail.errors|length }} error{{ "s" if detail.errors|length != 1 else "" }}</span>
+    </div>
+    <div class="attempt-action-list">
+      {% for row in detail.errors %}
+      <div class="attempt-action-item">
+        <div class="draft-meta">
+          <strong>{{ row.error_type }}</strong>
+          <span>{{ row.phase }}</span>
+        </div>
+        <p class="form-error">{{ row.message }}</p>
+        {% if row.log_excerpt %}<pre class="result-body">{{ row.log_excerpt }}</pre>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </article>
   {% endif %}
 </section>
-
-{% if detail.source_result %}
-<section class="panel">
-  <div class="section-heading">
-    <h2>Source Research</h2>
-  </div>
-  <div class="draft-meta">
-    <strong><a href="/attempts/{{ detail.source_result.source_attempt_id }}">
-      Attempt {{ detail.source_result.source_attempt_id }}
-    </a></strong>
-    <span>{{ detail.source_result.result_type|replace("_", " ") }}</span>
-    <span>{{ compact_time(detail.source_result.result_updated_at) }}</span>
-  </div>
-  <pre class="result-body">{{ detail.source_result.body }}</pre>
-</section>
-{% endif %}
-
-{% if detail.follow_up_targets %}
-<section class="panel">
-  <div class="section-heading">
-    <h2>Follow-up Tasks</h2>
-    <span class="muted">{{ detail.follow_up_targets|length }}</span>
-  </div>
-  <div class="compact-table-wrap">
-    <table class="data-table compact-table">
-      <thead><tr><th>Attempt</th><th>Relationship</th><th>Status</th><th>Type</th><th>Created</th></tr></thead>
-      <tbody>
-        {% for row in detail.follow_up_targets %}
-        <tr>
-          <td><a href="/attempts/{{ row.id }}">{{ row.id }}</a></td>
-          <td>{{ row.relationship|replace("_", " ") }}</td>
-          <td>{{ row.status }}</td>
-          <td>{{ row.task_type }}</td>
-          <td>{{ compact_time(row.linked_at) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %}
 
 {{ draft_replies(
   detail.comments,
@@ -372,33 +379,5 @@
   return_to=return_to,
   legacy_post=False
 ) }}
-
-<section class="panel">
-  <div class="section-heading">
-    <h2>Errors</h2>
-    <span class="muted">{{ detail.errors|length }}</span>
-  </div>
-  {% if detail.errors %}
-  <div class="compact-table-wrap">
-    <table class="data-table compact-table">
-      <thead><tr><th>Phase</th><th>Type</th><th>Message</th></tr></thead>
-      <tbody>
-        {% for row in detail.errors %}
-        <tr>
-          <td>{{ row.phase }}</td>
-          <td>{{ row.error_type }}</td>
-          <td class="form-error">
-            {{ row.message }}
-            {% if row.log_excerpt %}<pre class="result-body">{{ row.log_excerpt }}</pre>{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">No errors.</div>
-  {% endif %}
-</section>
 {% endif %}
 {% endblock %}

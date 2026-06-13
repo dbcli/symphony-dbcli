@@ -1759,14 +1759,15 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     issue = client.get("/issues/dbcli/litecli/245")
 
     assert attempt.status_code == 200
-    assert "Worker Result" in attempt.text
-    assert "Live Codex Session" in attempt.text
+    assert 'aria-label="Attempt conversation"' in attempt.text
+    assert "Research Answer" in attempt.text
+    assert "Live worker stream" in attempt.text
     assert f'data-live-events-url="/api/attempts/{attempt_id}/events"' in attempt.text
     assert 'data-live-output-mode="rendered" aria-pressed="true"' in attempt.text
     assert 'data-live-output-mode="raw" aria-pressed="false"' in attempt.text
     assert "data-live-codex-raw" in attempt.text
     assert "No streamed Codex output yet." in attempt.text
-    assert attempt.text.index("Timeline") < attempt.text.index("Pending Workflow Gates")
+    assert attempt.text.index("Pending Workflow Gates") < attempt.text.index("Timeline")
     assert (
         '<time datetime="2026-01-25T12:00:00Z" title="2026-01-25 4:00:00 AM PST">Jan 25, 4:00:00am</time>'
     ) in attempt.text
@@ -1783,23 +1784,15 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     ) in attempt.text
     assert 'href="https://github.com/dbcli/litecli/pull/258"' in attempt.text
     assert 'target="_blank" rel="noreferrer">https://github.com/dbcli/litecli/pull/258</a>' in attempt.text
-    assert f'aria-controls="timeline-detail-{timeline_id}"' in attempt.text
-    assert f'id="timeline-detail-{timeline_id}"' in attempt.text
-    assert 'data-timeline-detail="codex-started" hidden' in attempt.text
-    assert f'aria-controls="timeline-detail-{completed_timeline_id}"' in attempt.text
-    assert f'id="timeline-detail-{completed_timeline_id}"' in attempt.text
-    assert 'data-timeline-detail="codex-completed" hidden' in attempt.text
     assert "Worker result body" in attempt.text
     assert "Suggested reply body" in attempt.text
     assert "Started codex exec" in attempt.text
     assert "Finished codex exec" in attempt.text
     assert '<section class="panel accordion-panel" data-collapsible="codex-prompts">' not in attempt.text
     assert '<div class="panel accordion-panel" data-collapsible="worker-result">' not in attempt.text
-    assert 'class="timeline-toggle-row"' in attempt.text
-    assert 'role="button"' in attempt.text
-    assert 'tabindex="0"' in attempt.text
-    assert 'class="timeline-toggle"' in attempt.text
-    assert 'aria-expanded="false"' in attempt.text
+    assert "<summary>Initial prompt</summary>" in attempt.text
+    assert "<summary>Run transcript</summary>" not in attempt.text
+    assert "Run transcript" in attempt.text
     assert "Draft a reply for issue 245." in attempt.text
     assert "/tmp/litecli" in attempt.text
     assert "2026-01-25 4:00:00 AM PST" in attempt.text
