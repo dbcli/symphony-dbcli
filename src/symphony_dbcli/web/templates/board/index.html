@@ -111,8 +111,8 @@
       <h2>{{ column.label }}</h2>
       <span>{{ column.count }}</span>
     </div>
-    {% if column.name == "backlog" %}
-    <div class="pager" aria-label="Backlog pagination">
+    {% if column.previous_url or column.next_url %}
+    <div class="pager" aria-label="{{ column.label }} pagination">
       <span>{{ column.page_start }}-{{ column.page_end }} of {{ column.count }}</span>
       <div>
         {% if column.previous_url %}
@@ -190,7 +190,7 @@
     </div>
     {% else %}
     <div class="source-card-list kanban-list is-empty" data-state="{{ column.name }}">
-      <div class="empty-state">No {{ column.label|lower }} items</div>
+      <div class="empty-state">No items</div>
     </div>
     {% endif %}
   </div>

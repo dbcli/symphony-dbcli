@@ -251,6 +251,25 @@ function setupChatSubmitProgress(root = document) {
       continue;
     }
     form.dataset.chatSubmitReady = "true";
+    form.querySelectorAll("textarea").forEach((textarea) => {
+      textarea.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) {
+          return;
+        }
+        event.preventDefault();
+        if (form.dataset.chatSubmitting === "true") {
+          return;
+        }
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+          return;
+        }
+        const submitEvent = new Event("submit", { bubbles: true, cancelable: true });
+        if (form.dispatchEvent(submitEvent)) {
+          form.submit();
+        }
+      });
+    });
     form.addEventListener("submit", () => {
       if (form.dataset.chatSubmitting === "true") {
         return;

@@ -355,8 +355,8 @@ def test_fastapi_board_is_scoped_by_source(tmp_path: Path) -> None:
     assert 'aria-label="Work board for dbcli/litecli"' in litecli_board.text
     assert 'aria-label="Work board for dbcli/pgcli"' in pgcli_board.text
     assert '<div class="source-card-list kanban-list is-empty" data-state="todo">' in pgcli_board.text
-    assert '<div class="empty-state">No todo items</div>' in pgcli_board.text
-    assert "No backlog items" in pgcli_board.text
+    assert '<div class="empty-state">No items</div>' in pgcli_board.text
+    assert 'aria-label="Backlog pagination"' not in pgcli_board.text
 
 
 def test_fastapi_board_search_preserves_selected_source(tmp_path: Path) -> None:
@@ -399,7 +399,7 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     assert "#8" in board.text
     assert "data-source-item-id=" in board.text
     assert "<span>2</span>" in board.text
-    assert "No backlog items" not in board.text
+    assert 'aria-label="Backlog pagination"' not in board.text
 
 
 def test_fastapi_board_paginates_backlog_by_latest_github_update(tmp_path: Path) -> None:
@@ -415,12 +415,47 @@ def test_fastapi_board_paginates_backlog_by_latest_github_update(tmp_path: Path)
     assert "Backlog issue 025" in first_page.text
     assert "Backlog issue 006" in first_page.text
     assert "Backlog issue 005" not in first_page.text
+    assert 'aria-label="Backlog pagination"' in first_page.text
     assert "backlog_page=2" in first_page.text
     assert second_page.status_code == 200
     assert "21-25 of 25" in second_page.text
     assert "Backlog issue 005" in second_page.text
     assert "Backlog issue 001" in second_page.text
     assert "Backlog issue 006" not in second_page.text
+    assert 'aria-label="Backlog pagination"' in second_page.text
+
+
+def test_fastapi_board_paginates_done_work_items(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=ManyClosedIssueSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+
+    for source_item_id in _source_item_ids_for_source(tmp_path, source_id):
+        _activate_source_item(client, source_item_id, task_type="code")
+    for work_item_id in _work_item_ids_for_source(tmp_path, source_id):
+        response = client.post(
+            f"/work-items/{work_item_id}/move",
+            data={"target_state": "done"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+    first_page = client.get(f"/board/source/{source_id}")
+    second_page = client.get(f"/board/source/{source_id}?done_page=2")
+
+    assert first_page.status_code == 200
+    assert 'aria-label="Done pagination"' in first_page.text
+    assert "1-20 of 25" in first_page.text
+    assert "Closed issue 025" in first_page.text
+    assert "Closed issue 006" in first_page.text
+    assert "Closed issue 005" not in first_page.text
+    assert "done_page=2" in first_page.text
+    assert second_page.status_code == 200
+    assert 'aria-label="Done pagination"' in second_page.text
+    assert "21-25 of 25" in second_page.text
+    assert "Closed issue 005" in second_page.text
+    assert "Closed issue 001" in second_page.text
+    assert "Closed issue 006" not in second_page.text
 
 
 def test_fastapi_board_searches_backlog_with_sqlite_fts_body_matches(tmp_path: Path) -> None:
@@ -434,7 +469,7 @@ def test_fastapi_board_searches_backlog_with_sqlite_fts_body_matches(tmp_path: P
     assert "Cache cleanup" in board.text
     assert "Another bug" not in board.text
     assert 'value="ftsneedle "' in board.text
-    assert "1-1 of 1" in board.text
+    assert 'aria-label="Backlog pagination"' not in board.text
 
 
 def test_fastapi_board_searches_work_columns_with_sqlite_fts(tmp_path: Path) -> None:
@@ -791,8 +826,6 @@ def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -
     assert "Fix completion crash" in form.text
     assert response.status_code == 303
     assert response.headers["location"] == f"/board/source/{source_id}"
-    assert "No backlog items" not in board.text
-    assert "No todo items" not in board.text
     assert "work item #1" in board.text
     assert 'data-work-item-id="1"' in board.text
     assert "code" in board.text
@@ -1128,7 +1161,6 @@ def test_fastapi_work_item_move_records_review_rerun_reasons(tmp_path: Path) -> 
     assert "In Progress" in detail.text
     assert "Reviewer asked for tests." in detail.text
     assert "work item #1" in board.text
-    assert "No in progress items" not in board.text
     assert [event.to_state for event in events[-2:]] == ["in_review", "in_progress"]
     assert runs[-1].status == "queued"
     assert runs[-1].trigger == "rerun"
@@ -2167,6 +2199,28 @@ def _source_item_id_for(client: TestClient, source_id: int, title: str) -> int:
     return int(board.text[start:end])
 
 
+def _source_item_ids_for_source(tmp_path: Path, source_id: int) -> list[int]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        return list(
+            session.scalars(
+                select(SourceItem.id)
+                .where(SourceItem.source_id == source_id)
+                .order_by(SourceItem.number.asc())
+            )
+        )
+
+
+def _work_item_ids_for_source(tmp_path: Path, source_id: int) -> list[int]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        return list(
+            session.scalars(
+                select(WorkItem.id).where(WorkItem.source_id == source_id).order_by(WorkItem.id.asc())
+            )
+        )
+
+
 def _work_item_events_and_runs(tmp_path: Path) -> tuple[list[WorkItemStateEvent], list[WorkItemRun]]:
     session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
     with session_factory() as session:
@@ -2383,6 +2437,27 @@ class ManyBacklogSyncClient:
                 body=f"Body for backlog issue {number:03d}",
                 url=f"https://github.com/{repo}/issues/{number}",
                 state="open",
+                labels=["bug"],
+                author="alice",
+                updated_at=f"2026-05-{number:02d}T01:00:00Z",
+            )
+            for number in range(1, 26)
+        ]
+
+    def list_pull_requests(self, repo: str, *, state: str = "open") -> list[PullRequest]:
+        return []
+
+
+class ManyClosedIssueSyncClient:
+    def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
+        return [
+            GitHubIssue(
+                repo=repo,
+                number=number,
+                title=f"Closed issue {number:03d}",
+                body=f"Body for closed issue {number:03d}",
+                url=f"https://github.com/{repo}/issues/{number}",
+                state="closed",
                 labels=["bug"],
                 author="alice",
                 updated_at=f"2026-05-{number:02d}T01:00:00Z",

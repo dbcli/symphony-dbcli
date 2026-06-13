@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from .models import (
 from .search import matching_source_item_ids
 
 KANBAN_STATES = ("todo", "in_progress", "in_review", "done")
+WORK_ITEM_PAGE_SIZE = 20
 LOCAL_TICKET_KIND: Literal["local_ticket"] = "local_ticket"
 CONVERSATION_KIND: Literal["conversation"] = "conversation"
 LOCAL_TICKET_ISSUE_NUMBER_OFFSET = 1_000_000_000
@@ -94,6 +95,40 @@ class WorkItemView:
     @property
     def state_label(self) -> str:
         return STATE_LABELS[self.state]
+
+
+@dataclass(frozen=True)
+class WorkItemPage:
+    items: list[WorkItemView]
+    total: int
+    page: int
+    limit: int
+
+    @property
+    def has_previous(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page * self.limit < self.total
+
+    @property
+    def previous_page(self) -> int:
+        return max(1, self.page - 1)
+
+    @property
+    def next_page(self) -> int:
+        return self.page + 1
+
+    @property
+    def start_index(self) -> int:
+        if self.total == 0:
+            return 0
+        return ((self.page - 1) * self.limit) + 1
+
+    @property
+    def end_index(self) -> int:
+        return min(self.page * self.limit, self.total)
 
 
 @dataclass(frozen=True)
@@ -316,18 +351,9 @@ class WorkItemRepository:
         kinds: tuple[SourceItemKind, ...] | None = None,
     ) -> list[WorkItemView]:
         with self._session_factory() as session:
-            matching_work_item_ids = _matching_work_item_ids(session, source_id, query)
-            if query.strip() and not matching_work_item_ids:
+            conditions = _work_item_state_conditions(session, source_id, state, query=query, kinds=kinds)
+            if conditions is None:
                 return []
-            conditions = [
-                WorkItem.source_id == source_id,
-                WorkItem.state == state,
-                WorkItem.disposition == "active",
-            ]
-            if matching_work_item_ids:
-                conditions.append(WorkItem.id.in_(matching_work_item_ids))
-            if kinds is not None:
-                conditions.append(SourceItem.kind.in_(kinds))
             rows = session.execute(
                 select(WorkItem, SourceItem)
                 .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
@@ -335,6 +361,48 @@ class WorkItemRepository:
                 .order_by(WorkItem.updated_at.desc(), WorkItem.id.desc())
             ).all()
             return [_work_item_view(work_item, source_item) for work_item, source_item in rows]
+
+    def list_by_state_page(
+        self,
+        source_id: int,
+        state: str,
+        *,
+        query: str = "",
+        kinds: tuple[SourceItemKind, ...] | None = None,
+        page: int = 1,
+        limit: int = WORK_ITEM_PAGE_SIZE,
+    ) -> WorkItemPage:
+        page_number = _positive_page(page)
+        page_limit = _positive_page_limit(limit)
+        with self._session_factory() as session:
+            conditions = _work_item_state_conditions(session, source_id, state, query=query, kinds=kinds)
+            if conditions is None:
+                return WorkItemPage(items=[], total=0, page=1, limit=page_limit)
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(WorkItem)
+                    .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                    .where(*conditions)
+                )
+                or 0
+            )
+            page_number = _clamped_page(page_number, total, page_limit)
+            offset = (page_number - 1) * page_limit
+            rows = session.execute(
+                select(WorkItem, SourceItem)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .where(*conditions)
+                .order_by(WorkItem.updated_at.desc(), WorkItem.id.desc())
+                .limit(page_limit)
+                .offset(offset)
+            ).all()
+            return WorkItemPage(
+                items=[_work_item_view(work_item, source_item) for work_item, source_item in rows],
+                total=total,
+                page=page_number,
+                limit=page_limit,
+            )
 
     def list_all(self) -> list[WorkItemView]:
         with self._session_factory() as session:
@@ -937,6 +1005,29 @@ def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemVie
     )
 
 
+def _work_item_state_conditions(
+    session: Session,
+    source_id: int,
+    state: str,
+    *,
+    query: str,
+    kinds: tuple[SourceItemKind, ...] | None,
+) -> list[Any] | None:
+    matching_work_item_ids = _matching_work_item_ids(session, source_id, query)
+    if query.strip() and not matching_work_item_ids:
+        return None
+    conditions: list[Any] = [
+        WorkItem.source_id == source_id,
+        WorkItem.state == state,
+        WorkItem.disposition == "active",
+    ]
+    if matching_work_item_ids:
+        conditions.append(WorkItem.id.in_(matching_work_item_ids))
+    if kinds is not None:
+        conditions.append(SourceItem.kind.in_(kinds))
+    return conditions
+
+
 def _matching_work_item_ids(session: Session, source_id: int, query: str) -> set[int]:
     if not query.strip():
         return set()
@@ -954,6 +1045,21 @@ def _matching_work_item_ids(session: Session, source_id: int, query: str) -> set
             )
         )
     )
+
+
+def _positive_page(page: int) -> int:
+    return page if page > 0 else 1
+
+
+def _positive_page_limit(limit: int) -> int:
+    return limit if limit > 0 else WORK_ITEM_PAGE_SIZE
+
+
+def _clamped_page(page: int, total: int, limit: int) -> int:
+    if total == 0:
+        return 1
+    last_page = ((total - 1) // limit) + 1
+    return min(page, last_page)
 
 
 def _work_item_run_claim(

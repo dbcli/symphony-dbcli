@@ -22,6 +22,7 @@ from symphony_dbcli.web.dependencies import (
     work_item_repository,
 )
 from symphony_dbcli.work_items import (
+    DONE_STATE,
     KANBAN_STATES,
     STATE_LABELS,
     TASK_TYPES,
@@ -51,6 +52,7 @@ class BoardFilters:
     q: str = ""
     kind: BoardKindFilter = "all"
     backlog_page: int = 1
+    done_page: int = 1
 
     @property
     def source_item_kinds(self) -> tuple[SourceItemKind, ...] | None:
@@ -83,6 +85,7 @@ def index(
     q: str = "",
     kind: str = "all",
     backlog_page: int = 1,
+    done_page: int = 1,
 ) -> Response:
     return _render_board(
         request,
@@ -91,6 +94,7 @@ def index(
             q=q,
             kind=_board_kind_filter(kind),
             backlog_page=backlog_page,
+            done_page=done_page,
         ),
     )
 
@@ -102,6 +106,7 @@ def source_index(
     q: str = "",
     kind: str = "all",
     backlog_page: int = 1,
+    done_page: int = 1,
 ) -> Response:
     return _render_board(
         request,
@@ -110,6 +115,7 @@ def source_index(
             q=q,
             kind=_board_kind_filter(kind),
             backlog_page=backlog_page,
+            done_page=done_page,
         ),
     )
 
@@ -193,7 +199,7 @@ def _render_board(request: Request, filters: BoardFilters) -> Response:
     context["board_kind"] = filters.kind
     context["board_kind_options"] = _board_kind_options(filters)
     context["board_form_action"] = _board_base_url(source_id)
-    context["board_clear_url"] = _board_url(source_id, filters, clear_query=True, backlog_page=1)
+    context["board_clear_url"] = _board_url(source_id, filters, clear_query=True, backlog_page=1, done_page=1)
     context["chat_source_id"] = source_id
     return templates.TemplateResponse(
         request=request,
@@ -269,6 +275,41 @@ def _work_item_column(
     selected_source: SourceView | None,
     filters: BoardFilters,
 ) -> BoardColumn:
+    source_id = None if selected_source is None else selected_source.id
+    if state == DONE_STATE:
+        page = (
+            work_items.list_by_state_page(
+                selected_source.id,
+                state,
+                query=filters.q,
+                kinds=filters.source_item_kinds,
+                page=filters.done_page,
+            )
+            if selected_source
+            else None
+        )
+        if page is None:
+            return BoardColumn(
+                name=state,
+                label=BOARD_STATE_LABELS[state],
+                source_items=[],
+                work_items=[],
+                count=0,
+            )
+        return BoardColumn(
+            name=state,
+            label=BOARD_STATE_LABELS[state],
+            source_items=[],
+            work_items=page.items,
+            count=page.total,
+            page=page.page,
+            page_start=page.start_index,
+            page_end=page.end_index,
+            previous_url=_board_url(source_id, filters, done_page=page.previous_page)
+            if page.has_previous
+            else "",
+            next_url=_board_url(source_id, filters, done_page=page.next_page) if page.has_next else "",
+        )
     query = filters.q
     items = (
         work_items.list_by_state(
@@ -294,6 +335,7 @@ def _board_url(
     filters: BoardFilters,
     *,
     backlog_page: int | None = None,
+    done_page: int | None = None,
     clear_query: bool = False,
 ) -> str:
     params: dict[str, str] = {}
@@ -304,6 +346,9 @@ def _board_url(
     page = filters.backlog_page if backlog_page is None else backlog_page
     if page > 1:
         params["backlog_page"] = str(page)
+    done = filters.done_page if done_page is None else done_page
+    if done > 1:
+        params["done_page"] = str(done)
     base_url = _board_base_url(source_id)
     return f"{base_url}?{urlencode(params)}" if params else base_url
 
