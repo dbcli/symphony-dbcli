@@ -1056,7 +1056,9 @@ def test_fastapi_attempt_page_queues_codex_adjustment(tmp_path: Path) -> None:
     work_item = _work_item(tmp_path, 1)
 
     assert detail.status_code == 200
-    assert "Request Adjustment" in detail.text
+    assert "Send Follow-up" in detail.text
+    assert f'action="/attempts/{attempt_id}/adjustment"' in detail.text
+    assert 'name="note"' in detail.text
     assert '<nav class="breadcrumbs" aria-label="Breadcrumb">' in detail.text
     assert f'href="/board/source/{source_id}">Board</a>' in detail.text
     assert 'href="/work-items/1">Work Item #1</a>' in detail.text
@@ -1105,8 +1107,9 @@ def test_fastapi_attempt_page_allows_adjustment_for_research_attempt(tmp_path: P
     detail = client.get(f"/attempts/{attempt_id}")
 
     assert detail.status_code == 200
-    assert "Request Adjustment" in detail.text
-    assert f'hx-get="/attempts/{attempt_id}/adjustment-form?return_to=/attempts/{attempt_id}"' in detail.text
+    assert "Send Follow-up" in detail.text
+    assert f'action="/attempts/{attempt_id}/adjustment"' in detail.text
+    assert 'placeholder="Send a follow-up for this attempt"' in detail.text
 
 
 def test_fastapi_operations_page_lists_operation_runs(tmp_path: Path) -> None:

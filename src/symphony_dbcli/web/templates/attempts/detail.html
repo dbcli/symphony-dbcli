@@ -204,11 +204,11 @@
   </article>
   {% endif %}
 
-  {% if can_request_adjustment or retryable_failed_workflow_actions %}
+  {% if retryable_failed_workflow_actions %}
   <article class="chat-message is-system">
     <div class="chat-message-meta">
       <strong>Actions</strong>
-      <span>{{ retryable_failed_workflow_actions|length + (1 if can_request_adjustment else 0) }}</span>
+      <span>{{ retryable_failed_workflow_actions|length }}</span>
     </div>
     <div class="attempt-action-list">
       {% for action in retryable_failed_workflow_actions %}
@@ -218,19 +218,6 @@
         <span class="muted">failed retry {{ action.retry_count }}{% if action.completed_at %} · {{ compact_time(action.completed_at) }}{% endif %}</span>
       </form>
       {% endfor %}
-      {% if can_request_adjustment %}
-      <div class="attempt-action-item">
-        <button
-          type="button"
-          hx-get="/attempts/{{ detail.attempt.id }}/adjustment-form?return_to=/attempts/{{ detail.attempt.id }}"
-          hx-target="#modal-root"
-          hx-swap="innerHTML"
-        >
-          Request Adjustment
-        </button>
-        <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
-      </div>
-      {% endif %}
     </div>
   </article>
   {% endif %}
@@ -379,5 +366,31 @@
   return_to=return_to,
   legacy_post=False
 ) }}
+{% if can_request_adjustment %}
+<section class="panel">
+  <form
+    class="stacked-form"
+    method="post"
+    action="/attempts/{{ detail.attempt.id }}/adjustment"
+    data-chat-submit-form
+  >
+    <input type="hidden" name="return_to" value="/attempts/{{ detail.attempt.id }}" />
+    <label for="attempt-follow-up">Reply</label>
+    <textarea
+      id="attempt-follow-up"
+      name="note"
+      rows="4"
+      required
+      placeholder="Send a follow-up for this attempt"
+    ></textarea>
+    <div class="form-actions">
+      <button type="submit">Send Follow-up</button>
+      {% if detail.attempt.work_item_id %}
+      <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
+      {% endif %}
+    </div>
+  </form>
+</section>
+{% endif %}
 {% endif %}
 {% endblock %}
