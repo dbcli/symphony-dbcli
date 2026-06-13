@@ -524,10 +524,10 @@ class PrimitiveExecutor:
             cwd=context.worktree_path,
             attempt_id=attempt_id,
             store=self.store,
-            resume_thread_id=self._conversation_codex_thread_id(context),
-            persistent_thread=self._uses_conversation_codex_thread(context),
+            resume_thread_id=self._codex_thread_id(context),
+            persistent_thread=self._uses_persistent_codex_thread(context),
         )
-        self._save_conversation_codex_thread_id(context, result.thread_id)
+        self._save_codex_thread_id(context, result.thread_id)
         body = result.final_message.strip()
         self.store.record_worker_result(
             attempt_id=attempt_id,
@@ -601,10 +601,10 @@ class PrimitiveExecutor:
             cwd=context.worktree_path,
             attempt_id=attempt_id,
             store=self.store,
-            resume_thread_id=self._conversation_codex_thread_id(context),
-            persistent_thread=self._uses_conversation_codex_thread(context),
+            resume_thread_id=self._codex_thread_id(context),
+            persistent_thread=self._uses_persistent_codex_thread(context),
         )
-        self._save_conversation_codex_thread_id(context, codex_result.thread_id)
+        self._save_codex_thread_id(context, codex_result.thread_id)
         final_message = codex_result.final_message.strip()
         self.store.record_worker_log(attempt_id, "info", final_message)
         pull_request = self._pull_request_created_by_codex(context, final_message)
@@ -669,28 +669,27 @@ class PrimitiveExecutor:
             )
         return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
 
-    def _uses_conversation_codex_thread(self, context: PrimitiveContext) -> bool:
-        return (
-            self.config.codex.transport == "app-server"
-            and context.source_item_kind == CONVERSATION_KIND
-            and context.work_item_id is not None
-        )
+    def _uses_persistent_codex_thread(self, context: PrimitiveContext) -> bool:
+        return self.config.codex.transport == "app-server" and context.work_item_id is not None
 
-    def _conversation_codex_thread_id(self, context: PrimitiveContext) -> str | None:
-        if not self._uses_conversation_codex_thread(context):
+    def _codex_thread_id(self, context: PrimitiveContext) -> str | None:
+        if not self._uses_persistent_codex_thread(context):
             return None
-        work_item_id = context.work_item_id
-        if work_item_id is None:
-            return None
-        return self.chats.codex_thread_id_for_work_item(work_item_id)
+        if context.attempt_id is not None:
+            thread_id = self.work_items.codex_thread_id_for_attempt(context.attempt_id)
+            if thread_id is not None:
+                return thread_id
+        if context.source_item_kind == CONVERSATION_KIND and context.work_item_id is not None:
+            return self.chats.codex_thread_id_for_work_item(context.work_item_id)
+        return None
 
-    def _save_conversation_codex_thread_id(self, context: PrimitiveContext, thread_id: str) -> None:
-        if not self._uses_conversation_codex_thread(context):
+    def _save_codex_thread_id(self, context: PrimitiveContext, thread_id: str) -> None:
+        if not self._uses_persistent_codex_thread(context):
             return
-        work_item_id = context.work_item_id
-        if work_item_id is None:
-            return
-        self.chats.save_codex_thread_id_for_work_item(work_item_id, thread_id)
+        if context.attempt_id is not None:
+            self.work_items.save_codex_thread_id_for_attempt(context.attempt_id, thread_id)
+        if context.source_item_kind == CONVERSATION_KIND and context.work_item_id is not None:
+            self.chats.save_codex_thread_id_for_work_item(context.work_item_id, thread_id)
 
     def _create_draft_pr(self, context: PrimitiveContext) -> PrimitiveOutcome:
         if self.config.policy.dry_run:

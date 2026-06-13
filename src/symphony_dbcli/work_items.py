@@ -162,6 +162,7 @@ class WorkItemRunView:
     attempt_id: int | None
     workflow_instance_id: int | None
     source_attempt_id: int | None
+    codex_thread_id: str | None
     task_type: str
     trigger: str
     status: str
@@ -178,6 +179,7 @@ class WorkItemRunClaim:
     id: int
     work_item_id: int
     source_attempt_id: int | None
+    codex_thread_id: str | None
     source_id: int
     repo: str
     task_type: str
@@ -892,6 +894,7 @@ class WorkItemRepository:
                         status="queued",
                         reasons_json=reasons_json(reasons),
                         user_hint=_move_run_user_hint(previous_state, note, work_item.user_hint),
+                        codex_thread_id=_latest_codex_thread_id_for_work_item(session, work_item.id),
                         started_at=None,
                         completed_at=None,
                         created_at=now,
@@ -918,6 +921,9 @@ class WorkItemRepository:
             work_item, source_item = row
             if work_item.disposition != "active":
                 raise WorkItemError("Archived work items cannot be adjusted.")
+            codex_thread_id = _codex_thread_id_for_source_attempt(
+                session, adjustment.source_attempt_id
+            ) or _latest_codex_thread_id_for_work_item(session, work_item.id)
             previous_state = work_item.state
             work_item.state = "in_progress"
             work_item.updated_at = now
@@ -941,6 +947,7 @@ class WorkItemRepository:
                     status="queued",
                     reasons_json=reasons_json(["revise_implementation"]),
                     user_hint=_adjustment_user_hint(adjustment.source_attempt_id, note),
+                    codex_thread_id=codex_thread_id,
                     started_at=None,
                     completed_at=None,
                     created_at=now,
@@ -950,6 +957,28 @@ class WorkItemRepository:
             session.commit()
             session.refresh(work_item)
             return _work_item_view(work_item, source_item)
+
+    def codex_thread_id_for_attempt(self, attempt_id: int) -> str | None:
+        with self._session_factory() as session:
+            return _codex_thread_id_for_source_attempt(session, attempt_id)
+
+    def save_codex_thread_id_for_attempt(self, attempt_id: int, codex_thread_id: str) -> None:
+        cleaned = _clean_codex_thread_id(codex_thread_id)
+        if cleaned is None:
+            return
+        now = utc_now()
+        with self._session_factory() as session:
+            run = session.scalar(
+                select(WorkItemRun)
+                .where(WorkItemRun.attempt_id == attempt_id)
+                .order_by(WorkItemRun.id.desc())
+                .limit(1)
+            )
+            if run is None:
+                return
+            run.codex_thread_id = cleaned
+            run.updated_at = now
+            session.commit()
 
 
 def _validated_task_type(task_type: str) -> str:
@@ -983,6 +1012,33 @@ Follow-up adjustment for attempt #{source_attempt_id}.
 Keep the change focused on this request:
 {note.strip()}
 """
+
+
+def _codex_thread_id_for_source_attempt(session: Session, source_attempt_id: int) -> str | None:
+    thread_id = session.scalar(
+        select(WorkItemRun.codex_thread_id)
+        .where(WorkItemRun.attempt_id == source_attempt_id)
+        .order_by(WorkItemRun.id.desc())
+        .limit(1)
+    )
+    return _clean_codex_thread_id(thread_id)
+
+
+def _latest_codex_thread_id_for_work_item(session: Session, work_item_id: int) -> str | None:
+    thread_id = session.scalar(
+        select(WorkItemRun.codex_thread_id)
+        .where(WorkItemRun.work_item_id == work_item_id, WorkItemRun.codex_thread_id.is_not(None))
+        .order_by(WorkItemRun.created_at.desc(), WorkItemRun.id.desc())
+        .limit(1)
+    )
+    return _clean_codex_thread_id(thread_id)
+
+
+def _clean_codex_thread_id(thread_id: str | None) -> str | None:
+    if thread_id is None:
+        return None
+    cleaned = thread_id.strip()
+    return cleaned or None
 
 
 def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemView:
@@ -1073,6 +1129,7 @@ def _work_item_run_claim(
         id=run.id,
         work_item_id=work_item.id,
         source_attempt_id=run.source_attempt_id,
+        codex_thread_id=_clean_codex_thread_id(run.codex_thread_id),
         source_id=work_item.source_id,
         repo=source.repo,
         task_type=run.task_type,
@@ -1096,6 +1153,7 @@ def _work_item_run_view(run: WorkItemRun) -> WorkItemRunView:
         attempt_id=run.attempt_id,
         workflow_instance_id=run.workflow_instance_id,
         source_attempt_id=run.source_attempt_id,
+        codex_thread_id=_clean_codex_thread_id(run.codex_thread_id),
         task_type=run.task_type,
         trigger=run.trigger,
         status=run.status,
@@ -1114,6 +1172,7 @@ def _work_item_attempt_view(row: RowMapping) -> WorkItemRunView:
         attempt_id=int(row["attempt_id"]),
         workflow_instance_id=_optional_int(row["workflow_instance_id"]),
         source_attempt_id=None,
+        codex_thread_id=None,
         task_type=str(row["task_type"]),
         trigger=str(row["trigger"]),
         status=str(row["status"]),

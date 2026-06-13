@@ -31,6 +31,8 @@ from symphony_dbcli.work_items import (
     CONVERSATION_ISSUE_NUMBER_OFFSET,
     LOCAL_TICKET_ISSUE_NUMBER_OFFSET,
     WorkItemActivation,
+    WorkItemAdjustment,
+    WorkItemMove,
 )
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
 
@@ -689,6 +691,161 @@ def test_address_pr_comments_runs_codex_with_review_context(tmp_path: Path) -> N
     assert detail["result"]["body"] == "Addressed review comments."
 
 
+def test_issue_adjustment_codex_runs_resume_saved_app_server_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    config = replace(default_config(), codex=CodexConfig(transport="app-server"))
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+    work_item_id, work_item_title, first_run_id = _activate_issue_work_item(executor, store)
+    calls: list[dict[str, object]] = []
+
+    class FakeCodexRunner:
+        def __init__(self, config: CodexConfig) -> None:
+            self.config = config
+
+        def run(
+            self,
+            *,
+            prompt: str,
+            cwd: str,
+            attempt_id: int,
+            store: Store,
+            resume_thread_id: str | None = None,
+            persistent_thread: bool = False,
+        ) -> CodexResult:
+            calls.append(
+                {
+                    "attempt_id": attempt_id,
+                    "cwd": cwd,
+                    "resume_thread_id": resume_thread_id,
+                    "persistent_thread": persistent_thread,
+                    "prompt": prompt,
+                }
+            )
+            return CodexResult(
+                thread_id=resume_thread_id or "thread-issue-1",
+                turn_count=1,
+                final_message="Completed the issue task.",
+                duration_ms=25,
+            )
+
+    monkeypatch.setattr("symphony_dbcli.primitive_executor.CodexRunner", FakeCodexRunner)
+    first_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+        work_item_id=work_item_id,
+        work_item_run_id=first_run_id,
+        worktree_path=str(worktree),
+    )
+    executor.work_items.assign_run_attempt(
+        run_id=first_run_id,
+        attempt_id=first_attempt_id,
+        workflow_instance_id=1,
+    )
+
+    executor.execute(
+        _context(
+            "codex.fix_issue",
+            attempt_id=first_attempt_id,
+            work_item_id=work_item_id,
+            source_item_kind="issue",
+            source_item_number=245,
+            issue_number=245,
+            issue_title=work_item_title,
+            worktree_path=str(worktree),
+        )
+    )
+
+    assert calls[0]["resume_thread_id"] is None
+    assert calls[0]["persistent_thread"] is True
+    assert executor.work_items.codex_thread_id_for_attempt(first_attempt_id) == "thread-issue-1"
+
+    executor.work_items.finish_attempt_run(first_attempt_id, status="review", outcome="ready")
+    executor.work_items.request_adjustment(
+        WorkItemAdjustment(
+            work_item_id=work_item_id,
+            source_attempt_id=first_attempt_id,
+            note="Use pathlib for expansion.",
+        )
+    )
+    adjustment_run = executor.work_items.next_queued_run()
+    assert adjustment_run is not None
+    assert adjustment_run.codex_thread_id == "thread-issue-1"
+
+    second_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+        work_item_id=work_item_id,
+        work_item_run_id=adjustment_run.id,
+        worktree_path=str(worktree),
+    )
+    executor.work_items.assign_run_attempt(
+        run_id=adjustment_run.id,
+        attempt_id=second_attempt_id,
+        workflow_instance_id=2,
+    )
+    executor.execute(
+        _context(
+            "codex.fix_issue",
+            attempt_id=second_attempt_id,
+            work_item_id=work_item_id,
+            source_item_kind="issue",
+            source_item_number=245,
+            issue_number=245,
+            issue_title=work_item_title,
+            worktree_path=str(worktree),
+        )
+    )
+
+    assert calls[1]["resume_thread_id"] == "thread-issue-1"
+    assert calls[1]["persistent_thread"] is True
+
+
+def test_work_item_rerun_inherits_latest_codex_thread_id(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    executor = PrimitiveExecutor(default_config(), store, github=FakePrimitiveGitHub())
+    work_item_id, _, first_run_id = _activate_issue_work_item(executor, store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+        work_item_id=work_item_id,
+        work_item_run_id=first_run_id,
+    )
+    executor.work_items.assign_run_attempt(
+        run_id=first_run_id,
+        attempt_id=attempt_id,
+        workflow_instance_id=1,
+    )
+    executor.work_items.save_codex_thread_id_for_attempt(attempt_id, "thread-issue-1")
+    executor.work_items.finish_attempt_run(attempt_id, status="review", outcome="ready")
+
+    executor.work_items.move_work_item(
+        WorkItemMove(
+            work_item_id=work_item_id,
+            target_state="in_progress",
+            reasons=["revise_implementation"],
+            note="Try the focused fix again.",
+        )
+    )
+
+    rerun = executor.work_items.next_queued_run()
+    assert rerun is not None
+    assert rerun.codex_thread_id == "thread-issue-1"
+
+
 def test_conversation_codex_runs_resume_saved_app_server_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1278,6 +1435,44 @@ class LocalTicketPrimitiveGitHub(FakePrimitiveGitHub):
             head_repo=repo,
             body=source_item_link_marker(self.source_item_id),
         )
+
+
+def _activate_issue_work_item(executor: PrimitiveExecutor, store: Store) -> tuple[int, str, int]:
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+    executor.sources.upsert_source_items(
+        source_id=source.id,
+        items=[
+            SourceItemUpsert(
+                kind="issue",
+                number=245,
+                title="Logging path support",
+                url="https://github.com/dbcli/litecli/issues/245",
+                state="open",
+                author="amjith",
+                labels=[],
+                body="The log_file option does not expand ~.",
+                github_updated_at="2026-05-24T11:00:00Z",
+            )
+        ],
+    )
+    source_item = executor.sources.backlog_source_items(source.id)[0]
+    work_item = executor.work_items.activate_source_item(
+        WorkItemActivation(source_item_id=source_item.id, task_type="code")
+    )
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=245,
+            title=work_item.title,
+            url="https://github.com/dbcli/litecli/issues/245",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    run = executor.work_items.next_queued_run()
+    assert run is not None
+    return work_item.id, work_item.title, run.id
 
 
 def _context(

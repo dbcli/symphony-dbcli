@@ -109,4 +109,4 @@ def _assert_work_item_columns_repaired(engine: Engine) -> None:
     assert {"active_pr_source_item_id", "disposition", "disposition_note", "disposition_at"} <= (
         work_item_columns
     )
-    assert {"attempt_id", "workflow_instance_id"} <= run_columns
+    assert {"attempt_id", "workflow_instance_id", "source_attempt_id", "codex_thread_id"} <= run_columns
