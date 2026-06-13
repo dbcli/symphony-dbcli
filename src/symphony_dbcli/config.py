@@ -109,6 +109,7 @@ class WorkerConfig:
 class DashboardConfig:
     host: str = "127.0.0.1"
     port: int = 8765
+    uvicorn_workers: int = 4
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,8 @@ def validate_config(config: WorkflowConfig) -> None:
         errors.append("workers.shutdown_grace_seconds must be at least 0.")
     if config.dashboard.port < 1 or config.dashboard.port > 65535:
         errors.append("dashboard.port must be between 1 and 65535.")
+    if config.dashboard.uvicorn_workers < 1:
+        errors.append("dashboard.uvicorn_workers must be at least 1.")
     if not config.github.repos:
         errors.append("github.repos must include at least one repository.")
     for repo in config.github.repos:

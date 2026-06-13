@@ -57,6 +57,7 @@ shutdown_grace_seconds = 10
 [dashboard]
 host = "127.0.0.1"
 port = 8765
+uvicorn_workers = 4
 
 [database]
 path = "/Users/amjith/.local/state/symphony-dbcli/symphony.db"

@@ -105,8 +105,6 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'value="all"' in response.text
     assert 'value="issue"' in response.text
     assert 'value="pull_request"' in response.text
-    assert 'name="backlog_q"' not in response.text
-    assert 'name="todo_q"' not in response.text
     assert 'hx-trigger="change"' in response.text
     assert 'hx-trigger="input changed delay:200ms, search"' in response.text
     assert 'hx-target="#board-columns"' in response.text
@@ -115,14 +113,9 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'hx-push-url="true"' in response.text
     assert "dbcli/litecli" in response.text
     assert "Sync Source" in response.text
-    assert 'aria-label="Runtime"' not in response.text
-    assert 'class="runtime-strip"' not in response.text
-    assert "auto dispatch" not in response.text
-    assert "dry run" not in response.text
     assert "data-theme-toggle" in response.text
     assert "data-theme-toggle-label>&#9790;</span>" in response.text
     assert "Switch to dark mode" in response.text
-    assert ">Dark</span>" not in response.text
     assert '<link rel="stylesheet" href="/web-static/web.css?v=' in response.text
     assert '<script src="/web-static/vendor/htmx.min.js"' in response.text
     assert '<script src="/web-static/vendor/sortable.min.js"' in response.text
@@ -1814,7 +1807,7 @@ def test_fastapi_attempt_page_labels_pr_feedback_gate_explicitly(tmp_path: Path)
     assert f'action="/workflow-gates/{gate_id}/run"' in response.text
 
 
-def test_fastapi_workflow_edit_preview_posts_without_legacy_server(tmp_path: Path) -> None:
+def test_fastapi_workflow_edit_preview_renders_proposal(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.post(
@@ -1831,7 +1824,7 @@ def test_fastapi_workflow_edit_preview_posts_without_legacy_server(tmp_path: Pat
     assert "data-line-number-gutter" in response.text
 
 
-def test_fastapi_github_app_callback_matches_legacy_setup_page(tmp_path: Path) -> None:
+def test_fastapi_github_app_callback_renders_conversion_instructions(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.get("/github-app/callback?code=abc123&state=xyz")

@@ -36,6 +36,12 @@ Use clean typed Python throughout the project.
 - Avoid broad catch-all exception handling except around long-running service
   loops where the process must stay alive.
 
+## Tests
+
+- Do not add tests whose purpose is to assert that a removed feature or old
+  implementation detail is absent. Remove obsolete coverage instead, and keep
+  tests focused on the intended current behavior.
+
 ## Dashboard UI
 
 - Use Jinja templates for HTML.

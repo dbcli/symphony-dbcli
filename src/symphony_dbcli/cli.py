@@ -176,7 +176,7 @@ def _add_serve_reload_flags(parser: argparse.ArgumentParser) -> None:
         dest="reload",
         action="store_true",
         default=None,
-        help="Reload the FastAPI process when Python, template, static, or workflow files change.",
+        help="Reload the FastAPI process when files change.",
     )
     parser.add_argument(
         "--no-reload",
@@ -426,9 +426,7 @@ def cmd_serve_web(args: argparse.Namespace) -> int:
 def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
     import uvicorn
 
-    from .web.app import create_app
-
-    config, _, store = _load_config_store_and_record(
+    config, _, _ = _load_config_store_and_record(
         args.workflow,
         profile=_runtime_profile(args),
     )
@@ -441,13 +439,16 @@ def _run_fastapi(args: argparse.Namespace, *, run_runtime: bool) -> int:
             host=config.dashboard.host,
             port=config.dashboard.port,
             reload=True,
-            reload_dirs=_reload_dirs(args.workflow),
-            reload_includes=_reload_includes(args.workflow),
-            reload_excludes=_reload_excludes(args.workflow, config),
         )
     else:
-        app = create_app(config, store, workflow_path=args.workflow, run_runtime=run_runtime)
-        uvicorn.run(app, host=config.dashboard.host, port=config.dashboard.port)
+        _set_fastapi_factory_env(args.workflow, config.profile.active, run_runtime=run_runtime)
+        uvicorn.run(
+            "symphony_dbcli.web.app:create_app_from_env",
+            factory=True,
+            host=config.dashboard.host,
+            port=config.dashboard.port,
+            workers=config.dashboard.uvicorn_workers,
+        )
     return 0
 
 
@@ -455,69 +456,6 @@ def _set_fastapi_factory_env(workflow_path: str, profile: str, *, run_runtime: b
     os.environ["SYMPHONY_WORKFLOW"] = str(Path(workflow_path))
     os.environ["SYMPHONY_PROFILE"] = profile
     os.environ["SYMPHONY_RUN_RUNTIME"] = "1" if run_runtime else "0"
-
-
-def _reload_dirs(workflow_path: str) -> list[str]:
-    src_dir = Path("src")
-    if src_dir.exists():
-        return [str(src_dir.resolve())]
-    return [str(Path(__file__).resolve().parent)]
-
-
-def _reload_includes(workflow_path: str) -> list[str]:
-    return ["*.py", "*.html", "*.css", "*.js"]
-
-
-def _reload_excludes(workflow_path: str, config: WorkflowConfig) -> list[str]:
-    workflow_dir = Path(workflow_path).resolve().parent
-    excluded_dirs = _unique_paths(
-        [
-            workflow_dir / ".git",
-            workflow_dir / ".mypy_cache",
-            workflow_dir / ".pytest_cache",
-            workflow_dir / ".ruff_cache",
-            workflow_dir / ".symphony",
-            workflow_dir / ".venv",
-            Path(config.database.path).resolve().parent,
-            Path(config.workspace.root).resolve(),
-            Path(config.workspace.bare_repos_root).resolve(),
-        ],
-        protected={workflow_dir, Path.cwd().resolve()},
-    )
-    return [
-        *[str(path) for path in excluded_dirs],
-        ".git",
-        ".git/*",
-        ".git/**",
-        ".mypy_cache",
-        ".mypy_cache/*",
-        ".mypy_cache/**",
-        ".pytest_cache",
-        ".pytest_cache/*",
-        ".pytest_cache/**",
-        ".ruff_cache",
-        ".ruff_cache/*",
-        ".ruff_cache/**",
-        ".symphony",
-        ".symphony/*",
-        ".symphony/**",
-        ".venv",
-        ".venv/*",
-        ".venv/**",
-    ]
-
-
-def _unique_paths(paths: list[Path], *, protected: set[Path]) -> list[Path]:
-    unique: list[Path] = []
-    seen: set[Path] = set()
-    for path in paths:
-        if path in protected:
-            continue
-        if path in seen:
-            continue
-        seen.add(path)
-        unique.append(path)
-    return unique
 
 
 def _load_config_store_and_record(

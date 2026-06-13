@@ -31,6 +31,7 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.workspace.bare_repos_root == ".symphony/repos"
     assert config.workspace.branch_prefix == "symphony"
     assert config.dashboard.host == "127.0.0.1"
+    assert config.dashboard.uvicorn_workers == 4
     assert config.codex.workflow_edit_model == "gpt-5.4-mini"
     assert config.codex.workflow_edit_reasoning_effort == "low"
     assert config.policy.dry_run is True
@@ -43,8 +44,6 @@ def test_rendered_workflow_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.preferences.preferred_test_strategy == "unit"
     assert config.preferences.run_review_after_code_change is True
     assert config.setup.enabled is True
-    assert "post_research_answers" not in workflow
-    assert "open_pull_requests" not in workflow
     assert "Workers should be direct" in config.instructions
 
 
@@ -60,6 +59,7 @@ def test_rendered_workflow_includes_local_and_prod_profiles() -> None:
     assert "[preferences]" in workflow
     assert 'workflow_edit_model = "gpt-5.4-mini"' in workflow
     assert 'workflow_edit_reasoning_effort = "low"' in workflow
+    assert "uvicorn_workers = 4" in workflow
     assert "[profiles.local.database]" in workflow
     assert 'path = ".symphony/symphony.db"' in workflow
     assert "[profiles.prod.database]" in workflow
