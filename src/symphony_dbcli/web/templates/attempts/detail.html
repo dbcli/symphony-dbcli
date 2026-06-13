@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_draft_replies.html" import draft_replies %}
 {% from "_formatted_result.html" import formatted_result %}
 {% from "_time.html" import compact_time %}
 {% block body %}
@@ -165,44 +164,78 @@
   </article>
   {% endif %}
 
-  {% if pending_gates %}
-  <article class="chat-message is-system">
+  {% if detail.comments %}
+  {% for row in detail.comments %}
+  <article class="chat-message is-assistant attempt-draft-reply">
     <div class="chat-message-meta">
-      <strong>Pending Workflow Gates</strong>
-      <span>{{ pending_gates|length }}</span>
+      <strong>Assistant</strong>
+      <span>{{ compact_time(row.created_at) }}</span>
     </div>
-    <div class="attempt-action-list">
-      {% for gate in pending_gates %}
-      <div class="attempt-action-item">
-        <div class="draft-meta">
-          <strong>{{ gate.transition_name }}</strong>
-          <span>{{ gate.gate }}</span>
-          <span>{{ compact_time(gate.created_at) }}</span>
-        </div>
-        {% if gate.transition_name == "create_draft_pr" %}
-        <p>Symphony will commit and push the branch if needed, then create a draft PR from the worker's title and description.</p>
-        {% elif gate.transition_name == "post_answer" %}
-        <p>Review the editable GitHub reply below before continuing.</p>
-        {% elif gate.prompt %}
-        <p>{{ gate.prompt }}</p>
-        {% endif %}
-        {% if gate.transition_name != "post_answer" %}
-        <form action="/workflow-gates/{{ gate.id }}/run" method="post" class="inline-form">
-          <input type="hidden" name="return_to" value="{{ return_to }}" />
-          {% if gate.transition_name == "create_draft_pr" %}
-          <button type="submit">Create Draft PR</button>
-          {% elif gate.transition_name == "push_pr_feedback_fix" %}
-          <button type="submit">Push Fix to Existing PR</button>
-          {% else %}
-          <button type="submit">Run Workflow Gate</button>
-          {% endif %}
-        </form>
-        {% endif %}
+    <div class="chat-result-meta">
+      <strong>Draft reply</strong>
+      <span>{{ row.status }}</span>
+      {% if row.url %}
+      <a href="{{ row.url }}" target="_blank" rel="noreferrer">GitHub comment</a>
+      {% endif %}
+    </div>
+    {% if row.status == "drafted" and post_answer_gate %}
+    <form action="/workflow-gates/{{ post_answer_gate.id }}/run" method="post" class="stacked-form draft-form">
+      <input type="hidden" name="comment_id" value="{{ row.id }}" />
+      <input type="hidden" name="return_to" value="{{ return_to }}" />
+      <label for="attempt-draft-reply-{{ row.id }}">Reply</label>
+      <textarea id="attempt-draft-reply-{{ row.id }}" name="body" rows="10">{{ row.body }}</textarea>
+      <div class="form-actions">
+        <button type="submit">Post to GitHub</button>
       </div>
-      {% endfor %}
+    </form>
+    {% else %}
+    <pre class="result-body">{{ row.body }}</pre>
+    {% endif %}
+  </article>
+  {% endfor %}
+  {% endif %}
+
+  {% if create_draft_pr_gate %}
+  <article class="chat-message is-assistant attempt-action-message">
+    <div class="chat-message-meta">
+      <strong>Assistant</strong>
+      <span>{{ compact_time(create_draft_pr_gate.created_at) }}</span>
     </div>
+    <div class="chat-result-meta">
+      <strong>Draft pull request</strong>
+      <span>{{ create_draft_pr_gate.gate }}</span>
+    </div>
+    <p>Ready to create a draft pull request from the worker result.</p>
+    <form action="/workflow-gates/{{ create_draft_pr_gate.id }}/run" method="post" class="inline-form">
+      <input type="hidden" name="return_to" value="{{ return_to }}" />
+      <button type="submit">Create Draft PR</button>
+    </form>
   </article>
   {% endif %}
+
+  {% for gate in pending_gates %}
+    {% if gate.transition_name == "push_pr_feedback_fix" %}
+    <article class="chat-message is-assistant attempt-action-message">
+      <div class="chat-message-meta">
+        <strong>Assistant</strong>
+        <span>{{ compact_time(gate.created_at) }}</span>
+      </div>
+      <div class="chat-result-meta">
+        <strong>PR feedback fix</strong>
+        <span>{{ gate.gate }}</span>
+      </div>
+      {% if gate.prompt %}
+      <p>{{ gate.prompt }}</p>
+      {% else %}
+      <p>Ready to push the follow-up fix to the existing pull request branch.</p>
+      {% endif %}
+      <form action="/workflow-gates/{{ gate.id }}/run" method="post" class="inline-form">
+        <input type="hidden" name="return_to" value="{{ return_to }}" />
+        <button type="submit">Push Fix to Existing PR</button>
+      </form>
+    </article>
+    {% endif %}
+  {% endfor %}
 
   {% if retryable_failed_workflow_actions %}
   <article class="chat-message is-system">
@@ -301,43 +334,6 @@
   </article>
   {% endif %}
 
-  <article class="chat-message is-system">
-    <div class="chat-message-meta">
-      <strong>Timeline</strong>
-      <span>{{ detail.timeline|length }}</span>
-    </div>
-    <details class="attempt-message-details">
-      <summary>Run timeline</summary>
-      {% if detail.timeline %}
-      <div class="compact-table-wrap">
-        <table class="data-table compact-table">
-          <thead><tr><th>Time</th><th>Phase</th><th>Event</th><th>Message</th><th>Duration</th></tr></thead>
-          <tbody>
-            {% for row in detail.timeline %}
-            {% set timeline_message = row.message|string %}
-            <tr>
-              <td>{{ compact_time(row.started_at, seconds=True) }}</td>
-              <td>{{ row.phase }}</td>
-              <td>{{ row.event_type }}</td>
-              <td>
-                {% if timeline_message.startswith("http://") or timeline_message.startswith("https://") %}
-                <a href="{{ timeline_message }}" target="_blank" rel="noreferrer">{{ timeline_message }}</a>
-                {% else %}
-                {{ row.message }}
-                {% endif %}
-              </td>
-              <td>{{ row.duration_ms|ms }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <div class="empty-state">No timeline events.</div>
-      {% endif %}
-    </details>
-  </article>
-
   {% if detail.errors %}
   <article class="chat-message is-assistant is-error">
     <div class="chat-message-meta">
@@ -358,39 +354,30 @@
     </div>
   </article>
   {% endif %}
-</section>
 
-{{ draft_replies(
-  detail.comments,
-  post_gate_id=post_answer_gate.id if post_answer_gate else none,
-  return_to=return_to,
-  legacy_post=False
-) }}
-{% if can_request_adjustment %}
-<section class="panel">
-  <form
-    class="stacked-form"
-    method="post"
-    action="/attempts/{{ detail.attempt.id }}/adjustment"
-    data-chat-submit-form
-  >
-    <input type="hidden" name="return_to" value="/attempts/{{ detail.attempt.id }}" />
-    <label for="attempt-follow-up">Reply</label>
-    <textarea
-      id="attempt-follow-up"
-      name="note"
-      rows="4"
-      required
-      placeholder="Send a follow-up for this attempt"
-    ></textarea>
-    <div class="form-actions">
-      <button type="submit">Send Follow-up</button>
-      {% if detail.attempt.work_item_id %}
-      <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
-      {% endif %}
-    </div>
-  </form>
+  {% if can_request_adjustment %}
+  <article class="chat-message is-user attempt-composer">
+    <form
+      class="stacked-form"
+      method="post"
+      action="/attempts/{{ detail.attempt.id }}/adjustment"
+      data-chat-submit-form
+    >
+      <input type="hidden" name="return_to" value="/attempts/{{ detail.attempt.id }}" />
+      <label for="attempt-follow-up">Reply</label>
+      <textarea
+        id="attempt-follow-up"
+        name="note"
+        rows="4"
+        required
+        placeholder="Send a follow-up for this attempt"
+      ></textarea>
+      <div class="form-actions">
+        <button type="submit">Send Follow-up</button>
+      </div>
+    </form>
+  </article>
+  {% endif %}
 </section>
-{% endif %}
 {% endif %}
 {% endblock %}

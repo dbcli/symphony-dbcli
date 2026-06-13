@@ -1057,6 +1057,9 @@ def test_fastapi_attempt_page_queues_codex_adjustment(tmp_path: Path) -> None:
 
     assert detail.status_code == 200
     assert "Send Follow-up" in detail.text
+    assert detail.text.index('aria-label="Attempt conversation"') < detail.text.index(
+        'class="chat-message is-user attempt-composer"'
+    )
     assert f'action="/attempts/{attempt_id}/adjustment"' in detail.text
     assert 'name="note"' in detail.text
     assert '<nav class="breadcrumbs" aria-label="Breadcrumb">' in detail.text
@@ -1770,27 +1773,21 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     assert 'data-live-output-mode="raw" aria-pressed="false"' in attempt.text
     assert "data-live-codex-raw" in attempt.text
     assert "No streamed Codex output yet." in attempt.text
-    assert attempt.text.index("Pending Workflow Gates") < attempt.text.index("Timeline")
-    assert (
-        '<time datetime="2026-01-25T12:00:00Z" title="2026-01-25 4:00:00 AM PST">Jan 25, 4:00:00am</time>'
-    ) in attempt.text
-    assert "Pending Workflow Gates" in attempt.text
-    assert "post_answer" in attempt.text
+    assert attempt.text.index('aria-label="Attempt conversation"') < attempt.text.index(
+        'class="chat-message is-assistant attempt-draft-reply"'
+    )
+    assert 'class="chat-message is-assistant attempt-draft-reply"' in attempt.text
+    assert "Draft reply" in attempt.text
+    assert f'action="/workflow-gates/{gate_id}/run"' in attempt.text
+    assert "Post to GitHub" in attempt.text
     assert "42.5K tokens" in attempt.text
     assert "PR #257" in attempt.text
     assert 'class="metric-link" href="https://github.com/dbcli/litecli/pull/257"' in attempt.text
     assert (
         '<time datetime="2026-01-25T12:02:00Z" title="2026-01-25 4:02:00 AM PST">Jan 25, 4:02am</time>'
     ) in attempt.text
-    assert (
-        '<time datetime="2026-01-25T12:03:00Z" title="2026-01-25 4:03:00 AM PST">Jan 25, 4:03am</time>'
-    ) in attempt.text
-    assert 'href="https://github.com/dbcli/litecli/pull/258"' in attempt.text
-    assert 'target="_blank" rel="noreferrer">https://github.com/dbcli/litecli/pull/258</a>' in attempt.text
     assert "Worker result body" in attempt.text
     assert "Suggested reply body" in attempt.text
-    assert "Started codex exec" in attempt.text
-    assert "Finished codex exec" in attempt.text
     assert '<section class="panel accordion-panel" data-collapsible="codex-prompts">' not in attempt.text
     assert '<div class="panel accordion-panel" data-collapsible="worker-result">' not in attempt.text
     assert "<summary>Initial prompt</summary>" in attempt.text
@@ -1798,9 +1795,7 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     assert "Run transcript" in attempt.text
     assert "Draft a reply for issue 245." in attempt.text
     assert "/tmp/litecli" in attempt.text
-    assert "2026-01-25 4:00:00 AM PST" in attempt.text
     assert "RuntimeError: worker exploded" in attempt.text
-    assert f'action="/workflow-gates/{gate_id}/run"' in attempt.text
     assert issue.status_code == 200
     assert "Logging support question" in issue.text
     assert "Attempts" in issue.text
@@ -1866,7 +1861,8 @@ def test_fastapi_attempt_page_creates_code_follow_up_and_renders_draft_pr_gate(t
     assert f'action="/workflow-gates/{gate_id}/run"' in draft_pr.text
     assert 'name="title"' not in draft_pr.text
     assert 'name="body"' not in draft_pr.text
-    assert "Symphony will commit and push the branch" in draft_pr.text
+    assert "Draft pull request" in draft_pr.text
+    assert "Ready to create a draft pull request from the worker result." in draft_pr.text
     assert "Fix #245: Logging support question" not in draft_pr.text
     assert "## Changes" not in draft_pr.text
     assert "Fixes https://github.com/dbcli/litecli/issues/245" not in draft_pr.text
@@ -2088,7 +2084,7 @@ def test_fastapi_attempt_page_labels_pr_feedback_gate_explicitly(tmp_path: Path)
     response = client.get(f"/attempts/{attempt_id}")
 
     assert response.status_code == 200
-    assert "push_pr_feedback_fix" in response.text
+    assert "PR feedback fix" in response.text
     assert "Push Fix to Existing PR" in response.text
     assert "Run Gate" not in response.text
     assert f'action="/workflow-gates/{gate_id}/run"' in response.text

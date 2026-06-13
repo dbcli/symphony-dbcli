@@ -857,6 +857,24 @@ h2 {
   justify-self: end;
 }
 
+.attempt-thread .attempt-draft-reply .draft-form {
+  margin-top: 6px;
+}
+
+.attempt-thread .attempt-draft-reply textarea,
+.attempt-thread .attempt-composer textarea {
+  width: 100%;
+}
+
+.attempt-thread .attempt-composer {
+  justify-self: stretch;
+  background: var(--surface);
+}
+
+.attempt-thread .attempt-composer form {
+  width: 100%;
+}
+
 .attempt-live-message {
   max-width: min(100%, 920px);
 }
