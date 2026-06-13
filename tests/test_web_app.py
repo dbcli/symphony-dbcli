@@ -9,7 +9,7 @@ from pathlib import Path
 import anyio
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
@@ -17,8 +17,10 @@ from symphony_dbcli.config import DatabaseConfig, WorkflowConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import GitHubIssue, PullRequest
 from symphony_dbcli.models import (
+    Source,
     SourceItem,
     SourceItemLink,
+    SourceSyncRun,
     WorkItem,
     WorkItemLink,
     WorkItemRun,
@@ -1334,6 +1336,7 @@ def test_fastapi_sources_can_be_added_and_listed(tmp_path: Path) -> None:
     assert "never" in sources.text
     assert 'action="/sources/' in sources.text
     assert "Open Board" in sources.text
+    assert "Delete" in sources.text
 
 
 def test_fastapi_sources_reject_invalid_repo(tmp_path: Path) -> None:
@@ -1343,6 +1346,53 @@ def test_fastapi_sources_reject_invalid_repo(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "owner/name format" in response.text
+
+
+def test_fastapi_source_delete_requires_display_name_confirmation(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=LinkedPullRequestSyncClient())
+    source_id = _add_source(client, "dbcli/litecli")
+    _sync_source(client, source_id)
+    source_item_id = _source_item_id_for(client, source_id, "Linked issue")
+    _activate_source_item(client, source_item_id, task_type="code")
+    update = client.post(
+        f"/sources/{source_id}",
+        data={"display_name": "LiteCLI Source", "enabled": "true"},
+        follow_redirects=False,
+    )
+    delete_page = client.get(f"/sources/{source_id}/delete")
+    rejected = client.post(
+        f"/sources/{source_id}/delete",
+        data={"confirmation": "dbcli/litecli"},
+    )
+    sources = client.get("/sources")
+
+    assert update.status_code == 303
+    assert delete_page.status_code == 200
+    assert f'action="/sources/{source_id}/delete"' in delete_page.text
+    assert "Type LiteCLI Source to confirm" in delete_page.text
+    assert rejected.status_code == 400
+    assert "Type LiteCLI Source to confirm deletion." in rejected.text
+    assert "LiteCLI Source" in sources.text
+
+    deleted = client.post(
+        f"/sources/{source_id}/delete",
+        data={"confirmation": "LiteCLI Source"},
+        follow_redirects=False,
+    )
+
+    assert deleted.status_code == 303
+    assert deleted.headers["location"] == "/sources"
+    assert _source_owned_record_counts(tmp_path) == {
+        "sources": 0,
+        "source_items": 0,
+        "source_item_links": 0,
+        "source_sync_runs": 0,
+        "work_items": 0,
+        "work_item_links": 0,
+        "work_item_runs": 0,
+        "work_item_state_events": 0,
+        "source_item_search": 0,
+    }
 
 
 def test_fastapi_ask_renders_inline_board_answer(tmp_path: Path) -> None:
@@ -1927,6 +1977,23 @@ def _source_item(tmp_path: Path, source_item_id: int) -> SourceItem:
     session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
     with session_factory() as session:
         return session.scalars(select(SourceItem).where(SourceItem.id == source_item_id)).one()
+
+
+def _source_owned_record_counts(tmp_path: Path) -> dict[str, int]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        search_count = session.execute(text("SELECT COUNT(*) FROM source_item_search")).scalar_one()
+        return {
+            "sources": len(list(session.scalars(select(Source)))),
+            "source_items": len(list(session.scalars(select(SourceItem)))),
+            "source_item_links": len(list(session.scalars(select(SourceItemLink)))),
+            "source_sync_runs": len(list(session.scalars(select(SourceSyncRun)))),
+            "work_items": len(list(session.scalars(select(WorkItem)))),
+            "work_item_links": len(list(session.scalars(select(WorkItemLink)))),
+            "work_item_runs": len(list(session.scalars(select(WorkItemRun)))),
+            "work_item_state_events": len(list(session.scalars(select(WorkItemStateEvent)))),
+            "source_item_search": int(search_count),
+        }
 
 
 def _local_ticket_records(

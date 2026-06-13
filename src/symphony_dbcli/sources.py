@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any, Literal, Protocol, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from .models import (
     SourceSyncRun,
     WorkItem,
     WorkItemLink,
+    WorkItemRun,
     WorkItemStateEvent,
 )
 from .review_actions import (
@@ -29,7 +30,7 @@ from .review_actions import (
     issue_link_marker,
     source_item_link_marker,
 )
-from .search import matching_source_item_ids, rebuild_source_item_search
+from .search import delete_source_item_search, matching_source_item_ids, rebuild_source_item_search
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_ITEM_PAGE_SIZE = 20
@@ -330,6 +331,22 @@ class SourceRepository:
             session.commit()
             session.refresh(source)
             return SourceView.from_model(source)
+
+    def delete_source(self, source_id: int) -> SourceView | None:
+        with self._session_factory() as session:
+            source = session.get(Source, source_id)
+            if source is None:
+                return None
+            deleted = SourceView.from_model(source)
+            source_item_ids = list(
+                session.scalars(select(SourceItem.id).where(SourceItem.source_id == source_id))
+            )
+            work_item_ids = list(session.scalars(select(WorkItem.id).where(WorkItem.source_id == source_id)))
+            _delete_source_dependents(session, source_id, source_item_ids, work_item_ids)
+            delete_source_item_search(session, source_id)
+            session.execute(delete(Source).where(Source.id == source_id))
+            session.commit()
+            return deleted
 
     def open_source_items(self, source_id: int) -> list[SourceItemView]:
         with self._session_factory() as session:
@@ -708,6 +725,29 @@ def _next_local_ticket_number(session: Session, source_id: int) -> int:
         )
     )
     return int(max_number or 0) + 1
+
+
+def _delete_source_dependents(
+    session: Session,
+    source_id: int,
+    source_item_ids: list[int],
+    work_item_ids: list[int],
+) -> None:
+    if work_item_ids:
+        session.execute(delete(WorkItemRun).where(WorkItemRun.work_item_id.in_(work_item_ids)))
+        session.execute(delete(WorkItemStateEvent).where(WorkItemStateEvent.work_item_id.in_(work_item_ids)))
+        session.execute(delete(WorkItemLink).where(WorkItemLink.work_item_id.in_(work_item_ids)))
+    if source_item_ids:
+        session.execute(delete(WorkItemLink).where(WorkItemLink.source_item_id.in_(source_item_ids)))
+        session.execute(delete(SourceItemLink).where(SourceItemLink.source_item_id.in_(source_item_ids)))
+        session.execute(
+            delete(SourceItemLink).where(SourceItemLink.linked_source_item_id.in_(source_item_ids))
+        )
+    if work_item_ids:
+        session.execute(delete(WorkItem).where(WorkItem.id.in_(work_item_ids)))
+    session.execute(delete(SourceItemLink).where(SourceItemLink.source_id == source_id))
+    session.execute(delete(SourceSyncRun).where(SourceSyncRun.source_id == source_id))
+    session.execute(delete(SourceItem).where(SourceItem.source_id == source_id))
 
 
 def _source_item_view_with_links(item: SourceItem, linked_items: list[SourceItem]) -> SourceItemView:

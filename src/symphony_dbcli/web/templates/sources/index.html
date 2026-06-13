@@ -17,6 +17,7 @@
         <th>Sync</th>
         <th>Board</th>
         <th>Edit</th>
+        <th>Delete</th>
         <th>Created</th>
       </tr>
     </thead>
@@ -40,6 +41,7 @@
         </td>
         <td><a href="/board/source/{{ source.id }}">Open Board</a></td>
         <td><a href="/sources/{{ source.id }}/edit">Edit</a></td>
+        <td><a class="button-link quiet" href="/sources/{{ source.id }}/delete">Delete</a></td>
         <td>{{ compact_time(source.created_at) }}</td>
       </tr>
       {% endfor %}

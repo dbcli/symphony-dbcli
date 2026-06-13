@@ -96,6 +96,47 @@ def edit(request: Request, source_id: int) -> Response:
     )
 
 
+@router.get("/sources/{source_id}/delete")
+def delete_confirmation(request: Request, source_id: int) -> Response:
+    source = source_repository(request).get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    context = page_context(request, title="Delete Source", active="sources")
+    context["source"] = source
+    context["confirmation"] = ""
+    context["error"] = ""
+    return templates.TemplateResponse(
+        request=request,
+        name="sources/delete.html",
+        context=context,
+    )
+
+
+@router.post("/sources/{source_id}/delete")
+def delete(
+    request: Request,
+    source_id: int,
+    confirmation: Annotated[str, Form()],
+) -> Response:
+    repo = source_repository(request)
+    source = repo.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if confirmation.strip() != source.display_name:
+        context = page_context(request, title="Delete Source", active="sources")
+        context["source"] = source
+        context["confirmation"] = confirmation
+        context["error"] = f"Type {source.display_name} to confirm deletion."
+        return templates.TemplateResponse(
+            request=request,
+            name="sources/delete.html",
+            context=context,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    repo.delete_source(source_id)
+    return RedirectResponse("/sources", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.post("/sources/{source_id}")
 def update(
     request: Request,

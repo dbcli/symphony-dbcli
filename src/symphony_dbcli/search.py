@@ -22,11 +22,7 @@ def ensure_source_item_search_schema(session: Session) -> None:
 
 
 def rebuild_source_item_search(session: Session, source_id: int) -> None:
-    ensure_source_item_search_schema(session)
-    session.execute(
-        text("DELETE FROM source_item_search WHERE source_id = :source_id"),
-        {"source_id": source_id},
-    )
+    delete_source_item_search(session, source_id)
     rows = [
         {
             "source_item_id": item.id,
@@ -46,6 +42,14 @@ def rebuild_source_item_search(session: Session, source_id: int) -> None:
             ),
             rows,
         )
+
+
+def delete_source_item_search(session: Session, source_id: int) -> None:
+    ensure_source_item_search_schema(session)
+    session.execute(
+        text("DELETE FROM source_item_search WHERE source_id = :source_id"),
+        {"source_id": source_id},
+    )
 
 
 def matching_source_item_ids(session: Session, source_id: int, query: str) -> set[int]:
