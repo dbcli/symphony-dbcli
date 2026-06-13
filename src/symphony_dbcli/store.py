@@ -313,6 +313,68 @@ class Store:
                 ).fetchone(),
             )
 
+    def workflow_action_run_by_id(self, action_run_id: int) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return cast(
+                sqlite3.Row | None,
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM workflow_action_runs
+                    WHERE id = ?
+                    """,
+                    (action_run_id,),
+                ).fetchone(),
+            )
+
+    def workflow_action_runs_for_attempt(self, attempt_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM workflow_action_runs
+                    WHERE attempt_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (attempt_id,),
+                )
+            )
+
+    def prepare_workflow_action_retry(
+        self,
+        *,
+        instance_id: int,
+        attempt_id: int,
+        state: str,
+        transition_name: str,
+    ) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE workflow_instances
+                SET current_state = ?,
+                    status = 'active',
+                    completed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (state, now, instance_id),
+            )
+            conn.execute(
+                """
+                UPDATE attempts
+                SET status = 'running',
+                    outcome = ?,
+                    completed_at = NULL,
+                    duration_ms = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (f"manual_retry:{transition_name}", now, attempt_id),
+            )
+
     def workflow_instance_for_work_item(self, work_item_id: int) -> sqlite3.Row | None:
         with self.connect() as conn:
             return cast(
@@ -524,6 +586,22 @@ class Store:
                     """,
                     (instance_id, transition_name),
                 ).fetchone(),
+            )
+
+    def failed_workflow_action_runs(self, instance_id: int, transition_name: str) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM workflow_action_runs
+                    WHERE workflow_instance_id = ?
+                      AND transition_name = ?
+                      AND status = 'failed'
+                    ORDER BY id ASC
+                    """,
+                    (instance_id, transition_name),
+                )
             )
 
     def workflow_transition_exists_after(
@@ -1861,6 +1939,7 @@ class Store:
                 "source_result": self.follow_up_source_result(attempt_id),
                 "follow_up_targets": self.attempt_follow_up_targets(attempt_id),
                 "code_follow_up": self.code_follow_up_attempt(attempt_id),
+                "workflow_action_runs": self.workflow_action_runs_for_attempt(attempt_id),
                 "timeline": list(
                     conn.execute(
                         "SELECT * FROM worker_timeline_events WHERE attempt_id = ? ORDER BY id ASC",

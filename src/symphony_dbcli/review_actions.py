@@ -111,13 +111,6 @@ class ReviewActions:
             base_commit,
             require_changes=True,
         )
-        self.store.update_attempt_workspace(
-            attempt_id,
-            base_repo_path=str(attempt["base_repo_path"]),
-            worktree_path=worktree_path,
-            branch=branch,
-            commit_sha=commit_sha,
-        )
 
         self.github.push_branch(repo=repo, worktree_path=worktree_path, branch=branch)
         self.store.record_timeline_event(
@@ -148,6 +141,13 @@ class ReviewActions:
             base=self.github.default_branch(repo),
             body=pr_body,
             draft=True,
+        )
+        self.store.update_attempt_workspace(
+            attempt_id,
+            base_repo_path=str(attempt["base_repo_path"]),
+            worktree_path=worktree_path,
+            branch=branch,
+            commit_sha=commit_sha,
         )
         self.store.record_pr(
             attempt_id,

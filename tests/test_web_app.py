@@ -1592,6 +1592,96 @@ def test_fastapi_attempt_page_creates_code_follow_up_and_renders_draft_pr_gate(t
     assert "Fixes https://github.com/dbcli/litecli/issues/245" not in draft_pr.text
 
 
+def test_fastapi_attempt_page_renders_failed_action_retry_button(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    store = _legacy_store(tmp_path)
+    _seed_legacy_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="failed",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="worker_complete",
+        attempt_id=attempt_id,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        attempt_id=attempt_id,
+        transition_name="auto_create_draft_pr",
+        action_name="github.create_draft_pr",
+        retry_count=1,
+    )
+    store.finish_workflow_action_run(action_run_id, status="failed", error="push failed")
+    store.fail_workflow_instance(instance_id, workflow_version_id=None, message="push failed")
+
+    response = client.get(f"/attempts/{attempt_id}")
+
+    assert response.status_code == 200
+    assert f'action="/workflow-actions/{action_run_id}/retry"' in response.text
+    assert "Retry auto_create_draft_pr" in response.text
+    assert "failed retry 1" in response.text
+
+
+def test_fastapi_retry_failed_action_route_invokes_orchestrator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    store = _legacy_store(tmp_path)
+    _seed_legacy_issue(store)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="failed",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="worker_complete",
+        attempt_id=attempt_id,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        attempt_id=attempt_id,
+        transition_name="auto_create_draft_pr",
+        action_name="github.create_draft_pr",
+    )
+    store.finish_workflow_action_run(action_run_id, status="failed", error="push failed")
+    called: list[int] = []
+
+    class FakeOrchestrator:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def retry_failed_workflow_action(self, action_run_id: int) -> None:
+            called.append(action_run_id)
+
+    monkeypatch.setattr(attempts, "Orchestrator", FakeOrchestrator)
+
+    response = client.post(
+        f"/workflow-actions/{action_run_id}/retry",
+        data={"return_to": f"/attempts/{attempt_id}"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/attempts/{attempt_id}"
+    assert called == [action_run_id]
+
+
 def test_fastapi_attempt_page_renders_workspace_diff_before_draft_pr(tmp_path: Path) -> None:
     client = _client(tmp_path)
     store = _legacy_store(tmp_path)

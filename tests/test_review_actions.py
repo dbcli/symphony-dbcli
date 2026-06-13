@@ -130,6 +130,51 @@ def test_review_actions_create_draft_pr_from_code_attempt(tmp_path: Path) -> Non
     assert "Worker Notes" not in github.pull_request_body
 
 
+def test_review_actions_create_draft_pr_retry_reuses_commit_after_push_failure(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    repo = tmp_path / "litecli"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "README.md").write_text("start\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial")
+    _git(repo, "checkout", "-b", "symphony/dbcli-litecli-245-attempt-1")
+    base_sha = _git(repo, "rev-parse", "HEAD")
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="review",
+    )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path=str(repo),
+        worktree_path=str(repo),
+        branch="symphony/dbcli-litecli-245-attempt-1",
+        commit_sha=base_sha,
+    )
+    (repo / "README.md").write_text("changed\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="push failed"):
+        ReviewActions(default_config(), store, github=FailingPushGitHub()).create_draft_pr(attempt_id)
+
+    failed_attempt = store.attempt_by_id(attempt_id)
+    assert failed_attempt is not None
+    assert failed_attempt["commit_sha"] == base_sha
+    committed_sha = _git(repo, "rev-parse", "HEAD")
+    assert committed_sha != base_sha
+
+    github = FakeGitHub()
+    pr = ReviewActions(default_config(), store, github=github).create_draft_pr(attempt_id)
+
+    retried_attempt = store.attempt_by_id(attempt_id)
+    assert pr.number == 7
+    assert retried_attempt is not None
+    assert retried_attempt["commit_sha"] == committed_sha
+    assert github.pushed_branches == [("dbcli/litecli", str(repo), "symphony/dbcli-litecli-245-attempt-1")]
+
+
 def test_review_actions_push_pr_update_retries_existing_local_commit(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
     repo = tmp_path / "litecli"

@@ -535,6 +535,7 @@ class WorkItemRepository:
                 return
             run.status = "running"
             run.started_at = run.started_at or now
+            run.completed_at = None
             run.updated_at = now
             session.commit()
 

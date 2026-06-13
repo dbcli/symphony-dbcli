@@ -4,6 +4,8 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from symphony_dbcli.config import WorkflowConfig, WorkspaceConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import (
@@ -17,7 +19,7 @@ from symphony_dbcli.github import (
     PullRequestMergeStatus,
 )
 from symphony_dbcli.models import WorkItem, WorkItemRun, create_model_tables
-from symphony_dbcli.orchestrator import Orchestrator, build_worker_prompt
+from symphony_dbcli.orchestrator import Orchestrator, OrchestratorError, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutionError, PrimitiveOutcome
 from symphony_dbcli.sources import SourceCreate, SourceItemUpsert, SourceRepository
 from symphony_dbcli.store import IssueSnapshot, Store
@@ -454,6 +456,92 @@ def test_orchestrator_retries_failed_transition_within_retry_limit(tmp_path: Pat
         "wait_created_pr",
     ]
     assert [(row["status"], row["retry_count"]) for row in fix_runs] == [("failed", 0), ("succeeded", 1)]
+
+
+def test_orchestrator_retry_limit_error_includes_failed_action_detail(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="queued",
+    )
+    config = _config_with_transition_retry("auto_create_draft_pr", retry_limit=0)
+    primitives = FakeWorkflowPrimitives(fail_once={"auto_create_draft_pr"})
+
+    with pytest.raises(
+        OrchestratorError,
+        match=(
+            "Workflow transition retry limit exceeded: auto_create_draft_pr.*"
+            "auto_create_draft_pr retry 0: auto_create_draft_pr failed once"
+        ),
+    ):
+        Orchestrator(
+            config,
+            store,
+            github=FakeCleanupGitHub(),
+            primitives=primitives,
+        ).run_attempt(attempt_id)
+
+
+def test_orchestrator_manually_retries_failed_automatic_action(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        status="failed",
+        worktree_path="/tmp/worktree",
+        base_repo_path="/tmp/repo.git",
+        branch="symphony/test",
+    )
+    store.update_attempt_workspace(
+        attempt_id,
+        base_repo_path="/tmp/repo.git",
+        worktree_path="/tmp/worktree",
+        branch="symphony/test",
+        commit_sha="abc123",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="worker_complete",
+        attempt_id=attempt_id,
+    )
+    action_run_id = store.start_workflow_action_run(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        attempt_id=attempt_id,
+        transition_name="auto_create_draft_pr",
+        action_name="github.create_draft_pr",
+        retry_count=0,
+    )
+    store.finish_workflow_action_run(action_run_id, status="failed", error="push failed")
+    store.fail_workflow_instance(instance_id, workflow_version_id=None, message="push failed")
+    config = _config_with_transition_retry("auto_create_draft_pr", retry_limit=0)
+    primitives = FakeWorkflowPrimitives()
+
+    result = Orchestrator(
+        config,
+        store,
+        github=FakeCleanupGitHub(),
+        primitives=primitives,
+    ).retry_failed_workflow_action(action_run_id)
+
+    attempt = store.attempt_by_id(attempt_id)
+    instance = store.workflow_instance_by_id(instance_id)
+    assert result.current_state == "pr_waiting"
+    assert result.stop_reason == "human_gate"
+    assert primitives.transitions == ["auto_create_draft_pr", "wait_created_pr"]
+    assert attempt is not None
+    assert attempt["status"] == "review"
+    assert attempt["outcome"] == "needs_review"
+    assert instance is not None
+    assert instance["current_state"] == "pr_waiting"
 
 
 def test_orchestrator_resumes_succeeded_action_checkpoint(tmp_path: Path) -> None:

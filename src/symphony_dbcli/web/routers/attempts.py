@@ -12,6 +12,7 @@ from starlette.background import BackgroundTask
 from starlette.datastructures import FormData
 from starlette.responses import RedirectResponse, Response
 
+from symphony_dbcli.actions import DEFAULT_ACTION_REGISTRY
 from symphony_dbcli.orchestrator import Orchestrator, OrchestratorError
 from symphony_dbcli.web.dependencies import (
     BreadcrumbItem,
@@ -59,6 +60,34 @@ def create_code_follow_up(request: Request, attempt_id: int) -> Response:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return RedirectResponse(
         f"/attempts/{target_attempt_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/workflow-actions/{action_run_id}/retry")
+def retry_workflow_action(
+    request: Request,
+    action_run_id: int,
+    return_to: Annotated[str, Form()] = "",
+) -> Response:
+    state = get_app_state(request)
+    action_run = state.store.workflow_action_run_by_id(action_run_id)
+    if not action_run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow action run not found")
+    attempt_id = action_run["attempt_id"]
+    if attempt_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Workflow action run is not associated with an attempt.",
+        )
+    try:
+        Orchestrator(state.config, state.store).retry_failed_workflow_action(action_run_id)
+    except OrchestratorError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return RedirectResponse(
+        _safe_path(return_to) or f"/attempts/{int(attempt_id)}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -216,8 +245,36 @@ def _attempt_context(request: Request, attempt_id: int) -> dict[str, object]:
     context["post_answer_gate"] = gate_transitions.get("post_answer")
     context["return_to"] = f"/attempts/{attempt_id}"
     context["can_request_adjustment"] = _can_request_adjustment(detail)
+    context["retryable_failed_workflow_actions"] = _retryable_failed_workflow_actions(state, detail)
     context["breadcrumbs"] = _attempt_breadcrumbs(request, detail, attempt_id)
     return context
+
+
+def _retryable_failed_workflow_actions(
+    state: WebAppState,
+    detail: dict[str, Any] | None,
+) -> list[sqlite3.Row]:
+    if not detail:
+        return []
+    if str(detail["attempt"]["status"]) != "failed":
+        return []
+    seen: set[str] = set()
+    retryable: list[sqlite3.Row] = []
+    for row in reversed(detail["workflow_action_runs"]):
+        if str(row["status"]) != "failed":
+            continue
+        transition_name = str(row["transition_name"])
+        if transition_name in seen:
+            continue
+        seen.add(transition_name)
+        transition = state.config.workflow.transitions.get(transition_name)
+        if transition is None or transition.trigger != "automatic":
+            continue
+        primitive = DEFAULT_ACTION_REGISTRY.get(transition.action)
+        if primitive is None or primitive.side_effect == "codex_worker":
+            continue
+        retryable.append(row)
+    return retryable
 
 
 def _can_request_adjustment(detail: dict[str, Any] | None) -> bool:

@@ -499,25 +499,8 @@ class Orchestrator:
                     "none",
                 },
             )
-            if result.current_state in self.config.workflow.terminal_states:
-                self.store.finish_attempt(attempt_id, result.current_state, result.current_state)
-                self.work_items.finish_attempt_run(
-                    attempt_id,
-                    status=result.current_state,
-                    outcome=result.current_state,
-                )
-                return attempt_id
-            if result.stop_reason == "human_gate":
-                self.store.finish_attempt(attempt_id, "review", "needs_review")
-                self.work_items.finish_attempt_run(
-                    attempt_id,
-                    status="review",
-                    outcome="needs_review",
-                )
-                return attempt_id
-            raise OrchestratorError(
-                f"Workflow stopped in state '{result.current_state}' with reason '{result.stop_reason}'."
-            )
+            self._finish_attempt_from_workflow_result(attempt_id, result)
+            return attempt_id
         except Exception as exc:
             self._fail_workflow_instance(instance_id, str(exc))
             self.store.record_error(
@@ -533,6 +516,81 @@ class Orchestrator:
             raise
         finally:
             heartbeat.stop()
+
+    def retry_failed_workflow_action(self, action_run_id: int) -> WorkflowAdvanceResult:
+        action_run = self.store.workflow_action_run_by_id(action_run_id)
+        if not action_run:
+            raise OrchestratorError(f"Workflow action run {action_run_id} does not exist.")
+        if str(action_run["status"]) != "failed":
+            raise OrchestratorError(f"Workflow action run {action_run_id} is not failed.")
+        attempt_id = _optional_int(action_run["attempt_id"])
+        if attempt_id is None:
+            raise OrchestratorError(f"Workflow action run {action_run_id} is not associated with an attempt.")
+        attempt = self.store.attempt_by_id(attempt_id)
+        if not attempt:
+            raise OrchestratorError(f"Attempt {attempt_id} does not exist.")
+        if str(attempt["status"]) != "failed":
+            raise OrchestratorError(f"Attempt {attempt_id} is not failed.")
+        instance_id = int(action_run["workflow_instance_id"])
+        instance = self.store.workflow_instance_by_id(instance_id)
+        if not instance:
+            raise OrchestratorError(f"Workflow instance {instance_id} does not exist.")
+        if str(instance["status"]) != "failed":
+            raise OrchestratorError(f"Workflow instance {instance_id} is not failed.")
+        transition_name = str(action_run["transition_name"])
+        transition = self.config.workflow.transitions.get(transition_name)
+        if not transition:
+            raise OrchestratorError(f"Workflow transition {transition_name!r} is not configured.")
+        if not _manual_retry_supported(transition):
+            raise OrchestratorError(f"Workflow transition {transition_name!r} cannot be retried manually.")
+
+        self.store.prepare_workflow_action_retry(
+            instance_id=instance_id,
+            attempt_id=attempt_id,
+            state=transition.from_state,
+            transition_name=transition_name,
+        )
+        self.work_items.start_attempt_run(attempt_id)
+        self.store.record_timeline_event(
+            attempt_id,
+            phase="workflow",
+            event_type="manual_retry_started",
+            message=transition_name,
+            data={"action_run_id": action_run_id},
+        )
+
+        try:
+            reset_instance = self.store.workflow_instance_by_id(instance_id)
+            if not reset_instance:
+                raise OrchestratorError(f"Workflow instance {instance_id} does not exist.")
+            match = WorkflowTransitionMatch(transition_name, transition)
+            if not self._run_single_automatic_transition(reset_instance, match):
+                raise OrchestratorError(
+                    self._workflow_retry_limit_error(
+                        instance_id,
+                        f"Workflow action retry failed: {transition_name}.",
+                        [transition_name],
+                    )
+                )
+            result = self._advance_workflow_instance(
+                instance_id,
+                allowed_side_effects={"github_read", "github_write", "workspace_write", "none"},
+            )
+            self._finish_attempt_from_workflow_result(attempt_id, result)
+            return result
+        except Exception as exc:
+            self._fail_workflow_instance(instance_id, str(exc))
+            self.store.record_error(
+                attempt_id,
+                phase="workflow",
+                error_type=type(exc).__name__,
+                message=str(exc),
+                recoverable=True,
+                log_excerpt=traceback.format_exc(limit=8),
+            )
+            self.store.finish_attempt(attempt_id, "failed", "failed")
+            self.work_items.finish_attempt_run(attempt_id, status="failed", outcome="failed")
+            raise
 
     def run_human_gate(
         self,
@@ -605,7 +663,13 @@ class Orchestrator:
             )
         context = self._workflow_context(instance)
         if not transition_retry_available(transition_name, transition, context):
-            raise OrchestratorError(f"Workflow transition retry limit exceeded: {transition_name}.")
+            raise OrchestratorError(
+                self._workflow_retry_limit_error(
+                    int(instance["id"]),
+                    f"Workflow transition retry limit exceeded: {transition_name}.",
+                    [transition_name],
+                )
+            )
         action_input = self._workflow_action_input(
             instance,
             transition=transition,
@@ -697,7 +761,18 @@ class Orchestrator:
                     context=context,
                 )
             except WorkflowEngineError as exc:
-                raise OrchestratorError(str(exc)) from exc
+                exhausted = engine.exhausted_transitions(
+                    from_state=current_state,
+                    trigger="automatic",
+                    context=context,
+                )
+                raise OrchestratorError(
+                    self._workflow_retry_limit_error(
+                        int(instance["id"]),
+                        str(exc),
+                        [match.name for match in exhausted],
+                    )
+                ) from exc
             if batch is None:
                 opened = self._open_human_gates(instance_id, current_state, context)
                 return WorkflowAdvanceResult(
@@ -732,6 +807,31 @@ class Orchestrator:
             if primitive.side_effect not in allowed_side_effects:
                 return False
         return True
+
+    def _finish_attempt_from_workflow_result(
+        self,
+        attempt_id: int,
+        result: WorkflowAdvanceResult,
+    ) -> None:
+        if result.current_state in self.config.workflow.terminal_states:
+            self.store.finish_attempt(attempt_id, result.current_state, result.current_state)
+            self.work_items.finish_attempt_run(
+                attempt_id,
+                status=result.current_state,
+                outcome=result.current_state,
+            )
+            return
+        if result.stop_reason == "human_gate":
+            self.store.finish_attempt(attempt_id, "review", "needs_review")
+            self.work_items.finish_attempt_run(
+                attempt_id,
+                status="review",
+                outcome="needs_review",
+            )
+            return
+        raise OrchestratorError(
+            f"Workflow stopped in state '{result.current_state}' with reason '{result.stop_reason}'."
+        )
 
     def _run_single_automatic_transition(
         self,
@@ -902,6 +1002,23 @@ class Orchestrator:
             artifacts=self.store.workflow_artifacts(int(instance["id"])),
             transition_failure_counts=self.store.workflow_action_failure_counts(int(instance["id"])),
         )
+
+    def _workflow_retry_limit_error(
+        self,
+        instance_id: int,
+        message: str,
+        transition_names: list[str],
+    ) -> str:
+        failure_messages: list[str] = []
+        for transition_name in transition_names:
+            for row in self.store.failed_workflow_action_runs(instance_id, transition_name):
+                error = _compact_error(str(row["error"] or ""))
+                if error:
+                    retry_count = int(row["retry_count"])
+                    failure_messages.append(f"{transition_name} retry {retry_count}: {error}")
+        if not failure_messages:
+            return message
+        return f"{message} Recorded transition failures: {' | '.join(failure_messages)}"
 
     def _workflow_action_input(
         self,
@@ -1268,6 +1385,19 @@ def _cleanup_summary_with(
 
 def _workflow_action_idempotency_key(instance_id: int, transition_name: str) -> str:
     return f"workflow:{instance_id}:{transition_name}"
+
+
+def _manual_retry_supported(transition: WorkflowTransitionConfig) -> bool:
+    if transition.trigger != "automatic":
+        return False
+    primitive = DEFAULT_ACTION_REGISTRY.get(transition.action)
+    if primitive is None:
+        return False
+    return primitive.side_effect in {"github_read", "github_write", "workspace_write", "none"}
+
+
+def _compact_error(error: str) -> str:
+    return " ".join(error.split())
 
 
 def _workflow_artifacts_from_output(

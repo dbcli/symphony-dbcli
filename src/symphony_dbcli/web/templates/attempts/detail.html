@@ -27,12 +27,20 @@
   </div>
 </section>
 
-{% if can_request_adjustment %}
+{% if can_request_adjustment or retryable_failed_workflow_actions %}
 <section class="panel flow-panel">
   <div class="section-heading">
     <h2>Actions</h2>
   </div>
   <div class="form-actions">
+    {% for action in retryable_failed_workflow_actions %}
+    <form action="/workflow-actions/{{ action.id }}/retry" method="post" class="inline-form">
+      <input type="hidden" name="return_to" value="{{ return_to }}" />
+      <button type="submit">Retry {{ action.transition_name }}</button>
+      <span class="muted">failed retry {{ action.retry_count }}{% if action.completed_at %} · {{ compact_time(action.completed_at) }}{% endif %}</span>
+    </form>
+    {% endfor %}
+    {% if can_request_adjustment %}
     <button
       type="button"
       hx-get="/attempts/{{ detail.attempt.id }}/adjustment-form?return_to=/attempts/{{ detail.attempt.id }}"
@@ -42,6 +50,7 @@
       Request Adjustment
     </button>
     <a class="button-link quiet" href="/work-items/{{ detail.attempt.work_item_id }}">Work Item</a>
+    {% endif %}
   </div>
 </section>
 {% endif %}
