@@ -17,6 +17,20 @@
       <a class="{{ 'is-active' if item.key == active else '' }}" href="{{ item.href }}">{{ item.label }}</a>
       {% endfor %}
     </nav>
+    <form class="header-chat-form" method="post" action="/chats" role="search" data-chat-submit-form>
+      <label class="sr-only" for="header-chat-message">Start chat</label>
+      <input
+        id="header-chat-message"
+        name="message"
+        placeholder="Ask Symphony or start work"
+        autocomplete="off"
+        required
+      />
+      {% if chat_source_id %}
+      <input type="hidden" name="source_id" value="{{ chat_source_id }}" />
+      {% endif %}
+      <button type="submit">Chat</button>
+    </form>
     <div class="header-actions" aria-label="Display">
       <button
         class="theme-toggle"

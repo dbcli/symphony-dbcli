@@ -48,6 +48,45 @@ def test_worker_prompt_describes_local_ticket_without_fake_issue_url() -> None:
     assert "GitHub issue:" not in prompt
 
 
+def test_worker_prompt_describes_conversation_without_fake_issue_url() -> None:
+    source_context = PullRequestSourceContext(
+        kind="conversation",
+        source_item_id=42,
+        source_item_number=3,
+        title="Explore interactive chat",
+    )
+
+    prompt = build_worker_prompt(
+        default_config(),
+        repo="dbcli/litecli",
+        issue_number=2_000_000_042,
+        task_type="code",
+        title="Explore interactive chat",
+        source_context=source_context,
+    )
+
+    assert "Conversation: Conversation #3" in prompt
+    assert "Conversation title: Explore interactive chat" in prompt
+    assert source_item_link_marker(42) in prompt
+    assert "https://github.com/dbcli/litecli/issues/2000000042" not in prompt
+    assert "GitHub issue:" not in prompt
+
+
+def test_research_worker_prompt_requires_reply_text_not_filesystem_only() -> None:
+    prompt = build_worker_prompt(
+        default_config(),
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        title="Logging path support",
+    )
+
+    assert "Research response requirements:" in prompt
+    assert "complete user-facing draft reply in your final response" in prompt
+    assert "Do not save the draft only to a filesystem path" in prompt
+    assert "dashboard users cannot access VM-local files" in prompt
+
+
 def test_pull_request_prompt_requires_ticket_marker_without_closing_issue() -> None:
     source_context = PullRequestSourceContext(
         kind="local_ticket",

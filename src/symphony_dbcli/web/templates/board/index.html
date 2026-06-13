@@ -174,7 +174,13 @@
           <span class="source-card-ref">#{{ item.source_number }}</span>
           {% endif %}
         </div>
-        <strong><a href="/work-items/{{ item.id }}">{{ item.title }}</a></strong>
+        <strong>
+          {% if item.source_kind == "conversation" %}
+          <a href="/work-items/{{ item.id }}/chat">{{ item.title }}</a>
+          {% else %}
+          <a href="/work-items/{{ item.id }}">{{ item.title }}</a>
+          {% endif %}
+        </strong>
         <span class="muted">{{ item.task_type }} · work item #{{ item.id }}</span>
         <form method="post" action="/work-items/{{ item.id }}/archive">
           <button class="text-button" type="submit">Archive</button>

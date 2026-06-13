@@ -23,6 +23,7 @@ def build_worker_prompt(
     task_context_section = f"\nTask context:\n{task_context}\n" if task_context else ""
     guidance_section = _guidance_section(primitive_guidance or [])
     code_pr_section = _code_pr_section(repo, issue_number, context) if task_type == "code" else ""
+    research_response_section = _research_response_section(task_type)
     return f"""\
 You are a Symphony worker for {repo}.
 
@@ -35,6 +36,7 @@ Task type: {task_type}
 Follow this workflow:
 {config.instructions}
 
+{research_response_section}
 Before finishing, provide:
 - a succinct work summary, no more than 5 bullets total
 - tests or checks run, if any
@@ -99,16 +101,27 @@ Primitive guidance:
 """
 
 
+def _research_response_section(task_type: str) -> str:
+    if task_type != "research":
+        return ""
+    return """\
+Research response requirements:
+- Include the complete user-facing draft reply in your final response, preferably under a `Draft reply:` heading.
+- Do not save the draft only to a filesystem path; dashboard users cannot access VM-local files.
+- If you create local notes while investigating, still paste the complete draft reply in the final response.
+"""
+
+
 def _source_section(
     repo: str,
     issue_number: int,
     title: str,
     source_context: PullRequestSourceContext,
 ) -> str:
-    if source_context.kind == "local_ticket":
+    if _is_internal_source(source_context):
         return f"""\
-Local ticket: {_ticket_label(source_context)}
-Ticket title: {title}"""
+{_internal_source_prefix(source_context)}: {_internal_source_label(source_context)}
+{_internal_source_title_label(source_context)}: {title}"""
     return f"""\
 GitHub issue: https://github.com/{repo}/issues/{issue_number}
 Issue title: {title}"""
@@ -121,12 +134,12 @@ def _pull_request_source_section(
     issue_link_marker: str,
     source_context: PullRequestSourceContext,
 ) -> str:
-    if source_context.kind == "local_ticket":
+    if _is_internal_source(source_context):
         marker = pull_request_source_marker(repo, issue_number, source_context)
         return f"""\
-Local ticket: {_ticket_label(source_context)}
-Ticket title: {title}
-Symphony ticket marker: {marker}"""
+{_internal_source_prefix(source_context)}: {_internal_source_label(source_context)}
+{_internal_source_title_label(source_context)}: {title}
+{_internal_source_marker_label(source_context)}: {marker}"""
     return f"""\
 GitHub issue: https://github.com/{repo}/issues/{issue_number}
 Issue title: {title}
@@ -134,13 +147,13 @@ Issue link marker: {issue_link_marker}"""
 
 
 def _code_pr_section(repo: str, issue_number: int, source_context: PullRequestSourceContext) -> str:
-    if source_context.kind == "local_ticket":
+    if _is_internal_source(source_context):
         marker = pull_request_source_marker(repo, issue_number, source_context)
         return f"""\
-- a `PR title:` line that names the actual code change, not just the ticket number
+- a `PR title:` line that names the actual code change, not just the {_internal_source_kind_name(source_context)} number
 - a `PR body:` section with `## Changes` and, when checks were run, `## Tests`
-- at least one concrete change detail in the PR body; do not make it only a ticket marker or generic summary
-- the hidden Symphony ticket marker `{marker}` in the PR body
+- at least one concrete change detail in the PR body; do not make it only a marker or generic summary
+- the hidden Symphony {_internal_source_kind_name(source_context)} marker `{marker}` in the PR body
 - no GitHub issue closing keyword unless a real GitHub issue is associated with the work
 """
     return f"""\
@@ -157,11 +170,12 @@ def _pull_request_marker_requirement(
     issue_link_marker: str,
     source_context: PullRequestSourceContext,
 ) -> str:
-    if source_context.kind == "local_ticket":
+    if _is_internal_source(source_context):
         marker = pull_request_source_marker(repo, issue_number, source_context)
         return (
-            f"Include the hidden Symphony ticket marker exactly as shown above in the pull request "
-            f"description: {marker}. Do not add a GitHub issue URL or closing keyword for this ticket."
+            f"Include the hidden Symphony {_internal_source_kind_name(source_context)} marker "
+            f"exactly as shown above in the pull request description: {marker}. Do not add a GitHub "
+            f"issue URL or closing keyword for this {_internal_source_kind_name(source_context)}."
         )
     return (
         "Include the GitHub issue URL and the issue link marker exactly as shown above in the "
@@ -169,12 +183,39 @@ def _pull_request_marker_requirement(
     )
 
 
-def _ticket_label(source_context: PullRequestSourceContext) -> str:
+def _internal_source_heading(source_context: PullRequestSourceContext) -> str:
+    return "Conversation" if source_context.kind == "conversation" else "Ticket"
+
+
+def _internal_source_prefix(source_context: PullRequestSourceContext) -> str:
+    return "Conversation" if source_context.kind == "conversation" else "Local ticket"
+
+
+def _internal_source_title_label(source_context: PullRequestSourceContext) -> str:
+    return "Conversation title" if source_context.kind == "conversation" else "Ticket title"
+
+
+def _internal_source_marker_label(source_context: PullRequestSourceContext) -> str:
+    return (
+        "Symphony conversation marker" if source_context.kind == "conversation" else "Symphony ticket marker"
+    )
+
+
+def _internal_source_kind_name(source_context: PullRequestSourceContext) -> str:
+    return "conversation" if source_context.kind == "conversation" else "ticket"
+
+
+def _internal_source_label(source_context: PullRequestSourceContext) -> str:
+    label = _internal_source_heading(source_context)
     if source_context.source_item_number is not None:
-        return f"Ticket #{source_context.source_item_number}"
+        return f"{label} #{source_context.source_item_number}"
     if source_context.source_item_id is not None:
-        return f"Ticket source item #{source_context.source_item_id}"
-    return "Ticket"
+        return f"{label} source item #{source_context.source_item_id}"
+    return label
+
+
+def _is_internal_source(source_context: PullRequestSourceContext) -> bool:
+    return source_context.kind in {"local_ticket", "conversation"}
 
 
 def format_follow_up_context(source_result: sqlite3.Row | None) -> str:

@@ -23,8 +23,10 @@ from .search import matching_source_item_ids
 
 KANBAN_STATES = ("todo", "in_progress", "in_review", "done")
 LOCAL_TICKET_KIND: Literal["local_ticket"] = "local_ticket"
+CONVERSATION_KIND: Literal["conversation"] = "conversation"
 LOCAL_TICKET_ISSUE_NUMBER_OFFSET = 1_000_000_000
-SourceItemKind = Literal["issue", "pull_request", "local_ticket"]
+CONVERSATION_ISSUE_NUMBER_OFFSET = 2_000_000_000
+SourceItemKind = Literal["issue", "pull_request", "local_ticket", "conversation"]
 TASK_TYPES = frozenset({"research", "code", "operations"})
 DONE_STATE = "done"
 STATE_LABELS = {
@@ -160,6 +162,8 @@ class WorkItemRunClaim:
     def issue_number(self) -> int:
         if self.source_kind == LOCAL_TICKET_KIND:
             return LOCAL_TICKET_ISSUE_NUMBER_OFFSET + self.primary_source_item_id
+        if self.source_kind == CONVERSATION_KIND:
+            return CONVERSATION_ISSUE_NUMBER_OFFSET + self.primary_source_item_id
         return self.source_number
 
     @property
@@ -180,7 +184,7 @@ class WorkItemRunClaim:
             "source_item.url": self.source_url,
             "source_item.title": self.title,
         }
-        if self.source_kind in {"issue", LOCAL_TICKET_KIND}:
+        if self.source_kind in {"issue", LOCAL_TICKET_KIND, CONVERSATION_KIND}:
             artifacts.update(
                 {
                     "linked_issue.source_item_id": self.primary_source_item_id,
@@ -1069,6 +1073,8 @@ def _source_kind_label(kind: str) -> str:
         return "PR"
     if kind == LOCAL_TICKET_KIND:
         return "Ticket"
+    if kind == CONVERSATION_KIND:
+        return "Chat"
     return "Issue"
 
 

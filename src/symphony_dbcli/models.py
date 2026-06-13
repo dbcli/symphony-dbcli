@@ -58,6 +58,7 @@ _SQLITE_COLUMN_REPAIRS = (
     SQLiteColumnRepair("work_item_runs", "attempt_id", "attempt_id INTEGER"),
     SQLiteColumnRepair("work_item_runs", "workflow_instance_id", "workflow_instance_id INTEGER"),
     SQLiteColumnRepair("work_item_runs", "source_attempt_id", "source_attempt_id INTEGER"),
+    SQLiteColumnRepair("chat_threads", "codex_thread_id", "codex_thread_id VARCHAR(255)"),
 )
 
 
@@ -225,6 +226,28 @@ class WorkItemRun(Base):
     completed_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class ChatThread(Base):
+    __tablename__ = "chat_threads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    work_item_id: Mapped[int] = mapped_column(ForeignKey("work_items.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    codex_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[int] = mapped_column(ForeignKey("chat_threads.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
 def create_model_tables(engine: Engine) -> None:

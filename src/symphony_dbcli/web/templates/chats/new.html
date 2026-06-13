@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block page_actions %}
+<a class="button-link" href="/board">Board</a>
+{% endblock %}
+{% block body %}
+<section class="panel narrow-panel">
+  <form class="stacked-form" method="post" action="/chats" data-chat-submit-form>
+    <label for="message">Message</label>
+    <textarea
+      id="message"
+      name="message"
+      rows="5"
+      required
+      autofocus
+      placeholder="Describe the question or work you want to explore."
+    >{{ message }}</textarea>
+    {% if error %}
+    <p class="form-error">{{ error }}</p>
+    {% endif %}
+    <div class="form-actions">
+      <button type="submit">Start Chat</button>
+      <a class="button-link quiet" href="/board">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

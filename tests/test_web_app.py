@@ -13,10 +13,13 @@ from sqlalchemy import select, text
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
+from symphony_dbcli.chats import ChatAssistantModel, ChatDecision, ChatThreadView
 from symphony_dbcli.config import DatabaseConfig, WorkflowConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import GitHubIssue, PullRequest
 from symphony_dbcli.models import (
+    ChatMessage,
+    ChatThread,
     Source,
     SourceItem,
     SourceItemLink,
@@ -40,7 +43,7 @@ from symphony_dbcli.web.dependencies import (
     _format_tokens,
 )
 from symphony_dbcli.web.routers import attempts, work_items
-from symphony_dbcli.work_items import WorkItemRepository
+from symphony_dbcli.work_items import CONVERSATION_ISSUE_NUMBER_OFFSET, WorkItemRepository
 
 
 def _legacy_store(tmp_path: Path) -> Store:
@@ -559,6 +562,212 @@ def test_fastapi_create_ticket_persists_and_queues_work_item(tmp_path: Path) -> 
     assert run_claim is not None
     assert run_claim.source_number == 1
     assert run_claim.issue_number > 1_000_000_000
+
+
+def test_fastapi_chat_start_creates_in_progress_work_item(tmp_path: Path) -> None:
+    assistant = FakeChatAssistant(
+        [
+            ChatDecision(
+                action="ask_followup",
+                task_type="code",
+                message="Which failed workflow action should I target first?",
+            )
+        ]
+    )
+    client = _client(tmp_path, chat_assistant=assistant)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    response = client.post(
+        "/chats",
+        data={
+            "message": "Can we add a retry button for failed workflow actions?",
+            "source_id": str(source_id),
+        },
+        follow_redirects=False,
+    )
+    chat = client.get("/chats/1")
+    board = client.get(f"/board/source/{source_id}")
+    threads, messages, source_items, work_items, links, runs = _chat_records(tmp_path)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/chats/1"
+    assert chat.status_code == 200
+    assert "Can we add a retry button" in chat.text
+    assert "Which failed workflow action should I target first?" in chat.text
+    assert 'id="chat-status-panel"' in chat.text
+    assert "data-chat-submit-form" in chat.text
+    assert 'href="/work-items/1/chat"' in board.text
+    assert "Chat" in board.text
+    assert len(threads) == 1
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert source_items[0].kind == "conversation"
+    assert source_items[0].source_id == source_id
+    assert work_items[0].state == "in_progress"
+    assert work_items[0].task_type == "code"
+    assert links[0].relationship == "conversation"
+    assert runs == []
+
+
+def test_fastapi_chat_queues_implementation_from_assistant_decision(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime()
+    assistant = FakeChatAssistant(
+        [
+            ChatDecision(
+                action="ask_followup",
+                task_type="research",
+                message="What behavior should the delete confirmation enforce?",
+            ),
+            ChatDecision(
+                action="start_work",
+                task_type="code",
+                message="I will start implementing the cleaner delete confirmation.",
+            ),
+            ChatDecision(
+                action="start_work",
+                task_type="code",
+                message="I will continue from the previous worker result.",
+            ),
+        ]
+    )
+    client = _client(tmp_path, runtime=runtime, chat_assistant=assistant)
+    source_id = _add_source(client, "dbcli/litecli")
+    client.post(
+        "/chats",
+        data={"message": "How should we approach the sources page?", "source_id": str(source_id)},
+        follow_redirects=False,
+    )
+    reply = client.post(
+        "/chats/1/messages",
+        data={"message": "Please implement a cleaner delete confirmation."},
+        follow_redirects=False,
+    )
+    chat = client.get("/chats/1")
+    status = client.get("/chats/1/status")
+    threads, messages, source_items, work_items, _links, runs = _chat_records(tmp_path)
+
+    assert reply.status_code == 303
+    assert reply.headers["location"] == "/chats/1"
+    assert "I will start implementing the cleaner delete confirmation." in chat.text
+    assert 'hx-get="/chats/1/status"' in chat.text
+    assert "Run #1" in status.text
+    assert "Waiting for worker claim" in status.text
+    assert runtime.triggers == ["chat_implementation"]
+    assert threads[0].status == "implementation_queued"
+    assert work_items[0].task_type == "code"
+    assert source_items[0].body.count("user:") == 2
+    assert "Please implement a cleaner delete confirmation." in source_items[0].body
+    assert [message.role for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert len(runs) == 1
+    assert runs[0].task_type == "code"
+    assert runs[0].trigger == "chat_implementation"
+    assert runs[0].status == "queued"
+    assert "How should we approach the sources page?" in runs[0].user_hint
+    assert "Please implement a cleaner delete confirmation." in runs[0].user_hint
+
+    store = Store(str(tmp_path / "symphony.db"))
+    issue_number = CONVERSATION_ISSUE_NUMBER_OFFSET + source_items[0].id
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=issue_number,
+            title=source_items[0].title,
+            url="",
+            state="open",
+            labels=[],
+            task_type="code",
+            body=source_items[0].body,
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+        work_item_id=1,
+        work_item_run_id=1,
+    )
+    store.record_codex_event(
+        attempt_id,
+        thread_id="thread-chat-1",
+        event_type="thread/tokenUsage/updated",
+        payload={
+            "threadId": "thread-chat-1",
+            "tokenUsage": {
+                "total": {
+                    "inputTokens": 40_000,
+                    "outputTokens": 2_500,
+                    "totalTokens": 42_500,
+                }
+            },
+        },
+    )
+    _assign_chat_run_attempt(tmp_path, run_id=1, attempt_id=attempt_id)
+
+    live_status = client.get("/chats/1/status")
+    waiting_thread = client.get("/chats/1/thread")
+
+    assert waiting_thread.status_code == 200
+    assert 'hx-get="/chats/1/thread"' in waiting_thread.text
+    assert "Waiting for the worker result..." in waiting_thread.text
+
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        result_type="code_changes",
+        title="Cleaner delete confirmation",
+        body=(
+            "I found the source delete form.I verified the modal copy path."
+            "**Summary**\n"
+            "- Implemented a typed-name confirmation flow for source deletion.\n\n"
+            "Checks run: `uv run pytest tests/test_web_app.py` passed."
+        ),
+    )
+    final_thread = client.get("/chats/1/thread")
+    final_chat = client.get("/chats/1")
+
+    assert live_status.status_code == 200
+    assert 'class="chat-status-tile"' in live_status.text
+    assert f'href="/attempts/{attempt_id}"' in live_status.text
+    assert "42.5K tokens" in live_status.text
+    assert "40K in" in live_status.text
+    assert "2.5K out" in live_status.text
+    assert final_thread.status_code == 200
+    assert 'class="chat-message is-assistant is-final"' in final_thread.text
+    assert 'class="chat-result-section is-summary"' in final_thread.text
+    assert final_thread.text.index("Run updates") < final_thread.text.index("Final result")
+    assert "Final result" in final_thread.text
+    assert "Cleaner delete confirmation" in final_thread.text
+    assert "Implemented a typed-name confirmation flow for source deletion." in final_thread.text
+    assert "Run updates" in final_thread.text
+    assert "I found the source delete form." in final_thread.text
+    assert "<code>uv run pytest tests/test_web_app.py</code> passed." in final_thread.text
+    assert f"Attempt #{attempt_id}" in final_thread.text
+    assert "Implemented a typed-name confirmation flow for source deletion." in final_chat.text
+
+    _set_chat_run_status(tmp_path, run_id=1, status="succeeded")
+    follow_up = client.post(
+        "/chats/1/messages",
+        data={"message": "Can you also make the modal title clearer?"},
+        follow_redirects=False,
+    )
+    _threads, _messages, latest_source_items, _work_items, _links, follow_up_runs = _chat_records(tmp_path)
+
+    assert follow_up.status_code == 303
+    assert follow_up.headers["location"] == "/chats/1"
+    assert len(follow_up_runs) == 2
+    assert follow_up_runs[1].status == "queued"
+    assert follow_up_runs[1].trigger == "chat_implementation"
+    assert "Can you also make the modal title clearer?" in follow_up_runs[1].user_hint
+    assert "Cleaner delete confirmation" in follow_up_runs[1].user_hint
+    assert "Implemented a typed-name confirmation flow for source deletion." in follow_up_runs[1].user_hint
+    assert "Implemented a typed-name confirmation flow for source deletion." in latest_source_items[0].body
+    assert assistant.contexts[-1].startswith(f"Assistant final result from attempt #{attempt_id}")
+    assert "Cleaner delete confirmation" in assistant.contexts[-1]
+    assert "Implemented a typed-name confirmation flow for source deletion." in assistant.contexts[-1]
 
 
 def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -> None:
@@ -1903,6 +2112,7 @@ def _client(
     tmp_path: Path,
     source_sync_client: SourceSyncClient | None = None,
     runtime: WebRuntime | None = None,
+    chat_assistant: ChatAssistantModel | None = None,
 ) -> TestClient:
     config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
     store = Store(config.database.path)
@@ -1914,6 +2124,7 @@ def _client(
             workflow_path="WORKFLOW.md",
             source_sync_client=source_sync_client,
             runtime=runtime,
+            chat_assistant=chat_assistant,
         )
     )
 
@@ -2008,6 +2219,50 @@ def _local_ticket_records(
         return source_items, work_item, links, runs
 
 
+def _chat_records(
+    tmp_path: Path,
+) -> tuple[
+    list[ChatThread],
+    list[ChatMessage],
+    list[SourceItem],
+    list[WorkItem],
+    list[WorkItemLink],
+    list[WorkItemRun],
+]:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        return (
+            list(session.scalars(select(ChatThread).order_by(ChatThread.id.asc()))),
+            list(session.scalars(select(ChatMessage).order_by(ChatMessage.id.asc()))),
+            list(session.scalars(select(SourceItem).order_by(SourceItem.id.asc()))),
+            list(session.scalars(select(WorkItem).order_by(WorkItem.id.asc()))),
+            list(session.scalars(select(WorkItemLink).order_by(WorkItemLink.id.asc()))),
+            list(session.scalars(select(WorkItemRun).order_by(WorkItemRun.id.asc()))),
+        )
+
+
+def _assign_chat_run_attempt(tmp_path: Path, *, run_id: int, attempt_id: int) -> None:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        run = session.get(WorkItemRun, run_id)
+        assert run is not None
+        run.attempt_id = attempt_id
+        run.status = "running"
+        run.updated_at = "2026-06-13T12:01:00+00:00"
+        session.commit()
+
+
+def _set_chat_run_status(tmp_path: Path, *, run_id: int, status: str) -> None:
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    with session_factory() as session:
+        run = session.get(WorkItemRun, run_id)
+        assert run is not None
+        run.status = status
+        run.completed_at = "2026-06-13T12:05:00+00:00"
+        run.updated_at = "2026-06-13T12:05:00+00:00"
+        session.commit()
+
+
 def _git(path: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(path), *args], text=True, capture_output=True, check=True)
     return result.stdout.strip()
@@ -2072,6 +2327,20 @@ class FakeRuntime:
                 )
             ],
         )
+
+
+class FakeChatAssistant:
+    def __init__(self, decisions: list[ChatDecision]) -> None:
+        self.decisions = decisions
+        self.messages: list[str] = []
+        self.contexts: list[str] = []
+
+    def decide(self, thread: ChatThreadView, message: str, *, context: str = "") -> ChatDecision:
+        self.messages.append(message)
+        self.contexts.append(context)
+        if not self.decisions:
+            raise AssertionError(f"Unexpected chat assistant call for thread {thread.id}.")
+        return self.decisions.pop(0)
 
 
 class FakeSourceSyncClient:

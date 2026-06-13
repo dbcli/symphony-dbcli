@@ -186,6 +186,7 @@ def default_workflow_definition() -> WorkflowDefinitionConfig:
                     "Draft a concise support answer in the user's voice.",
                     "Keep the reply under two sentences unless the issue requires concrete steps.",
                     "Cite specific files, commands, or issue facts when they matter.",
+                    "Include the draft reply text in the final agent response; do not save it only to a filesystem path.",
                 ],
             ),
             "fix_issue": WorkflowTransitionConfig(

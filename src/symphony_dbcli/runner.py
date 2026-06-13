@@ -28,10 +28,26 @@ class CodexRunner:
     def __init__(self, config: CodexConfig):
         self.config = config
 
-    def run(self, *, prompt: str, cwd: str, attempt_id: int, store: Store) -> CodexResult:
+    def run(
+        self,
+        *,
+        prompt: str,
+        cwd: str,
+        attempt_id: int,
+        store: Store,
+        resume_thread_id: str | None = None,
+        persistent_thread: bool = False,
+    ) -> CodexResult:
         if self.config.transport == "exec":
             return self._run_exec(prompt=prompt, cwd=cwd, attempt_id=attempt_id, store=store)
-        return self._run_app_server(prompt=prompt, cwd=cwd, attempt_id=attempt_id, store=store)
+        return self._run_app_server(
+            prompt=prompt,
+            cwd=cwd,
+            attempt_id=attempt_id,
+            store=store,
+            resume_thread_id=resume_thread_id,
+            persistent_thread=persistent_thread,
+        )
 
     def _run_exec(self, *, prompt: str, cwd: str, attempt_id: int, store: Store) -> CodexResult:
         started = monotonic_ns()
@@ -103,7 +119,16 @@ class CodexRunner:
             thread_id=thread_id, turn_count=1, final_message=output, duration_ms=elapsed_ms(started, ended)
         )
 
-    def _run_app_server(self, *, prompt: str, cwd: str, attempt_id: int, store: Store) -> CodexResult:
+    def _run_app_server(
+        self,
+        *,
+        prompt: str,
+        cwd: str,
+        attempt_id: int,
+        store: Store,
+        resume_thread_id: str | None = None,
+        persistent_thread: bool = False,
+    ) -> CodexResult:
         started = monotonic_ns()
         store.record_timeline_event(
             attempt_id, phase="codex", event_type="started", message="Started codex app-server"
@@ -112,7 +137,20 @@ class CodexRunner:
         try:
             client.start()
             client.initialize()
-            thread_id = client.thread_start(cwd)
+            thread_id = ""
+            if resume_thread_id:
+                try:
+                    thread_id = client.thread_resume(resume_thread_id, cwd)
+                except CodexRunnerError as exc:
+                    store.record_timeline_event(
+                        attempt_id,
+                        phase="codex",
+                        event_type="thread_resume_failed",
+                        message=str(exc),
+                        data={"thread_id": resume_thread_id},
+                    )
+            if not thread_id:
+                thread_id = client.thread_start(cwd, ephemeral=not persistent_thread)
             final_message = client.turn_start(thread_id=thread_id, cwd=cwd, prompt=prompt)
             ended = monotonic_ns()
             store.record_codex_turn(
@@ -170,6 +208,7 @@ class _AppServerClient:
         self.process: subprocess.Popen[str] | None = None
         self.next_id = 1
         self.final_message_parts: list[str] = []
+        self._last_final_message_item_id: str | None = None
         self.latest_token_usage: CodexTokenUsage | None = None
 
     def start(self) -> None:
@@ -195,7 +234,7 @@ class _AppServerClient:
             },
         )
 
-    def thread_start(self, cwd: str) -> str:
+    def thread_start(self, cwd: str, *, ephemeral: bool = True) -> str:
         result = self.request(
             "thread/start",
             {
@@ -204,7 +243,7 @@ class _AppServerClient:
                 "sandbox": self.config.sandbox,
                 "model": self.config.model or None,
                 "serviceName": "symphony-dbcli",
-                "ephemeral": True,
+                "ephemeral": ephemeral,
             },
         )
         thread = result.get("thread") or {}
@@ -215,6 +254,28 @@ class _AppServerClient:
             self.attempt_id, thread_id=thread_id, event_type="thread/start", payload=result
         )
         return str(thread_id)
+
+    def thread_resume(self, thread_id: str, cwd: str) -> str:
+        result = self.request(
+            "thread/resume",
+            {
+                "threadId": thread_id,
+                "cwd": str(Path(cwd).resolve()),
+                "approvalPolicy": self.config.approval_policy,
+                "sandbox": self.config.sandbox,
+                "model": self.config.model or None,
+                "excludeTurns": True,
+            },
+        )
+        thread = result.get("thread") or {}
+        resumed_thread_id = thread.get("id") or thread.get("threadId") or thread_id
+        self.store.record_codex_event(
+            self.attempt_id,
+            thread_id=str(resumed_thread_id),
+            event_type="thread/resume",
+            payload=result,
+        )
+        return str(resumed_thread_id)
 
     def turn_start(self, *, thread_id: str, cwd: str, prompt: str) -> str:
         payload = _prompt_payload(self.config, thread_id=thread_id, cwd=cwd, prompt=prompt)
@@ -297,8 +358,24 @@ class _AppServerClient:
             "item/agentMessage/delta",
             "item/agent_message/delta",
         }:
-            delta = params.get("delta") or params.get("text") or ""
-            self.final_message_parts.append(str(delta))
+            self._append_final_message_delta(params)
+
+    def _append_final_message_delta(self, params: dict[str, Any]) -> None:
+        delta = str(params.get("delta") or params.get("text") or "")
+        if not delta:
+            return
+        item_id = str(params.get("itemId") or params.get("item_id") or "")
+        if (
+            item_id
+            and self._last_final_message_item_id
+            and item_id != self._last_final_message_item_id
+            and self.final_message_parts
+            and not "".join(self.final_message_parts[-2:]).endswith("\n\n")
+        ):
+            self.final_message_parts.append("\n\n")
+        if item_id:
+            self._last_final_message_item_id = item_id
+        self.final_message_parts.append(delta)
 
 
 def _prompt_payload(

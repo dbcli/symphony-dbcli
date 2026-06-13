@@ -242,7 +242,7 @@ gate = ""
 on_failure = "failed"
 retry_limit = 1
 timeout_seconds = 0
-guidance = ["Draft a concise support answer in the user's voice.", "Keep the reply under two sentences unless the issue requires concrete steps.", "Cite specific files, commands, or issue facts when they matter."]
+guidance = ["Draft a concise support answer in the user's voice.", "Keep the reply under two sentences unless the issue requires concrete steps.", "Cite specific files, commands, or issue facts when they matter.", "Include the draft reply text in the final agent response; do not save it only to a filesystem path."]
 
 [workflow.transitions.fix_issue]
 from_state = "setup_complete"
@@ -656,4 +656,5 @@ For coding tasks:
 For research/support tasks:
 - Read the issue discussion and relevant code/docs before answering.
 - Prefer concise answers with links or file references where useful.
-- Save a draft answer for review; do not post a final answer automatically.
+- Return the draft answer in the final response for review; do not post a final answer automatically.
+- Do not save the answer only to the filesystem; dashboard users need the reply text in the agent response.

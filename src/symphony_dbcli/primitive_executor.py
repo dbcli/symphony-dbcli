@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, cast
 
+from .chats import ChatRepository
 from .config import WorkflowConfig
 from .db import create_db_engine, create_session_factory
 from .github import (
@@ -34,7 +35,13 @@ from .review_actions import (
 from .runner import CodexRunner
 from .sources import SourceRepository, SourceSyncService
 from .store import Store
-from .work_items import WorkItemActivation, WorkItemMove, WorkItemRepository, WorkItemView
+from .work_items import (
+    CONVERSATION_KIND,
+    WorkItemActivation,
+    WorkItemMove,
+    WorkItemRepository,
+    WorkItemView,
+)
 from .worker_prompt import (
     build_pull_request_prompt,
     build_worker_prompt,
@@ -139,6 +146,7 @@ class PrimitiveExecutor:
         session_factory = create_session_factory(engine)
         self.sources = SourceRepository(session_factory)
         self.work_items = WorkItemRepository(session_factory)
+        self.chats = ChatRepository(session_factory)
         self.review_actions = review_actions or ReviewActions(
             config,
             store,
@@ -516,7 +524,10 @@ class PrimitiveExecutor:
             cwd=context.worktree_path,
             attempt_id=attempt_id,
             store=self.store,
+            resume_thread_id=self._conversation_codex_thread_id(context),
+            persistent_thread=self._uses_conversation_codex_thread(context),
         )
+        self._save_conversation_codex_thread_id(context, result.thread_id)
         body = result.final_message.strip()
         self.store.record_worker_result(
             attempt_id=attempt_id,
@@ -590,7 +601,10 @@ class PrimitiveExecutor:
             cwd=context.worktree_path,
             attempt_id=attempt_id,
             store=self.store,
+            resume_thread_id=self._conversation_codex_thread_id(context),
+            persistent_thread=self._uses_conversation_codex_thread(context),
         )
+        self._save_conversation_codex_thread_id(context, codex_result.thread_id)
         final_message = codex_result.final_message.strip()
         self.store.record_worker_log(attempt_id, "info", final_message)
         pull_request = self._pull_request_created_by_codex(context, final_message)
@@ -613,7 +627,7 @@ class PrimitiveExecutor:
             state=pull_request.state,
             merged_at=pull_request.merged_at,
         )
-        if source_context.kind != "local_ticket":
+        if source_context.kind not in {"local_ticket", "conversation"}:
             self.store.record_issue_pull_request_link(
                 repo=context.repo,
                 issue_number=context.issue_number,
@@ -654,6 +668,29 @@ class PrimitiveExecutor:
                 marker=marker,
             )
         return PrimitiveOutcome(_codex_created_pr_output(pull_request, context))
+
+    def _uses_conversation_codex_thread(self, context: PrimitiveContext) -> bool:
+        return (
+            self.config.codex.transport == "app-server"
+            and context.source_item_kind == CONVERSATION_KIND
+            and context.work_item_id is not None
+        )
+
+    def _conversation_codex_thread_id(self, context: PrimitiveContext) -> str | None:
+        if not self._uses_conversation_codex_thread(context):
+            return None
+        work_item_id = context.work_item_id
+        if work_item_id is None:
+            return None
+        return self.chats.codex_thread_id_for_work_item(work_item_id)
+
+    def _save_conversation_codex_thread_id(self, context: PrimitiveContext, thread_id: str) -> None:
+        if not self._uses_conversation_codex_thread(context):
+            return
+        work_item_id = context.work_item_id
+        if work_item_id is None:
+            return
+        self.chats.save_codex_thread_id_for_work_item(work_item_id, thread_id)
 
     def _create_draft_pr(self, context: PrimitiveContext) -> PrimitiveOutcome:
         if self.config.policy.dry_run:
@@ -876,7 +913,7 @@ def _work_item_output(work_item: WorkItemView) -> dict[str, Any]:
 
 
 def _pull_request_source_context(context: PrimitiveContext) -> PullRequestSourceContext:
-    if context.source_item_kind == "local_ticket":
+    if context.source_item_kind in {"local_ticket", "conversation"}:
         return PullRequestSourceContext(
             kind=context.source_item_kind,
             source_item_id=context.source_item_id,
@@ -891,7 +928,7 @@ def _body_links_source(
     context: PrimitiveContext,
     source_context: PullRequestSourceContext,
 ) -> bool:
-    if source_context.kind == "local_ticket" and source_context.source_item_id is not None:
+    if source_context.kind in {"local_ticket", "conversation"} and source_context.source_item_id is not None:
         return body_links_source_item(body, source_context.source_item_id)
     return body_links_issue(body, context.repo, context.issue_number)
 

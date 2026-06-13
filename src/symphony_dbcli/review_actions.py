@@ -35,6 +35,7 @@ class GitHubReviewClient(Protocol):
 
 ISSUE_LINK_MARKER_PREFIX = "symphony-dbcli:issue-link="
 SOURCE_ITEM_LINK_MARKER_PREFIX = "symphony-dbcli:source-item="
+INTERNAL_SOURCE_KINDS = frozenset({"local_ticket", "conversation"})
 
 
 @dataclass(frozen=True)
@@ -131,8 +132,8 @@ class ReviewActions:
         )
         pr_title = title.strip() or content.title
         pr_body_input = body.strip() or content.body
-        if source_context.kind == "local_ticket":
-            pr_body_input = _strip_issue_link_for_local_ticket(pr_body_input, repo, issue_number)
+        if _is_internal_source(source_context):
+            pr_body_input = _strip_issue_link_for_internal_source(pr_body_input, repo, issue_number)
         pr_body = ensure_pull_request_marker(pr_body_input, repo, issue_number, source_context)
         pr = self.github.create_pull_request(
             repo=repo,
@@ -158,7 +159,7 @@ class ReviewActions:
             state=pr.state,
             merged_at=pr.merged_at,
         )
-        if source_context.kind != "local_ticket":
+        if not _is_internal_source(source_context):
             self.store.record_issue_pull_request_link(
                 repo=repo,
                 issue_number=issue_number,
@@ -186,7 +187,7 @@ class ReviewActions:
         source_item_id = _optional_int(artifacts.get("source_item.id"))
         source_item_number = _optional_int(artifacts.get("source_item.number"))
         source_item_title = str(artifacts.get("source_item.title") or "")
-        if source_item_kind == "local_ticket":
+        if source_item_kind in INTERNAL_SOURCE_KINDS:
             return PullRequestSourceContext(
                 kind=source_item_kind,
                 source_item_id=source_item_id,
@@ -341,8 +342,8 @@ def build_draft_pr_content(
     if explicit is not None:
         explicit_title = _truncate(explicit.title, 72)
         body = _strip_outer_markdown_fence(explicit.body)
-        if context.kind == "local_ticket":
-            body = _strip_issue_link_for_local_ticket(body, repo, issue_number)
+        if _is_internal_source(context):
+            body = _strip_issue_link_for_internal_source(body, repo, issue_number)
         elif issue_url not in body:
             body = body.rstrip() + f"\n\nFixes {issue_url}"
         if _pr_body_has_reviewable_content(body, repo, issue_number, context):
@@ -354,8 +355,8 @@ def build_draft_pr_content(
     summary_lines = _summary_lines_from_worker_result(worker_result)
     verification_lines = _verification_lines_from_worker_result(worker_result)
     fallback_summary_lines = (
-        _fallback_ticket_summary_lines(context)
-        if context.kind == "local_ticket"
+        _fallback_internal_summary_lines(context)
+        if _is_internal_source(context)
         else _fallback_summary_lines(context.title, issue_number)
     )
     body_parts = [
@@ -372,8 +373,17 @@ def build_draft_pr_content(
                 _format_lines(verification_lines),
             ]
         )
-    if context.kind == "local_ticket":
-        body_parts.extend(["", "## Ticket", "", _ticket_label(context), "", source_marker])
+    if _is_internal_source(context):
+        body_parts.extend(
+            [
+                "",
+                f"## {_internal_source_heading(context)}",
+                "",
+                _internal_source_label(context),
+                "",
+                source_marker,
+            ]
+        )
     else:
         body_parts.extend(["", f"Fixes {issue_url}", "", source_marker])
     body_parts.append("")
@@ -426,7 +436,7 @@ def pull_request_source_marker(
     issue_number: int,
     source_context: PullRequestSourceContext | None,
 ) -> str:
-    if source_context and source_context.kind == "local_ticket" and source_context.source_item_id is not None:
+    if source_context and _is_internal_source(source_context) and source_context.source_item_id is not None:
         return source_item_link_marker(source_context.source_item_id)
     return issue_link_marker(repo, issue_number)
 
@@ -628,11 +638,11 @@ def _fallback_summary_lines(issue_title: str, issue_number: int) -> list[str]:
     return [f"Updates the code for issue #{issue_number}."]
 
 
-def _fallback_ticket_summary_lines(source_context: PullRequestSourceContext) -> list[str]:
+def _fallback_internal_summary_lines(source_context: PullRequestSourceContext) -> list[str]:
     ticket_summary = _issue_title_summary(source_context.title)
     if ticket_summary:
         return [f"Addresses {ticket_summary}."]
-    return [f"Updates the code for {_ticket_label(source_context)}."]
+    return [f"Updates the code for {_internal_source_label(source_context)}."]
 
 
 def _format_lines(lines: list[str]) -> str:
@@ -653,11 +663,11 @@ def _title_from_source(
     source_context: PullRequestSourceContext,
     summary_lines: list[str],
 ) -> str:
-    if source_context.kind == "local_ticket":
+    if _is_internal_source(source_context):
         ticket_summary = _issue_title_summary(source_context.title)
         if ticket_summary:
-            return _truncate(f"Ticket #{source_context.source_item_number or '?'}: {ticket_summary}", 72)
-        return _title_from_ticket_summary(source_context, summary_lines)
+            return _truncate(f"{_internal_source_label(source_context)}: {ticket_summary}", 72)
+        return _title_from_internal_summary(source_context, summary_lines)
     return _title_from_issue(issue_number, source_context.title, summary_lines)
 
 
@@ -668,26 +678,35 @@ def _title_from_summary(issue_number: int, summary_lines: list[str]) -> str:
     return _truncate(f"Fix #{issue_number}: {plain_summary}", 72)
 
 
-def _title_from_ticket_summary(source_context: PullRequestSourceContext, summary_lines: list[str]) -> str:
-    label = _ticket_label(source_context)
+def _title_from_internal_summary(source_context: PullRequestSourceContext, summary_lines: list[str]) -> str:
+    label = _internal_source_label(source_context)
     if not summary_lines:
         return label
     plain_summary = _compact_title(summary_lines[0].replace("`", "").rstrip("."))
     return _truncate(f"{label}: {plain_summary}", 72)
 
 
-def _ticket_label(source_context: PullRequestSourceContext) -> str:
+def _internal_source_heading(source_context: PullRequestSourceContext) -> str:
+    return "Conversation" if source_context.kind == "conversation" else "Ticket"
+
+
+def _internal_source_label(source_context: PullRequestSourceContext) -> str:
+    label = _internal_source_heading(source_context)
     if source_context.source_item_number is not None:
-        return f"Ticket #{source_context.source_item_number}"
+        return f"{label} #{source_context.source_item_number}"
     if source_context.source_item_id is not None:
-        return f"Ticket source item #{source_context.source_item_id}"
-    return "Ticket"
+        return f"{label} source item #{source_context.source_item_id}"
+    return label
 
 
-def _strip_issue_link_for_local_ticket(body: str, repo: str, issue_number: int) -> str:
+def _strip_issue_link_for_internal_source(body: str, repo: str, issue_number: int) -> str:
     issue_url = re.escape(f"https://github.com/{repo}/issues/{issue_number}")
     without_closer = re.sub(rf"(?im)^\s*(?:fixes|closes|resolves)\s+{issue_url}\s*$\n?", "", body)
     return without_closer.replace(issue_link_marker(repo, issue_number), "").rstrip()
+
+
+def _is_internal_source(source_context: PullRequestSourceContext) -> bool:
+    return source_context.kind in INTERNAL_SOURCE_KINDS
 
 
 def _pr_body_has_reviewable_content(
@@ -710,14 +729,14 @@ def _pr_body_has_reviewable_content(
             continue
         if cleaned.startswith("<!--") and cleaned.endswith("-->"):
             continue
-        if cleaned.lstrip("#").strip().lower() in {"changes", "tests", "ticket", "summary"}:
+        if cleaned.lstrip("#").strip().lower() in {"changes", "tests", "ticket", "conversation", "summary"}:
             continue
         lowered = cleaned.lower()
         if issue_url in cleaned and re.match(r"^(?:fixes|closes|resolves)\b", lowered):
             continue
         if re.match(r"^(?:fixes|closes|resolves)\s+(?:issue\s+)?#?\d+\b", lowered):
             continue
-        if cleaned == _ticket_label(source_context):
+        if _is_internal_source(source_context) and cleaned == _internal_source_label(source_context):
             continue
         return True
     return False

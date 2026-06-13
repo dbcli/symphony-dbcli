@@ -1,0 +1,82 @@
+{% from "_time.html" import compact_time %}
+<section
+  id="chat-thread-panel"
+  class="panel chat-thread"
+  aria-label="Chat thread"
+  aria-live="polite"
+  {% if progress.thread_poll %}
+  hx-get="/chats/{{ thread.id }}/thread"
+  hx-trigger="load, every 2s"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  {% for chat_message in thread.messages %}
+  <article class="chat-message is-{{ chat_message.role }}">
+    <div class="chat-message-meta">
+      <strong>{{ chat_message.role|title }}</strong>
+      <span>{{ compact_time(chat_message.created_at) }}</span>
+    </div>
+    <p>{{ chat_message.body }}</p>
+  </article>
+  {% endfor %}
+  {% if progress.final_response %}
+  <article class="chat-message is-assistant is-final">
+    <div class="chat-message-meta">
+      <strong>Assistant</strong>
+      <span>{{ compact_time(progress.final_response.updated_at) }}</span>
+    </div>
+    <div class="chat-result-meta">
+      <strong>{{ progress.final_response.title }}</strong>
+      <span>{{ progress.final_response.result_type.replace("_", " ") }}</span>
+      <a href="/attempts/{{ progress.final_response.attempt_id }}">Attempt #{{ progress.final_response.attempt_id }}</a>
+    </div>
+    {% if progress.final_response.formatted.updates %}
+    <details class="chat-run-updates">
+      <summary>
+        <span>Run updates</span>
+        <span>{{ progress.final_response.formatted.updates|length }}</span>
+      </summary>
+      <ol>
+        {% for update in progress.final_response.formatted.updates %}
+        <li>{{ update|inline_markdown }}</li>
+        {% endfor %}
+      </ol>
+    </details>
+    {% endif %}
+    {% if progress.final_response.formatted.sections %}
+    <div class="chat-result-sections">
+      {% for section in progress.final_response.formatted.sections %}
+      <section class="chat-result-section is-{{ section.kind }}">
+        <div class="chat-result-section-title">
+          {% if section.kind == "summary" %}<span>Final result</span>{% endif %}
+          <strong>{{ section.title }}</strong>
+        </div>
+        {% for paragraph in section.paragraphs %}
+        <p>{{ paragraph|inline_markdown }}</p>
+        {% endfor %}
+        {% if section.bullets %}
+        <ul>
+          {% for item in section.bullets %}
+          <li>{{ item|inline_markdown }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="chat-result-section is-section">
+      <p>The worker completed without a final message.</p>
+    </div>
+    {% endif %}
+  </article>
+  {% elif progress.thread_poll %}
+  <article class="chat-message is-assistant is-pending">
+    <div class="chat-message-meta">
+      <strong>Assistant</strong>
+      <span>working</span>
+    </div>
+    <p>Waiting for the worker result...</p>
+  </article>
+  {% endif %}
+</section>

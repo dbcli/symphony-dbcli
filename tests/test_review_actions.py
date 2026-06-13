@@ -415,6 +415,28 @@ def test_build_draft_pr_content_generates_ticket_section_for_local_ticket() -> N
     assert source_item_link_marker(36) in content.body
 
 
+def test_build_draft_pr_content_generates_conversation_section_without_fake_issue_url() -> None:
+    source_context = PullRequestSourceContext(
+        kind="conversation",
+        source_item_id=42,
+        source_item_number=3,
+        title="Explore interactive chat",
+    )
+
+    content = build_draft_pr_content(
+        "dbcli/litecli",
+        2_000_000_042,
+        "Summary:\n- Added a tracked chat interface.\n\nChecks run:\n- `pytest` passed.",
+        source_context=source_context,
+    )
+
+    assert content.title == "Conversation #3: Explore interactive chat"
+    assert "## Conversation" in content.body
+    assert "Conversation #3" in content.body
+    assert "Fixes https://github.com/dbcli/litecli/issues/2000000042" not in content.body
+    assert source_item_link_marker(42) in content.body
+
+
 def test_build_commit_message_uses_issue_or_worker_summary() -> None:
     issue_message = build_commit_message(
         245,

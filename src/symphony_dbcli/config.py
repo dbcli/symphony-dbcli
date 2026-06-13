@@ -41,7 +41,8 @@ For coding tasks:
 For research/support tasks:
 - Read the issue discussion and relevant code/docs before answering.
 - Prefer concise answers with links or file references where useful.
-- Save a draft answer for review; do not post a final answer automatically.
+- Return the draft answer in the final response for review; do not post a final answer automatically.
+- Do not save the answer only to the filesystem; dashboard users need the reply text in the agent response.
 """
 
 

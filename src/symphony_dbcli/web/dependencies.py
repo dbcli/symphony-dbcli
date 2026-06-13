@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 
+from symphony_dbcli.chats import ChatAssistantModel, ChatRepository, CodexChatAssistant
 from symphony_dbcli.config import WorkflowConfig
 from symphony_dbcli.db import SessionFactory
 from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus
@@ -21,6 +25,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 PACIFIC_TIME = ZoneInfo("America/Los_Angeles")
+INLINE_MARKDOWN_RE = re.compile(r"(`[^`]+`|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|https?://[^\s<)]+)")
 
 
 def _format_ms(value: object) -> str:
@@ -131,6 +136,52 @@ def _numbered_lines(value: object) -> list[dict[str, object]]:
     return [{"number": number, "text": line} for number, line in enumerate(lines, start=1)]
 
 
+def _inline_markdown(value: object) -> Markup:
+    text = str(value)
+    cursor = 0
+    parts: list[Markup] = []
+    for match in INLINE_MARKDOWN_RE.finditer(text):
+        if match.start() > cursor:
+            parts.append(escape(text[cursor : match.start()]))
+        token = match.group(0)
+        code_text = token[1:-1] if token.startswith("`") and token.endswith("`") else None
+        link_label = match.group(2)
+        link_url = match.group(3)
+        strong_text = match.group(4)
+        if code_text is not None:
+            parts.append(Markup("<code>") + escape(code_text) + Markup("</code>"))
+        elif link_label and link_url and _safe_markdown_url(link_url):
+            parts.append(
+                Markup('<a href="')
+                + escape(link_url)
+                + Markup('" target="_blank" rel="noreferrer">')
+                + escape(link_label)
+                + Markup("</a>")
+            )
+        elif strong_text:
+            parts.append(Markup("<strong>") + escape(strong_text) + Markup("</strong>"))
+        elif _safe_markdown_url(token):
+            escaped_url = escape(token)
+            parts.append(
+                Markup('<a href="')
+                + escaped_url
+                + Markup('" target="_blank" rel="noreferrer">')
+                + escaped_url
+                + Markup("</a>")
+            )
+        else:
+            parts.append(escape(token))
+        cursor = match.end()
+    if cursor < len(text):
+        parts.append(escape(text[cursor:]))
+    return Markup("").join(parts)
+
+
+def _safe_markdown_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https", "mailto"}
+
+
 templates.env.filters["ms"] = _format_ms
 templates.env.filters["tokens"] = _format_tokens
 templates.env.filters["localtime"] = _format_localtime
@@ -138,6 +189,7 @@ templates.env.filters["compact_localtime"] = _format_compact_localtime
 templates.env.filters["compact_localtime_seconds"] = _format_compact_localtime_seconds
 templates.env.filters["relative_time"] = _format_relative_time
 templates.env.filters["numbered_lines"] = _numbered_lines
+templates.env.filters["inline_markdown"] = _inline_markdown
 
 
 def _static_version() -> str:
@@ -169,6 +221,7 @@ class WebAppState:
     workflow_path: str
     source_sync_client: SourceSyncClient | None = None
     runtime: WebRuntime | None = None
+    chat_assistant: ChatAssistantModel | None = None
 
 
 @dataclass(frozen=True)
@@ -206,6 +259,17 @@ def source_repository(request: Request) -> SourceRepository:
 
 def work_item_repository(request: Request) -> WorkItemRepository:
     return WorkItemRepository(get_app_state(request).session_factory)
+
+
+def chat_repository(request: Request) -> ChatRepository:
+    return ChatRepository(get_app_state(request).session_factory)
+
+
+def chat_assistant(request: Request) -> ChatAssistantModel:
+    state = get_app_state(request)
+    if state.chat_assistant is not None:
+        return state.chat_assistant
+    return CodexChatAssistant(state.config, Path(state.workflow_path).resolve().parent)
 
 
 def page_context(request: Request, *, title: str, active: str) -> dict[str, object]:

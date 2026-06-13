@@ -241,6 +241,64 @@ function setupLineNumberedEditors() {
 
 setupLineNumberedEditors();
 
+function setupChatSubmitProgress(root = document) {
+  const forms = [...root.querySelectorAll("[data-chat-submit-form]")];
+  if (root instanceof Element && root.matches("[data-chat-submit-form]")) {
+    forms.unshift(root);
+  }
+  for (const form of forms) {
+    if (form.dataset.chatSubmitReady === "true") {
+      continue;
+    }
+    form.dataset.chatSubmitReady = "true";
+    form.addEventListener("submit", () => {
+      if (form.dataset.chatSubmitting === "true") {
+        return;
+      }
+      form.dataset.chatSubmitting = "true";
+      const startedAt = Date.now();
+      const submitButton = form.querySelector('button[type="submit"]');
+      const compact = form.classList.contains("header-chat-form");
+      let progress = form.querySelector("[data-chat-submit-progress]");
+      if (!compact && !progress) {
+        progress = document.createElement("p");
+        progress.className = "form-hint chat-submit-progress";
+        progress.dataset.chatSubmitProgress = "true";
+        progress.setAttribute("aria-live", "polite");
+        form.querySelector(".form-actions")?.append(progress);
+      }
+
+      if (submitButton instanceof HTMLButtonElement) {
+        submitButton.dataset.originalText = submitButton.textContent?.trim() || "Send";
+        submitButton.disabled = true;
+      }
+
+      function render() {
+        const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        if (submitButton instanceof HTMLButtonElement) {
+          submitButton.textContent = compact ? "Working..." : "Working";
+          submitButton.title = `Waiting for assistant reply (${elapsedSeconds}s)`;
+        }
+        if (progress) {
+          progress.textContent = `Waiting for assistant reply... ${elapsedSeconds}s`;
+        }
+      }
+
+      render();
+      const interval = window.setInterval(render, 1000);
+      window.addEventListener(
+        "pagehide",
+        () => {
+          window.clearInterval(interval);
+        },
+        { once: true },
+      );
+    });
+  }
+}
+
+setupChatSubmitProgress();
+
 function closeModal() {
   const modalRoot = document.querySelector("#modal-root");
   if (modalRoot) {
@@ -704,5 +762,6 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
     setupLineNumberedEditors();
     setupWorkflowFlowchart();
     setupLiveCodexPanels(event.target);
+    setupChatSubmitProgress(event.target);
   }
 });

@@ -1,0 +1,63 @@
+{% from "_time.html" import compact_time %}
+<section
+  id="chat-status-panel"
+  class="panel chat-status-panel"
+  aria-live="polite"
+  {% if progress.poll %}
+  hx-get="/chats/{{ thread.id }}/status"
+  hx-trigger="load, every 2s"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  <div>
+    <span class="kicker">State</span>
+    <strong>{{ thread.status.replace("_", " ")|title }}</strong>
+  </div>
+  <div>
+    <span class="kicker">Task Inference</span>
+    <strong>{{ thread.task_type|title }}</strong>
+  </div>
+  <div>
+    <span class="kicker">Work Item</span>
+    <strong>#{{ thread.work_item_id }}</strong>
+  </div>
+  {% if progress.run %}
+  <div>
+    <span class="kicker">Run</span>
+    <strong>{{ progress.run.status.replace("_", " ")|title }}</strong>
+    <span class="metric-subtext">Run #{{ progress.run.id }} · {{ compact_time(progress.run.updated_at) }}</span>
+  </div>
+  {% if progress.attempt %}
+  <a
+    class="chat-status-tile"
+    href="/attempts/{{ progress.attempt.id }}"
+    aria-label="Open live attempt {{ progress.attempt.id }}"
+  >
+    <span class="kicker">Attempt</span>
+    <strong>#{{ progress.attempt.id }} {{ progress.attempt.status.replace("_", " ")|title }}</strong>
+    <span class="metric-link">Open live attempt</span>
+  </a>
+  {% else %}
+  <div>
+    <span class="kicker">Attempt</span>
+    <strong>Waiting</strong>
+    <span class="metric-subtext">Waiting for worker claim</span>
+  </div>
+  {% endif %}
+  <div>
+    <span class="kicker">Codex</span>
+    {% if progress.token_usage %}
+    <strong>{{ progress.token_usage.total_tokens|tokens }} tokens</strong>
+    <span class="metric-subtext">
+      {{ progress.token_usage.input_tokens|tokens }} in · {{ progress.token_usage.output_tokens|tokens }} out
+    </span>
+    {% elif progress.attempt %}
+    <strong>Running</strong>
+    <span class="metric-subtext">Waiting for token usage</span>
+    {% else %}
+    <strong>Pending</strong>
+    <span class="metric-subtext">No attempt yet</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>

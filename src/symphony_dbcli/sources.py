@@ -15,6 +15,8 @@ from .clock import utc_now
 from .db import SessionFactory
 from .github import GitHubIssue, PullRequest
 from .models import (
+    ChatMessage,
+    ChatThread,
     Source,
     SourceItem,
     SourceItemLink,
@@ -35,7 +37,8 @@ from .search import delete_source_item_search, matching_source_item_ids, rebuild
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SOURCE_ITEM_PAGE_SIZE = 20
 LOCAL_TICKET_KIND: Literal["local_ticket"] = "local_ticket"
-SourceItemKind = Literal["issue", "pull_request", "local_ticket"]
+CONVERSATION_KIND: Literal["conversation"] = "conversation"
+SourceItemKind = Literal["issue", "pull_request", "local_ticket", "conversation"]
 
 
 class SourceValidationError(ValueError):
@@ -171,6 +174,8 @@ class SourceItemView:
             return "PR"
         if self.kind == LOCAL_TICKET_KIND:
             return "Ticket"
+        if self.kind == CONVERSATION_KIND:
+            return "Chat"
         return "Issue"
 
     @property
@@ -734,6 +739,12 @@ def _delete_source_dependents(
     work_item_ids: list[int],
 ) -> None:
     if work_item_ids:
+        thread_ids = list(
+            session.scalars(select(ChatThread.id).where(ChatThread.work_item_id.in_(work_item_ids)))
+        )
+        if thread_ids:
+            session.execute(delete(ChatMessage).where(ChatMessage.thread_id.in_(thread_ids)))
+        session.execute(delete(ChatThread).where(ChatThread.work_item_id.in_(work_item_ids)))
         session.execute(delete(WorkItemRun).where(WorkItemRun.work_item_id.in_(work_item_ids)))
         session.execute(delete(WorkItemStateEvent).where(WorkItemStateEvent.work_item_id.in_(work_item_ids)))
         session.execute(delete(WorkItemLink).where(WorkItemLink.work_item_id.in_(work_item_ids)))

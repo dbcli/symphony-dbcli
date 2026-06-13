@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 
 from symphony_dbcli.config import CodexConfig, PolicyConfig, WorkflowConfig, WorkspaceConfig, default_config
@@ -23,9 +24,14 @@ from symphony_dbcli.github import (
 from symphony_dbcli.models import SourceItemLink, WorkItem, WorkItemLink
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutor
 from symphony_dbcli.review_actions import issue_link_marker, source_item_link_marker
+from symphony_dbcli.runner import CodexResult
 from symphony_dbcli.sources import LocalTicketCreate, SourceCreate, SourceItemUpsert
 from symphony_dbcli.store import IssueSnapshot, Store
-from symphony_dbcli.work_items import LOCAL_TICKET_ISSUE_NUMBER_OFFSET, WorkItemActivation
+from symphony_dbcli.work_items import (
+    CONVERSATION_ISSUE_NUMBER_OFFSET,
+    LOCAL_TICKET_ISSUE_NUMBER_OFFSET,
+    WorkItemActivation,
+)
 from symphony_dbcli.workflow_definition import WorkflowTransitionConfig
 
 
@@ -681,6 +687,115 @@ def test_address_pr_comments_runs_codex_with_review_context(tmp_path: Path) -> N
     assert detail is not None
     assert detail["result"]["result_type"] == "pr_review_update"
     assert detail["result"]["body"] == "Addressed review comments."
+
+
+def test_conversation_codex_runs_resume_saved_app_server_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    config = replace(default_config(), codex=CodexConfig(transport="app-server"))
+    executor = PrimitiveExecutor(config, store, github=FakePrimitiveGitHub())
+    source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
+    thread = executor.chats.start_thread("Add a gruvbox syntax theme.", source_id=source.id)
+    issue_number = CONVERSATION_ISSUE_NUMBER_OFFSET + 1
+    calls: list[dict[str, object]] = []
+
+    class FakeCodexRunner:
+        def __init__(self, config: CodexConfig) -> None:
+            self.config = config
+
+        def run(
+            self,
+            *,
+            prompt: str,
+            cwd: str,
+            attempt_id: int,
+            store: Store,
+            resume_thread_id: str | None = None,
+            persistent_thread: bool = False,
+        ) -> CodexResult:
+            calls.append(
+                {
+                    "attempt_id": attempt_id,
+                    "cwd": cwd,
+                    "resume_thread_id": resume_thread_id,
+                    "persistent_thread": persistent_thread,
+                    "prompt": prompt,
+                }
+            )
+            return CodexResult(
+                thread_id=resume_thread_id or "thread-chat-1",
+                turn_count=1,
+                final_message="Completed the conversation task.",
+                duration_ms=25,
+            )
+
+    monkeypatch.setattr("symphony_dbcli.primitive_executor.CodexRunner", FakeCodexRunner)
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=issue_number,
+            title=thread.title,
+            url="",
+            state="open",
+            labels=[],
+            task_type="code",
+        )
+    )
+    first_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+        work_item_id=thread.work_item_id,
+        worktree_path=str(worktree),
+    )
+
+    executor.execute(
+        _context(
+            "codex.fix_issue",
+            attempt_id=first_attempt_id,
+            work_item_id=thread.work_item_id,
+            source_item_kind="conversation",
+            source_item_number=1,
+            issue_number=issue_number,
+            issue_title=thread.title,
+            worktree_path=str(worktree),
+        )
+    )
+
+    assert calls[0]["resume_thread_id"] is None
+    assert calls[0]["persistent_thread"] is True
+    assert executor.chats.codex_thread_id_for_work_item(thread.work_item_id) == "thread-chat-1"
+
+    second_attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=issue_number,
+        task_type="code",
+        workflow_version_id=None,
+        status="running",
+        work_item_id=thread.work_item_id,
+        worktree_path=str(worktree),
+    )
+    executor.execute(
+        _context(
+            "codex.fix_issue",
+            attempt_id=second_attempt_id,
+            work_item_id=thread.work_item_id,
+            source_item_kind="conversation",
+            source_item_number=1,
+            issue_number=issue_number,
+            issue_title=thread.title,
+            worktree_path=str(worktree),
+        )
+    )
+
+    assert calls[1]["resume_thread_id"] == "thread-chat-1"
+    assert calls[1]["persistent_thread"] is True
 
 
 def test_fix_ci_failures_runs_codex_with_failed_check_context(tmp_path: Path) -> None:
