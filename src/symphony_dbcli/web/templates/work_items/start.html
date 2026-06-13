@@ -4,7 +4,7 @@
 {% endblock %}
 {% block body %}
 <section class="panel narrow-panel">
-  <form class="stacked-form" method="post" action="/chats" data-chat-submit-form>
+  <form class="stacked-form" method="post" action="/work-items" data-chat-submit-form>
     <label for="message">Message</label>
     <textarea
       id="message"
@@ -18,7 +18,7 @@
     <p class="form-error">{{ error }}</p>
     {% endif %}
     <div class="form-actions">
-      <button type="submit">Start Chat</button>
+      <button type="submit">Start Work</button>
       <a class="button-link quiet" href="/board">Cancel</a>
     </div>
   </form>

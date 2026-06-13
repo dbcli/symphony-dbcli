@@ -13,7 +13,6 @@ from sqlalchemy import select, text
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from symphony_dbcli.chats import ChatAssistantModel, ChatDecision, ChatThreadView
 from symphony_dbcli.config import DatabaseConfig, WorkflowConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.github import GitHubIssue, PullRequest
@@ -31,7 +30,7 @@ from symphony_dbcli.models import (
 )
 from symphony_dbcli.review_actions import issue_link_marker, source_item_link_marker
 from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus, RuntimeWorkerView
-from symphony_dbcli.sources import SourceSyncClient
+from symphony_dbcli.sources import LocalTicketCreate, SourceRepository, SourceSyncClient
 from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.web.app import create_app
 from symphony_dbcli.web.dependencies import (
@@ -43,7 +42,7 @@ from symphony_dbcli.web.dependencies import (
     _format_tokens,
 )
 from symphony_dbcli.web.routers import attempts, work_items
-from symphony_dbcli.work_items import CONVERSATION_ISSUE_NUMBER_OFFSET, WorkItemRepository
+from symphony_dbcli.work_items import WorkItemActivation, WorkItemRepository
 
 
 def _legacy_store(tmp_path: Path) -> Store:
@@ -515,294 +514,53 @@ def test_fastapi_board_filters_by_source_item_kind(tmp_path: Path) -> None:
     assert "Fix completion crash" not in prs_board.text
 
 
-def test_fastapi_board_create_ticket_modal_renders(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    source_id = _add_source(client, "dbcli/litecli")
-
-    board = client.get(f"/board/source/{source_id}")
-    response = client.get(
-        f"/board/source/{source_id}/tickets/new?return_to=/board/source/{source_id}",
-        headers={"HX-Request": "true"},
-    )
-
-    assert board.status_code == 200
-    assert "Create Ticket" in board.text
-    assert f'hx-get="/board/source/{source_id}/tickets/new?return_to=/board/source/{source_id}"' in board.text
-    assert response.status_code == 200
-    assert 'class="modal-backdrop"' in response.text
-    assert 'role="dialog"' in response.text
-    assert f'hx-post="/board/source/{source_id}/tickets"' in response.text
-    assert 'hx-target="#modal-root"' in response.text
-    assert f'name="return_to" value="/board/source/{source_id}"' in response.text
-    assert 'name="title"' in response.text
-    assert 'name="body"' in response.text
-    assert 'name="task_type"' in response.text
-    assert "dbcli/litecli" in response.text
-
-
-def test_fastapi_create_ticket_persists_and_queues_work_item(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+def test_fastapi_work_item_start_creates_attempt_from_header_flow(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    client = _client(tmp_path, runtime=runtime)
     source_id = _add_source(client, "dbcli/litecli")
 
     response = client.post(
-        f"/board/source/{source_id}/tickets",
-        data={
-            "title": "Investigate local regression",
-            "body": "Check the sqlite-backed board path.",
-            "task_type": "code",
-        },
-        follow_redirects=False,
-    )
-    board = client.get(f"/board/source/{source_id}")
-    issues_board = client.get(f"/board/source/{source_id}?kind=issue")
-    prs_board = client.get(f"/board/source/{source_id}?kind=pull_request")
-    search_board = client.get(f"/board/source/{source_id}?q=sqlite-backed")
-    detail = client.get("/work-items/1")
-    source_items, work_item, links, runs = _local_ticket_records(tmp_path)
-    run_claim = WorkItemRepository(
-        create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
-    ).next_queued_run()
-
-    assert response.status_code == 303
-    assert response.headers["location"] == f"/board/source/{source_id}"
-    assert "Investigate local regression" in board.text
-    assert "Ticket" in board.text
-    assert "work item #1" in board.text
-    assert 'href=""' not in board.text
-    assert "Investigate local regression" in issues_board.text
-    assert "Investigate local regression" not in prs_board.text
-    assert "Investigate local regression" in search_board.text
-    assert "Ticket #1" in detail.text
-    assert 'href="">Ticket #1</a>' not in detail.text
-    assert len(source_items) == 1
-    assert source_items[0].source_id == source_id
-    assert source_items[0].kind == "local_ticket"
-    assert source_items[0].number == 1
-    assert source_items[0].title == "Investigate local regression"
-    assert source_items[0].body == "Check the sqlite-backed board path."
-    assert source_items[0].url == ""
-    assert source_items[0].author == "local"
-    assert work_item.source_id == source_id
-    assert work_item.primary_source_item_id == source_items[0].id
-    assert work_item.title == "Investigate local regression"
-    assert work_item.state == "todo"
-    assert work_item.task_type == "code"
-    assert work_item.user_hint == "Check the sqlite-backed board path."
-    assert [(link.source_item_id, link.relationship) for link in links] == [
-        (source_items[0].id, "primary_issue")
-    ]
-    assert len(runs) == 1
-    assert runs[0].work_item_id == work_item.id
-    assert runs[0].status == "queued"
-    assert run_claim is not None
-    assert run_claim.source_number == 1
-    assert run_claim.issue_number > 1_000_000_000
-
-
-def test_fastapi_chat_start_creates_in_progress_work_item(tmp_path: Path) -> None:
-    assistant = FakeChatAssistant(
-        [
-            ChatDecision(
-                action="ask_followup",
-                task_type="code",
-                message="Which failed workflow action should I target first?",
-            )
-        ]
-    )
-    client = _client(tmp_path, chat_assistant=assistant)
-    source_id = _add_source(client, "dbcli/litecli")
-
-    response = client.post(
-        "/chats",
+        "/work-items",
         data={
             "message": "Can we add a retry button for failed workflow actions?",
             "source_id": str(source_id),
         },
         follow_redirects=False,
     )
-    chat = client.get("/chats/1")
+    attempt = client.get("/attempts/1")
     board = client.get(f"/board/source/{source_id}")
     threads, messages, source_items, work_items, links, runs = _chat_records(tmp_path)
+    store = Store(str(tmp_path / "symphony.db"))
+    attempt_row = store.attempt_by_id(1)
+    run_claim = WorkItemRepository(
+        create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    ).next_queued_run()
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/chats/1"
-    assert chat.status_code == 200
-    assert "Can we add a retry button" in chat.text
-    assert "Which failed workflow action should I target first?" in chat.text
-    assert 'id="chat-status-panel"' in chat.text
-    assert "data-chat-submit-form" in chat.text
-    assert 'href="/work-items/1/chat"' in board.text
-    assert "Chat" in board.text
+    assert response.headers["location"] == "/attempts/1"
+    assert attempt.status_code == 200
+    assert 'aria-label="Attempt conversation"' in attempt.text
+    assert "Can we add a retry button" in attempt.text
+    assert "data-chat-submit-form" in attempt.text
+    assert 'href="/attempts/1"' in board.text
+    assert "Can we add a retry button for failed workflow actions?" in board.text
     assert len(threads) == 1
-    assert [message.role for message in messages] == ["user", "assistant"]
+    assert [message.role for message in messages] == ["user"]
     assert source_items[0].kind == "conversation"
     assert source_items[0].source_id == source_id
     assert work_items[0].state == "in_progress"
     assert work_items[0].task_type == "code"
     assert links[0].relationship == "conversation"
-    assert runs == []
-
-
-def test_fastapi_chat_queues_implementation_from_assistant_decision(
-    tmp_path: Path,
-) -> None:
-    runtime = FakeRuntime()
-    assistant = FakeChatAssistant(
-        [
-            ChatDecision(
-                action="ask_followup",
-                task_type="research",
-                message="What behavior should the delete confirmation enforce?",
-            ),
-            ChatDecision(
-                action="start_work",
-                task_type="code",
-                message="I will start implementing the cleaner delete confirmation.",
-            ),
-            ChatDecision(
-                action="start_work",
-                task_type="code",
-                message="I will continue from the previous worker result.",
-            ),
-        ]
-    )
-    client = _client(tmp_path, runtime=runtime, chat_assistant=assistant)
-    source_id = _add_source(client, "dbcli/litecli")
-    client.post(
-        "/chats",
-        data={"message": "How should we approach the sources page?", "source_id": str(source_id)},
-        follow_redirects=False,
-    )
-    reply = client.post(
-        "/chats/1/messages",
-        data={"message": "Please implement a cleaner delete confirmation."},
-        follow_redirects=False,
-    )
-    chat = client.get("/chats/1")
-    status = client.get("/chats/1/status")
-    threads, messages, source_items, work_items, _links, runs = _chat_records(tmp_path)
-
-    assert reply.status_code == 303
-    assert reply.headers["location"] == "/chats/1"
-    assert "I will start implementing the cleaner delete confirmation." in chat.text
-    assert 'hx-get="/chats/1/status"' in chat.text
-    assert "Run #1" in status.text
-    assert "Waiting for worker claim" in status.text
-    assert runtime.triggers == ["chat_implementation"]
-    assert threads[0].status == "implementation_queued"
-    assert work_items[0].task_type == "code"
-    assert source_items[0].body.count("user:") == 2
-    assert "Please implement a cleaner delete confirmation." in source_items[0].body
-    assert [message.role for message in messages] == ["user", "assistant", "user", "assistant"]
     assert len(runs) == 1
-    assert runs[0].task_type == "code"
-    assert runs[0].trigger == "chat_implementation"
+    assert runs[0].attempt_id == 1
+    assert runs[0].workflow_instance_id is not None
     assert runs[0].status == "queued"
-    assert "How should we approach the sources page?" in runs[0].user_hint
-    assert "Please implement a cleaner delete confirmation." in runs[0].user_hint
-
-    store = Store(str(tmp_path / "symphony.db"))
-    issue_number = CONVERSATION_ISSUE_NUMBER_OFFSET + source_items[0].id
-    store.upsert_issue(
-        IssueSnapshot(
-            repo="dbcli/litecli",
-            number=issue_number,
-            title=source_items[0].title,
-            url="",
-            state="open",
-            labels=[],
-            task_type="code",
-            body=source_items[0].body,
-        )
-    )
-    attempt_id = store.create_attempt(
-        repo="dbcli/litecli",
-        issue_number=issue_number,
-        task_type="code",
-        workflow_version_id=None,
-        status="running",
-        work_item_id=1,
-        work_item_run_id=1,
-    )
-    store.record_codex_event(
-        attempt_id,
-        thread_id="thread-chat-1",
-        event_type="thread/tokenUsage/updated",
-        payload={
-            "threadId": "thread-chat-1",
-            "tokenUsage": {
-                "total": {
-                    "inputTokens": 40_000,
-                    "outputTokens": 2_500,
-                    "totalTokens": 42_500,
-                }
-            },
-        },
-    )
-    _assign_chat_run_attempt(tmp_path, run_id=1, attempt_id=attempt_id)
-
-    live_status = client.get("/chats/1/status")
-    waiting_thread = client.get("/chats/1/thread")
-
-    assert waiting_thread.status_code == 200
-    assert 'hx-get="/chats/1/thread"' in waiting_thread.text
-    assert "Waiting for the worker result..." in waiting_thread.text
-
-    store.record_worker_result(
-        attempt_id=attempt_id,
-        repo="dbcli/litecli",
-        issue_number=issue_number,
-        result_type="code_changes",
-        title="Cleaner delete confirmation",
-        body=(
-            "I found the source delete form.I verified the modal copy path."
-            "**Summary**\n"
-            "- Implemented a typed-name confirmation flow for source deletion.\n\n"
-            "Checks run: `uv run pytest tests/test_web_app.py` passed."
-        ),
-    )
-    final_thread = client.get("/chats/1/thread")
-    final_chat = client.get("/chats/1")
-
-    assert live_status.status_code == 200
-    assert 'class="chat-status-tile"' in live_status.text
-    assert f'href="/attempts/{attempt_id}"' in live_status.text
-    assert "42.5K tokens" in live_status.text
-    assert "40K in" in live_status.text
-    assert "2.5K out" in live_status.text
-    assert final_thread.status_code == 200
-    assert 'class="chat-message is-assistant is-final"' in final_thread.text
-    assert 'class="chat-result-section is-summary"' in final_thread.text
-    assert final_thread.text.index("Run updates") < final_thread.text.index("Final result")
-    assert "Final result" in final_thread.text
-    assert "Cleaner delete confirmation" in final_thread.text
-    assert "Implemented a typed-name confirmation flow for source deletion." in final_thread.text
-    assert "Run updates" in final_thread.text
-    assert "I found the source delete form." in final_thread.text
-    assert "<code>uv run pytest tests/test_web_app.py</code> passed." in final_thread.text
-    assert f"Attempt #{attempt_id}" in final_thread.text
-    assert "Implemented a typed-name confirmation flow for source deletion." in final_chat.text
-
-    _set_chat_run_status(tmp_path, run_id=1, status="succeeded")
-    follow_up = client.post(
-        "/chats/1/messages",
-        data={"message": "Can you also make the modal title clearer?"},
-        follow_redirects=False,
-    )
-    _threads, _messages, latest_source_items, _work_items, _links, follow_up_runs = _chat_records(tmp_path)
-
-    assert follow_up.status_code == 303
-    assert follow_up.headers["location"] == "/chats/1"
-    assert len(follow_up_runs) == 2
-    assert follow_up_runs[1].status == "queued"
-    assert follow_up_runs[1].trigger == "chat_implementation"
-    assert "Can you also make the modal title clearer?" in follow_up_runs[1].user_hint
-    assert "Cleaner delete confirmation" in follow_up_runs[1].user_hint
-    assert "Implemented a typed-name confirmation flow for source deletion." in follow_up_runs[1].user_hint
-    assert "Implemented a typed-name confirmation flow for source deletion." in latest_source_items[0].body
-    assert assistant.contexts[-1].startswith(f"Assistant final result from attempt #{attempt_id}")
-    assert "Cleaner delete confirmation" in assistant.contexts[-1]
-    assert "Implemented a typed-name confirmation flow for source deletion." in assistant.contexts[-1]
+    assert attempt_row is not None
+    assert attempt_row["status"] == "queued"
+    assert attempt_row["work_item_id"] == work_items[0].id
+    assert attempt_row["work_item_run_id"] == runs[0].id
+    assert run_claim is None
+    assert runtime.triggers == ["chat_implementation"]
 
 
 def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -> None:
@@ -1400,17 +1158,18 @@ def test_fastapi_sync_attaches_marker_linked_pr_to_active_local_ticket_work_item
     sync_client = LocalTicketLinkedPullRequestSyncClient()
     client = _client(tmp_path, source_sync_client=sync_client)
     source_id = _add_source(client, "dbcli/litecli")
-    client.post(
-        f"/board/source/{source_id}/tickets",
-        data={
-            "title": "Remove codex review action",
-            "body": "Remove the GitHub action that runs Codex review on PRs.",
-            "task_type": "code",
-        },
-        follow_redirects=False,
+    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
+    source_item = SourceRepository(session_factory).create_local_ticket(
+        LocalTicketCreate(
+            source_id=source_id,
+            title="Remove codex review action",
+            body="Remove the GitHub action that runs Codex review on PRs.",
+        )
     )
-    source_items, _, _, _ = _local_ticket_records(tmp_path)
-    sync_client.source_item_id = source_items[0].id
+    WorkItemRepository(session_factory).activate_source_item(
+        WorkItemActivation(source_item_id=source_item.id, task_type="code")
+    )
+    sync_client.source_item_id = source_item.id
 
     _sync_source(client, source_id)
     detail = client.get("/work-items/1")
@@ -1419,7 +1178,7 @@ def test_fastapi_sync_attaches_marker_linked_pr_to_active_local_ticket_work_item
     assert "Active PR" in detail.text
     assert work_item.active_pr_source_item_id == source_links[0].linked_source_item_id
     assert {link.relationship for link in source_links} == {"ticket_pr"}
-    assert source_links[0].marker == source_item_link_marker(source_items[0].id)
+    assert source_links[0].marker == source_item_link_marker(source_item.id)
     assert {link.relationship for link in work_item_links} == {"primary_issue", "linked_pr", "active_pr"}
 
 
@@ -2136,7 +1895,6 @@ def _client(
     tmp_path: Path,
     source_sync_client: SourceSyncClient | None = None,
     runtime: WebRuntime | None = None,
-    chat_assistant: ChatAssistantModel | None = None,
 ) -> TestClient:
     config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
     store = Store(config.database.path)
@@ -2148,7 +1906,6 @@ def _client(
             workflow_path="WORKFLOW.md",
             source_sync_client=source_sync_client,
             runtime=runtime,
-            chat_assistant=chat_assistant,
         )
     )
 
@@ -2253,18 +2010,6 @@ def _source_owned_record_counts(tmp_path: Path) -> dict[str, int]:
         }
 
 
-def _local_ticket_records(
-    tmp_path: Path,
-) -> tuple[list[SourceItem], WorkItem, list[WorkItemLink], list[WorkItemRun]]:
-    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
-    with session_factory() as session:
-        source_items = list(session.scalars(select(SourceItem).order_by(SourceItem.id.asc())))
-        work_item = session.scalars(select(WorkItem)).one()
-        links = list(session.scalars(select(WorkItemLink).order_by(WorkItemLink.id.asc())))
-        runs = list(session.scalars(select(WorkItemRun).order_by(WorkItemRun.id.asc())))
-        return source_items, work_item, links, runs
-
-
 def _chat_records(
     tmp_path: Path,
 ) -> tuple[
@@ -2285,28 +2030,6 @@ def _chat_records(
             list(session.scalars(select(WorkItemLink).order_by(WorkItemLink.id.asc()))),
             list(session.scalars(select(WorkItemRun).order_by(WorkItemRun.id.asc()))),
         )
-
-
-def _assign_chat_run_attempt(tmp_path: Path, *, run_id: int, attempt_id: int) -> None:
-    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
-    with session_factory() as session:
-        run = session.get(WorkItemRun, run_id)
-        assert run is not None
-        run.attempt_id = attempt_id
-        run.status = "running"
-        run.updated_at = "2026-06-13T12:01:00+00:00"
-        session.commit()
-
-
-def _set_chat_run_status(tmp_path: Path, *, run_id: int, status: str) -> None:
-    session_factory = create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
-    with session_factory() as session:
-        run = session.get(WorkItemRun, run_id)
-        assert run is not None
-        run.status = status
-        run.completed_at = "2026-06-13T12:05:00+00:00"
-        run.updated_at = "2026-06-13T12:05:00+00:00"
-        session.commit()
 
 
 def _git(path: Path, *args: str) -> str:
@@ -2373,20 +2096,6 @@ class FakeRuntime:
                 )
             ],
         )
-
-
-class FakeChatAssistant:
-    def __init__(self, decisions: list[ChatDecision]) -> None:
-        self.decisions = decisions
-        self.messages: list[str] = []
-        self.contexts: list[str] = []
-
-    def decide(self, thread: ChatThreadView, message: str, *, context: str = "") -> ChatDecision:
-        self.messages.append(message)
-        self.contexts.append(context)
-        if not self.decisions:
-            raise AssertionError(f"Unexpected chat assistant call for thread {thread.id}.")
-        return self.decisions.pop(0)
 
 
 class FakeSourceSyncClient:

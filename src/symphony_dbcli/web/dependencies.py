@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
 
-from symphony_dbcli.chats import ChatAssistantModel, ChatRepository, CodexChatAssistant
+from symphony_dbcli.chats import ChatRepository
 from symphony_dbcli.config import WorkflowConfig
 from symphony_dbcli.db import SessionFactory
 from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus
@@ -221,7 +221,6 @@ class WebAppState:
     workflow_path: str
     source_sync_client: SourceSyncClient | None = None
     runtime: WebRuntime | None = None
-    chat_assistant: ChatAssistantModel | None = None
 
 
 @dataclass(frozen=True)
@@ -263,13 +262,6 @@ def work_item_repository(request: Request) -> WorkItemRepository:
 
 def chat_repository(request: Request) -> ChatRepository:
     return ChatRepository(get_app_state(request).session_factory)
-
-
-def chat_assistant(request: Request) -> ChatAssistantModel:
-    state = get_app_state(request)
-    if state.chat_assistant is not None:
-        return state.chat_assistant
-    return CodexChatAssistant(state.config, Path(state.workflow_path).resolve().parent)
 
 
 def page_context(request: Request, *, title: str, active: str) -> dict[str, object]:

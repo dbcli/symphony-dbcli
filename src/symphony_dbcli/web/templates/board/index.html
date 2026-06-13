@@ -2,15 +2,6 @@
 {% block page_actions %}
 {% if selected_source %}
 <div class="page-actions">
-  <a
-    class="button-link"
-    href="/board/source/{{ selected_source.id }}/tickets/new"
-    hx-get="/board/source/{{ selected_source.id }}/tickets/new?return_to=/board/source/{{ selected_source.id }}"
-    hx-target="#modal-root"
-    hx-swap="innerHTML"
-  >
-    Create Ticket
-  </a>
   <form method="post" action="/sources/{{ selected_source.id }}/sync">
     <button type="submit">Sync Source</button>
   </form>
@@ -175,8 +166,8 @@
           {% endif %}
         </div>
         <strong>
-          {% if item.source_kind == "conversation" %}
-          <a href="/work-items/{{ item.id }}/chat">{{ item.title }}</a>
+          {% if item.source_kind == "conversation" and item.latest_attempt_id %}
+          <a href="/attempts/{{ item.latest_attempt_id }}">{{ item.title }}</a>
           {% else %}
           <a href="/work-items/{{ item.id }}">{{ item.title }}</a>
           {% endif %}

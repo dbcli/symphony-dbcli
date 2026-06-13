@@ -50,6 +50,16 @@
     </details>
   </article>
 
+  {% if detail.work_item and detail.work_item.user_hint %}
+  <article class="chat-message is-user">
+    <div class="chat-message-meta">
+      <strong>User</strong>
+      <span>{{ compact_time(detail.work_item.created_at, seconds=True) }}</span>
+    </div>
+    <pre class="result-body">{{ detail.work_item.user_hint }}</pre>
+  </article>
+  {% endif %}
+
   {% if detail.source_result %}
   <article class="chat-message is-system">
     <div class="chat-message-meta">

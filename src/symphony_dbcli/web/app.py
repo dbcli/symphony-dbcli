@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
-from symphony_dbcli.chats import ChatAssistantModel
 from symphony_dbcli.config import WorkflowConfig, default_config
 from symphony_dbcli.db import create_db_engine, create_session_factory
 from symphony_dbcli.models import create_model_tables
@@ -22,7 +21,6 @@ from .routers import (
     ask,
     attempts,
     board,
-    chats,
     github_app,
     operations,
     settings,
@@ -40,7 +38,6 @@ def create_app(
     workflow_path: str = "WORKFLOW.md",
     source_sync_client: SourceSyncClient | None = None,
     runtime: WebRuntime | None = None,
-    chat_assistant: ChatAssistantModel | None = None,
     run_runtime: bool = False,
 ) -> FastAPI:
     active_config = config or default_config()
@@ -77,12 +74,10 @@ def create_app(
         workflow_path=workflow_path,
         source_sync_client=source_sync_client,
         runtime=active_runtime,
-        chat_assistant=chat_assistant,
     )
     app.mount("/web-static", StaticFiles(directory=str(STATIC_DIR)), name="web_static")
 
     app.include_router(board.router)
-    app.include_router(chats.router)
     app.include_router(sources.router)
     app.include_router(work_items.router)
     app.include_router(attempts.router)

@@ -143,8 +143,8 @@
       Archive Work Item
     </button>
     <a class="button-link quiet" href="/board/source/{{ work_item.source_id }}">Board</a>
-    {% if work_item.source_kind == "conversation" %}
-    <a class="button-link" href="/work-items/{{ work_item.id }}/chat">Open Chat</a>
+    {% if work_item.source_kind == "conversation" and work_item.latest_attempt_id %}
+    <a class="button-link" href="/attempts/{{ work_item.latest_attempt_id }}">Open Attempt</a>
     {% endif %}
   </div>
 </section>

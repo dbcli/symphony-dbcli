@@ -79,6 +79,7 @@ class WorkItemView:
     source_number: int
     source_url: str
     active_pr_source_item_id: int | None
+    latest_attempt_id: int | None
     title: str
     state: str
     task_type: str
@@ -362,7 +363,14 @@ class WorkItemRepository:
                 .where(*conditions)
                 .order_by(WorkItem.updated_at.desc(), WorkItem.id.desc())
             ).all()
-            return [_work_item_view(work_item, source_item) for work_item, source_item in rows]
+            return [
+                _work_item_view(
+                    work_item,
+                    source_item,
+                    latest_attempt_id=_latest_attempt_id_for_work_item(session, work_item.id),
+                )
+                for work_item, source_item in rows
+            ]
 
     def list_by_state_page(
         self,
@@ -400,7 +408,14 @@ class WorkItemRepository:
                 .offset(offset)
             ).all()
             return WorkItemPage(
-                items=[_work_item_view(work_item, source_item) for work_item, source_item in rows],
+                items=[
+                    _work_item_view(
+                        work_item,
+                        source_item,
+                        latest_attempt_id=_latest_attempt_id_for_work_item(session, work_item.id),
+                    )
+                    for work_item, source_item in rows
+                ],
                 total=total,
                 page=page_number,
                 limit=page_limit,
@@ -414,7 +429,14 @@ class WorkItemRepository:
                 .where(WorkItem.disposition == "active")
                 .order_by(WorkItem.updated_at.desc(), WorkItem.id.desc())
             ).all()
-            return [_work_item_view(work_item, source_item) for work_item, source_item in rows]
+            return [
+                _work_item_view(
+                    work_item,
+                    source_item,
+                    latest_attempt_id=_latest_attempt_id_for_work_item(session, work_item.id),
+                )
+                for work_item, source_item in rows
+            ]
 
     def list_operations(self) -> list[OperationRunView]:
         with self._session_factory() as session:
@@ -533,6 +555,7 @@ class WorkItemRepository:
         with self._session_factory() as session:
             conditions = [
                 WorkItemRun.status == "queued",
+                WorkItemRun.attempt_id.is_(None),
                 WorkItem.disposition == "active",
                 WorkItem.state.in_(("todo", "in_progress")),
             ]
@@ -546,6 +569,31 @@ class WorkItemRepository:
                 .where(*conditions)
                 .order_by(WorkItemRun.created_at.asc(), WorkItemRun.id.asc())
                 .limit(1)
+            ).one_or_none()
+            if row is None:
+                return None
+            run, work_item, source_item, source = row
+            active_pr = (
+                session.get(SourceItem, work_item.active_pr_source_item_id)
+                if work_item.active_pr_source_item_id
+                else None
+            )
+            return _work_item_run_claim(run, work_item, source_item, source, active_pr)
+
+    def queued_run_by_id(self, run_id: int) -> WorkItemRunClaim | None:
+        with self._session_factory() as session:
+            row = session.execute(
+                select(WorkItemRun, WorkItem, SourceItem, Source)
+                .join(WorkItem, WorkItemRun.work_item_id == WorkItem.id)
+                .join(SourceItem, WorkItem.primary_source_item_id == SourceItem.id)
+                .join(Source, WorkItem.source_id == Source.id)
+                .where(
+                    WorkItemRun.id == run_id,
+                    WorkItemRun.status == "queued",
+                    WorkItemRun.attempt_id.is_(None),
+                    WorkItem.disposition == "active",
+                    WorkItem.state.in_(("todo", "in_progress")),
+                )
             ).one_or_none()
             if row is None:
                 return None
@@ -665,7 +713,11 @@ class WorkItemRepository:
             if row is None:
                 return None
             work_item, source_item = row
-            return _work_item_view(work_item, source_item)
+            return _work_item_view(
+                work_item,
+                source_item,
+                latest_attempt_id=_latest_attempt_id_for_work_item(session, work_item.id),
+            )
 
     def archive_work_item(self, work_item_id: int, note: str = "") -> WorkItemView:
         now = utc_now()
@@ -1041,7 +1093,12 @@ def _clean_codex_thread_id(thread_id: str | None) -> str | None:
     return cleaned or None
 
 
-def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemView:
+def _work_item_view(
+    work_item: WorkItem,
+    source_item: SourceItem,
+    *,
+    latest_attempt_id: int | None = None,
+) -> WorkItemView:
     return WorkItemView(
         id=work_item.id,
         source_id=work_item.source_id,
@@ -1050,6 +1107,7 @@ def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemVie
         source_number=source_item.number,
         source_url=source_item.url,
         active_pr_source_item_id=work_item.active_pr_source_item_id,
+        latest_attempt_id=latest_attempt_id,
         title=work_item.title,
         state=work_item.state,
         task_type=work_item.task_type,
@@ -1058,6 +1116,15 @@ def _work_item_view(work_item: WorkItem, source_item: SourceItem) -> WorkItemVie
         disposition_note=work_item.disposition_note,
         created_at=work_item.created_at,
         updated_at=work_item.updated_at,
+    )
+
+
+def _latest_attempt_id_for_work_item(session: Session, work_item_id: int) -> int | None:
+    return session.scalar(
+        select(WorkItemRun.attempt_id)
+        .where(WorkItemRun.work_item_id == work_item_id, WorkItemRun.attempt_id.is_not(None))
+        .order_by(WorkItemRun.created_at.desc(), WorkItemRun.id.desc())
+        .limit(1)
     )
 
 

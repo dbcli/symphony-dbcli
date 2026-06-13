@@ -7,8 +7,11 @@ from fastapi import APIRouter, Form, HTTPException, Request, status
 from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response
 
+from symphony_dbcli.chats import ChatError, ChatThreadView
+from symphony_dbcli.orchestrator import Orchestrator
 from symphony_dbcli.web.dependencies import (
     BreadcrumbItem,
+    chat_repository,
     get_app_state,
     page_context,
     source_repository,
@@ -36,6 +39,27 @@ def index(request: Request) -> Response:
         name="work_items/index.html",
         context=context,
     )
+
+
+@router.post("/work-items")
+def create_from_message(
+    request: Request,
+    message: Annotated[str, Form()],
+    source_id: Annotated[int | None, Form()] = None,
+) -> Response:
+    try:
+        thread = chat_repository(request).start_thread(message, source_id=source_id, queue_run=True)
+    except ChatError as exc:
+        context = page_context(request, title="Start Work", active="board")
+        context["error"] = str(exc)
+        context["message"] = message
+        return templates.TemplateResponse(
+            request=request,
+            name="work_items/start.html",
+            context=context,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    return _redirect_to_attempt(request, thread)
 
 
 @router.get("/work-items/{work_item_id}")
@@ -350,6 +374,33 @@ def _safe_return_to(value: str) -> str:
     if parsed.scheme or parsed.netloc or not value.startswith("/") or value.startswith("//"):
         return ""
     return value
+
+
+def _redirect_to_attempt(request: Request, thread: ChatThreadView) -> Response:
+    attempt_id = _claim_thread_attempt(request, thread)
+    if attempt_id is None:
+        return RedirectResponse(
+            f"/work-items/{thread.work_item_id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    response: Response = RedirectResponse(
+        f"/attempts/{attempt_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    runtime = get_app_state(request).runtime
+    if runtime is not None:
+        response.background = BackgroundTask(runtime.run_cycle, trigger="chat_implementation")
+    return response
+
+
+def _claim_thread_attempt(request: Request, thread: ChatThreadView) -> int | None:
+    run = thread.latest_run
+    if run is None:
+        return None
+    if run.attempt_id is not None:
+        return run.attempt_id
+    state = get_app_state(request)
+    return Orchestrator(state.config, state.store).claim_work_item_run(run.id)
 
 
 def _schedule_cycle_after_in_progress_move(

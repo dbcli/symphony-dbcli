@@ -1929,8 +1929,11 @@ class Store:
             attempt = conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
             if not attempt:
                 return None
+            work_item = _attempt_work_item(conn, attempt)
             return {
                 "attempt": attempt,
+                "work_item": work_item,
+                "source_item": _attempt_source_item(conn, work_item),
                 "result": conn.execute(
                     "SELECT * FROM worker_results WHERE attempt_id = ?",
                     (attempt_id,),
@@ -2130,6 +2133,35 @@ class Store:
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
+
+
+def _attempt_work_item(conn: sqlite3.Connection, attempt: sqlite3.Row) -> sqlite3.Row | None:
+    work_item_id = attempt["work_item_id"]
+    if work_item_id is None or not _sqlite_table_exists(conn, "work_items"):
+        return None
+    return cast(
+        sqlite3.Row | None, conn.execute("SELECT * FROM work_items WHERE id = ?", (work_item_id,)).fetchone()
+    )
+
+
+def _attempt_source_item(conn: sqlite3.Connection, work_item: sqlite3.Row | None) -> sqlite3.Row | None:
+    if work_item is None or not _sqlite_table_exists(conn, "source_items"):
+        return None
+    return cast(
+        sqlite3.Row | None,
+        conn.execute(
+            "SELECT * FROM source_items WHERE id = ?",
+            (work_item["primary_source_item_id"],),
+        ).fetchone(),
+    )
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 def _codex_prompts_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> list[dict[str, object]]:

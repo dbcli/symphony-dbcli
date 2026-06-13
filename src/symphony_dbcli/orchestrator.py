@@ -227,6 +227,12 @@ class Orchestrator:
             return None
         return self._claim_issue(eligible[0])
 
+    def claim_work_item_run(self, run_id: int) -> int | None:
+        run = self.work_items.queued_run_by_id(run_id)
+        if run is None:
+            return None
+        return self._claim_work_item_run(run)
+
     def claim_available(self) -> int:
         claimed = 0
         counts = self.store.active_attempt_counts()
