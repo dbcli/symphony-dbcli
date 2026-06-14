@@ -1,15 +1,6 @@
 {% extends "base.html" %}
-{% block page_actions %}
-{% if selected_source %}
-<div class="page-actions">
-  <form method="post" action="/sources/{{ selected_source.id }}/sync">
-    <button type="submit">Sync Source</button>
-  </form>
-</div>
-{% else %}
-<a class="button-link" href="/sources/new">Add Source</a>
-{% endif %}
-{% endblock %}
+{% block breadcrumbs %}{% endblock %}
+{% block page_title %}{% endblock %}
 {% block body %}
 {% if sources %}
 <section class="source-switcher" role="tablist" aria-label="Source boards">
@@ -26,6 +17,12 @@
 </section>
 
 <section class="source-board-frame" aria-label="Board for {{ selected_source.repo }}">
+  <div class="source-board-toolbar">
+    <form method="post" action="/sources/{{ selected_source.id }}/sync">
+      <button type="submit">Sync Source</button>
+    </form>
+  </div>
+
   <section class="board-start-panel" aria-label="Start work for {{ selected_source.repo }}">
     <form class="board-start-form" method="post" action="/work-items" data-chat-submit-form>
       <input type="hidden" name="source_id" value="{{ selected_source.id }}" />
@@ -183,6 +180,9 @@
 {% else %}
 <section class="panel">
   <div class="empty-state">Add a source to start a board.</div>
+  <div class="form-actions">
+    <a class="button-link" href="/sources/new">Add Source</a>
+  </div>
 </section>
 {% endif %}
 {% endblock %}

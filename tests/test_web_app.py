@@ -121,6 +121,7 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'aria-selected="true"' in response.text
     assert 'class="source-board-frame"' in response.text
     assert 'aria-label="Board for dbcli/litecli"' in response.text
+    assert 'class="source-board-toolbar"' in response.text
     assert 'class="board-start-panel"' in response.text
     assert 'aria-label="Start work for dbcli/litecli"' in response.text
     assert 'id="board-start-message"' in response.text

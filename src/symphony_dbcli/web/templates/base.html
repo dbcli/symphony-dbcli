@@ -31,6 +31,7 @@
     </div>
   </header>
   <main id="dashboard-main" class="app-shell">
+    {% block breadcrumbs %}
     {% if breadcrumbs %}
     <nav class="breadcrumbs" aria-label="Breadcrumb">
       <ol>
@@ -46,10 +47,13 @@
       </ol>
     </nav>
     {% endif %}
+    {% endblock %}
+    {% block page_title %}
     <div class="page-title">
       <h1>{{ title }}</h1>
       {% block page_actions %}{% endblock %}
     </div>
+    {% endblock %}
     {% block body %}{% endblock %}
   </main>
   <div id="modal-root"></div>
