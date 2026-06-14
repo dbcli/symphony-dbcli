@@ -13,11 +13,12 @@ from starlette.datastructures import FormData
 from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.actions import DEFAULT_ACTION_REGISTRY
-from symphony_dbcli.orchestrator import Orchestrator, OrchestratorError
+from symphony_dbcli.orchestrator import OrchestratorError
 from symphony_dbcli.web.dependencies import (
     BreadcrumbItem,
     WebAppState,
     get_app_state,
+    orchestrator_for_state,
     page_context,
     templates,
     work_item_repository,
@@ -49,6 +50,15 @@ class AttemptResultView:
     status: str
     updated_at: str
     formatted: FormattedResult
+
+
+@dataclass(frozen=True)
+class WorkerStatusNotice:
+    title: str
+    phase: str
+    message: str
+    technical_message: str
+    log_excerpt: str
 
 
 @router.get("/attempts/{attempt_id}")
@@ -92,7 +102,7 @@ def retry_workflow_action(
             detail="Workflow action run is not associated with an attempt.",
         )
     try:
-        Orchestrator(state.config, state.store).retry_failed_workflow_action(action_run_id)
+        orchestrator_for_state(state).retry_failed_workflow_action(action_run_id)
     except OrchestratorError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -254,12 +264,56 @@ def _attempt_context(request: Request, attempt_id: int) -> dict[str, object]:
     )
     context["attempt_result"] = _attempt_result(detail)
     context["workspace_diff"] = _attempt_workspace_diff(detail)
+    context["attempt_errors"] = _attempt_errors(detail)
+    context["supervisor_notices"] = _supervisor_notices(detail)
     context["post_answer_gate"] = gate_transitions.get("post_answer")
     context["return_to"] = f"/attempts/{attempt_id}"
     context["can_request_adjustment"] = _can_request_adjustment(detail)
     context["retryable_failed_workflow_actions"] = _retryable_failed_workflow_actions(state, detail)
     context["breadcrumbs"] = _attempt_breadcrumbs(request, detail, attempt_id)
     return context
+
+
+def _attempt_errors(detail: dict[str, Any] | None) -> list[Any]:
+    if not detail:
+        return []
+    return [row for row in detail["errors"] if not _is_supervisor_notice(row)]
+
+
+def _supervisor_notices(detail: dict[str, Any] | None) -> list[WorkerStatusNotice]:
+    if not detail:
+        return []
+    return [
+        WorkerStatusNotice(
+            title=_supervisor_notice_title(str(row["error_type"] or "")),
+            phase=str(row["phase"] or ""),
+            message=_supervisor_notice_message(str(row["error_type"] or "")),
+            technical_message=str(row["message"] or ""),
+            log_excerpt=str(row["log_excerpt"] or ""),
+        )
+        for row in detail["errors"]
+        if _is_supervisor_notice(row)
+    ]
+
+
+def _is_supervisor_notice(row: Any) -> bool:
+    return str(row["phase"] or "") == "supervisor"
+
+
+def _supervisor_notice_title(error_type: str) -> str:
+    if error_type == "timed_out":
+        return "Worker deadline reached"
+    if error_type == "crashed":
+        return "Worker process ended"
+    return "Worker status update"
+
+
+def _supervisor_notice_message(error_type: str) -> str:
+    if error_type == "timed_out":
+        return "The background worker stopped after exceeding its heartbeat or runtime limit."
+    if error_type == "crashed":
+        return "The background worker process is no longer active. Any completed model output remains available above."
+    return "The supervisor recorded a background worker status change."
 
 
 def _attempt_result(detail: dict[str, Any] | None) -> AttemptResultView | None:
@@ -575,7 +629,7 @@ def _run_or_schedule_gate(
         _run_gate(request, gate_id, input_data)
         return None
     try:
-        Orchestrator(state.config, state.store).start_human_gate(gate_id, input_data=input_data)
+        orchestrator_for_state(state).start_human_gate(gate_id, input_data=input_data)
     except OrchestratorError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -590,7 +644,7 @@ def _gate_runs_in_background(state: WebAppState, gate: sqlite3.Row) -> bool:
 
 def _run_started_gate(state: WebAppState, gate_id: int, input_data: dict[str, Any]) -> None:
     try:
-        Orchestrator(state.config, state.store).run_started_human_gate(gate_id, input_data=input_data)
+        orchestrator_for_state(state).run_started_human_gate(gate_id, input_data=input_data)
     except Exception as exc:
         _record_background_gate_error(state, gate_id, exc)
 
@@ -612,7 +666,7 @@ def _record_background_gate_error(state: WebAppState, gate_id: int, exc: Excepti
 def _run_gate(request: Request, gate_id: int, input_data: dict[str, Any]) -> None:
     state = get_app_state(request)
     try:
-        Orchestrator(state.config, state.store).run_human_gate(gate_id, input_data=input_data)
+        orchestrator_for_state(state).run_human_gate(gate_id, input_data=input_data)
     except OrchestratorError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:

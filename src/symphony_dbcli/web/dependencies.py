@@ -15,6 +15,7 @@ from markupsafe import Markup, escape
 from symphony_dbcli.chats import ChatRepository
 from symphony_dbcli.config import WorkflowConfig
 from symphony_dbcli.db import SessionFactory
+from symphony_dbcli.orchestrator import Orchestrator
 from symphony_dbcli.runtime import RuntimeCycleResult, RuntimeStatus
 from symphony_dbcli.sources import SourceRepository, SourceSyncClient
 from symphony_dbcli.store import Store
@@ -219,6 +220,7 @@ class WebAppState:
     store: Store
     session_factory: SessionFactory
     workflow_path: str
+    workflow_version_id: int | None = None
     source_sync_client: SourceSyncClient | None = None
     runtime: WebRuntime | None = None
 
@@ -262,6 +264,10 @@ def work_item_repository(request: Request) -> WorkItemRepository:
 
 def chat_repository(request: Request) -> ChatRepository:
     return ChatRepository(get_app_state(request).session_factory)
+
+
+def orchestrator_for_state(state: WebAppState) -> Orchestrator:
+    return Orchestrator(state.config, state.store, state.workflow_version_id)
 
 
 def page_context(request: Request, *, title: str, active: str) -> dict[str, object]:

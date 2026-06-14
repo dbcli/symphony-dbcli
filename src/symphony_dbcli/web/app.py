@@ -36,6 +36,7 @@ def create_app(
     store: Store | None = None,
     *,
     workflow_path: str = "WORKFLOW.md",
+    workflow_version_id: int | None = None,
     source_sync_client: SourceSyncClient | None = None,
     runtime: WebRuntime | None = None,
     run_runtime: bool = False,
@@ -72,6 +73,7 @@ def create_app(
         store=active_store,
         session_factory=session_factory,
         workflow_path=workflow_path,
+        workflow_version_id=workflow_version_id,
         source_sync_client=source_sync_client,
         runtime=active_runtime,
     )
@@ -110,10 +112,11 @@ def create_app_from_env() -> FastAPI:
     config = load_workflow(workflow_path, profile=profile)
     store = Store(config.database.path)
     store.init()
-    config, _version_id = load_and_record_workflow(store, workflow_path, profile=profile)
+    config, version_id = load_and_record_workflow(store, workflow_path, profile=profile)
     return create_app(
         config,
         store,
         workflow_path=workflow_path,
+        workflow_version_id=version_id,
         run_runtime=run_runtime,
     )

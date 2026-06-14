@@ -8,11 +8,11 @@ from starlette.background import BackgroundTask
 from starlette.responses import RedirectResponse, Response
 
 from symphony_dbcli.chats import ChatError, ChatThreadView
-from symphony_dbcli.orchestrator import Orchestrator
 from symphony_dbcli.web.dependencies import (
     BreadcrumbItem,
     chat_repository,
     get_app_state,
+    orchestrator_for_state,
     page_context,
     source_repository,
     templates,
@@ -400,7 +400,7 @@ def _claim_thread_attempt(request: Request, thread: ChatThreadView) -> int | Non
     if run.attempt_id is not None:
         return run.attempt_id
     state = get_app_state(request)
-    return Orchestrator(state.config, state.store).claim_work_item_run(run.id)
+    return orchestrator_for_state(state).claim_work_item_run(run.id)
 
 
 def _schedule_cycle_after_in_progress_move(

@@ -516,7 +516,19 @@ def test_fastapi_board_filters_by_source_item_kind(tmp_path: Path) -> None:
 
 def test_fastapi_work_item_start_creates_attempt_from_header_flow(tmp_path: Path) -> None:
     runtime = FakeRuntime()
-    client = _client(tmp_path, runtime=runtime)
+    config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
+    store = Store(config.database.path)
+    store.init()
+    workflow_version_id = store.record_workflow_version("WORKFLOW.md", "test workflow", config)
+    client = TestClient(
+        create_app(
+            config,
+            store,
+            workflow_path="WORKFLOW.md",
+            workflow_version_id=workflow_version_id,
+            runtime=runtime,
+        )
+    )
     source_id = _add_source(client, "dbcli/litecli")
 
     response = client.post(
@@ -530,8 +542,8 @@ def test_fastapi_work_item_start_creates_attempt_from_header_flow(tmp_path: Path
     attempt = client.get("/attempts/1")
     board = client.get(f"/board/source/{source_id}")
     threads, messages, source_items, work_items, links, runs = _chat_records(tmp_path)
-    store = Store(str(tmp_path / "symphony.db"))
     attempt_row = store.attempt_by_id(1)
+    workflow_instance = store.workflow_instance_for_attempt(1)
     run_claim = WorkItemRepository(
         create_session_factory(create_db_engine(str(tmp_path / "symphony.db")))
     ).next_queued_run()
@@ -559,6 +571,9 @@ def test_fastapi_work_item_start_creates_attempt_from_header_flow(tmp_path: Path
     assert attempt_row["status"] == "queued"
     assert attempt_row["work_item_id"] == work_items[0].id
     assert attempt_row["work_item_run_id"] == runs[0].id
+    assert attempt_row["workflow_version_id"] == workflow_version_id
+    assert workflow_instance is not None
+    assert workflow_instance["workflow_version_id"] == workflow_version_id
     assert run_claim is None
     assert runtime.triggers == ["chat_implementation"]
 
@@ -1698,13 +1713,10 @@ def test_fastapi_retry_failed_action_route_invokes_orchestrator(
     called: list[int] = []
 
     class FakeOrchestrator:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            pass
-
         def retry_failed_workflow_action(self, action_run_id: int) -> None:
             called.append(action_run_id)
 
-    monkeypatch.setattr(attempts, "Orchestrator", FakeOrchestrator)
+    monkeypatch.setattr(attempts, "orchestrator_for_state", lambda _state: FakeOrchestrator())
 
     response = client.post(
         f"/workflow-actions/{action_run_id}/retry",

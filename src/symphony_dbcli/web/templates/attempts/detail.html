@@ -45,7 +45,7 @@
         <div><dt>Repo</dt><dd>{{ detail.attempt.repo }}#{{ detail.attempt.issue_number }}</dd></div>
         <div><dt>Branch</dt><dd>{{ detail.attempt.branch or "-" }}</dd></div>
         <div><dt>Worktree</dt><dd>{{ detail.attempt.worktree_path or "-" }}</dd></div>
-        <div><dt>Workflow</dt><dd>{{ detail.attempt.workflow_version_id or "unknown" }}</dd></div>
+        <div><dt>Workflow</dt><dd>{{ detail.attempt.workflow_version_id or "not recorded" }}</dd></div>
       </dl>
     </details>
   </article>
@@ -344,14 +344,39 @@
   </article>
   {% endif %}
 
-  {% if detail.errors %}
+  {% if supervisor_notices %}
+  <article class="chat-message is-system attempt-worker-status">
+    <div class="chat-message-meta">
+      <strong>Worker status</strong>
+      <span>{{ supervisor_notices|length }} update{{ "s" if supervisor_notices|length != 1 else "" }}</span>
+    </div>
+    <div class="attempt-action-list">
+      {% for row in supervisor_notices %}
+      <div class="attempt-action-item">
+        <div class="draft-meta">
+          <strong>{{ row.title }}</strong>
+          <span>{{ row.phase }}</span>
+        </div>
+        <p>{{ row.message }}</p>
+        <details class="attempt-message-details">
+          <summary>Technical details</summary>
+          <p class="muted">{{ row.technical_message }}</p>
+          {% if row.log_excerpt %}<pre class="result-body">{{ row.log_excerpt }}</pre>{% endif %}
+        </details>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+  {% endif %}
+
+  {% if attempt_errors %}
   <article class="chat-message is-assistant is-error">
     <div class="chat-message-meta">
       <strong>Assistant</strong>
-      <span>{{ detail.errors|length }} error{{ "s" if detail.errors|length != 1 else "" }}</span>
+      <span>{{ attempt_errors|length }} error{{ "s" if attempt_errors|length != 1 else "" }}</span>
     </div>
     <div class="attempt-action-list">
-      {% for row in detail.errors %}
+      {% for row in attempt_errors %}
       <div class="attempt-action-item">
         <div class="draft-meta">
           <strong>{{ row.error_type }}</strong>

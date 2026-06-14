@@ -67,6 +67,26 @@ def test_fetch_comments_returns_comment_snapshots(tmp_path: Path) -> None:
     ]
 
 
+def test_apply_labels_skips_conversation_source_items(tmp_path: Path) -> None:
+    github = FakePrimitiveGitHub()
+    executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=github)
+
+    output = executor.execute(
+        _context(
+            "github.apply_labels",
+            source_item_kind="conversation",
+            issue_number=CONVERSATION_ISSUE_NUMBER_OFFSET + 25,
+            to_state="review",
+        )
+    ).output
+
+    assert output["skipped"] is True
+    assert output["labels_added"] == []
+    assert output["labels_removed"] == []
+    assert github.added_labels == []
+    assert github.removed_labels == []
+
+
 def test_source_sync_primitive_persists_source_items(tmp_path: Path) -> None:
     executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=FakePrimitiveGitHub())
     source = executor.sources.create_source(SourceCreate(repo="dbcli/litecli"))
@@ -1220,6 +1240,8 @@ class FakePrimitiveGitHub:
         self.pushed_branches: list[str] = []
         self.created_pull_request_body: str | None = None
         self.created_pull_request_title: str | None = None
+        self.added_labels: list[tuple[str, int, list[str]]] = []
+        self.removed_labels: list[tuple[str, int, str]] = []
 
     def list_issues(self, repo: str, labels: list[str] | None = None) -> list[GitHubIssue]:
         return [self.issue(repo, 245)]
@@ -1307,10 +1329,10 @@ class FakePrimitiveGitHub:
         ]
 
     def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
-        return
+        self.added_labels.append((repo, issue_number, labels))
 
     def remove_label(self, repo: str, issue_number: int, label: str) -> None:
-        return
+        self.removed_labels.append((repo, issue_number, label))
 
     def pull_request(self, repo: str, number: int) -> PullRequest:
         return PullRequest(
@@ -1485,6 +1507,7 @@ def _context(
     work_item_id: int | None = None,
     issue_number: int = 245,
     issue_title: str = "Logging path support",
+    to_state: str = "to",
     worktree_path: str = "",
     branch: str = "",
     commit_sha: str = "",
@@ -1495,7 +1518,7 @@ def _context(
         transition_name=action.removeprefix("github."),
         transition=WorkflowTransitionConfig(
             from_state="from",
-            to_state="to",
+            to_state=to_state,
             action=action,
         ),
         repo="dbcli/litecli",

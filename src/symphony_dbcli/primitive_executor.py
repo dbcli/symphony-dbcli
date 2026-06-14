@@ -37,6 +37,7 @@ from .sources import SourceRepository, SourceSyncService
 from .store import Store
 from .work_items import (
     CONVERSATION_KIND,
+    LOCAL_TICKET_KIND,
     WorkItemActivation,
     WorkItemMove,
     WorkItemRepository,
@@ -240,6 +241,16 @@ class PrimitiveExecutor:
 
     def _apply_labels(self, context: PrimitiveContext) -> PrimitiveOutcome:
         add, remove = self._label_changes(context.transition.to_state)
+        if _is_internal_source_item(context):
+            return PrimitiveOutcome(
+                {
+                    "dry_run": self.config.policy.dry_run,
+                    "labels_added": [],
+                    "labels_removed": [],
+                    "skipped": True,
+                    "reason": f"{context.source_item_kind} source items do not map to GitHub issues.",
+                }
+            )
         if not self.config.policy.dry_run:
             if add:
                 self.github.add_labels(context.repo, context.issue_number, add)
@@ -845,6 +856,10 @@ class PrimitiveExecutor:
         if to_state == "done":
             return [labels.done], [labels.review, labels.working, labels.todo]
         return [], []
+
+
+def _is_internal_source_item(context: PrimitiveContext) -> bool:
+    return context.source_item_kind in {CONVERSATION_KIND, LOCAL_TICKET_KIND}
 
 
 def _required_attempt_id(context: PrimitiveContext) -> int:

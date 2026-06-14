@@ -722,6 +722,11 @@ h2 {
   background: rgb(185 74 72 / 7%);
 }
 
+.chat-message.attempt-worker-status {
+  border-color: rgb(153 111 34 / 28%);
+  background: rgb(153 111 34 / 7%);
+}
+
 .chat-message.is-pending {
   color: var(--muted);
 }
