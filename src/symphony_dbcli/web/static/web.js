@@ -277,7 +277,7 @@ function setupChatSubmitProgress(root = document) {
       form.dataset.chatSubmitting = "true";
       const startedAt = Date.now();
       const submitButton = form.querySelector('button[type="submit"]');
-      const compact = form.classList.contains("header-chat-form");
+      const compact = form.classList.contains("board-start-form");
       let progress = form.querySelector("[data-chat-submit-progress]");
       if (!compact && !progress) {
         progress = document.createElement("p");

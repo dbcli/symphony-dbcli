@@ -131,7 +131,6 @@ def _render_board(request: Request, filters: BoardFilters) -> Response:
     context["board_kind_options"] = _board_kind_options(filters)
     context["board_form_action"] = _board_base_url(source_id)
     context["board_clear_url"] = _board_url(source_id, filters, clear_query=True, backlog_page=1, done_page=1)
-    context["chat_source_id"] = source_id
     return templates.TemplateResponse(
         request=request,
         name="board/index.html",

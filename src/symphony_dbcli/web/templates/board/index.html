@@ -12,180 +12,173 @@
 {% endblock %}
 {% block body %}
 {% if sources %}
-<section class="source-switcher" aria-label="Source boards">
+<section class="source-switcher" role="tablist" aria-label="Source boards">
   {% for source in sources %}
   <a
     class="{{ 'is-active' if selected_source and source.id == selected_source.id else '' }}"
     href="/board/source/{{ source.id }}"
+    role="tab"
+    aria-selected="{{ 'true' if selected_source and source.id == selected_source.id else 'false' }}"
   >
     {{ source.repo }}
   </a>
   {% endfor %}
 </section>
 
-<section class="panel board-context">
-  <div>
-    <span class="kicker">Source</span>
-    <strong>{{ selected_source.repo }}</strong>
-  </div>
-  <div>
-    <span class="kicker">Sync</span>
-    <strong>{{ selected_source.sync_status }}</strong>
-  </div>
-  <div>
-    <span class="kicker">Last Sync</span>
-    {% if selected_source.last_synced_at %}
-    <strong>
-      <time
-        datetime="{{ selected_source.last_synced_at }}"
-        title="{{ selected_source.last_synced_at|localtime }}"
-      >
-        {{ selected_source.last_synced_at|relative_time }}
-      </time>
-    </strong>
-    {% else %}
-    <strong>Never</strong>
-    {% endif %}
-  </div>
-</section>
-
-<form class="board-search" method="get" action="{{ board_form_action }}" role="search">
-  <div class="board-kind-filter" role="radiogroup" aria-label="Item type">
-    {% for option in board_kind_options %}
-    <label class="board-filter-pill">
+<section class="source-board-frame" aria-label="Board for {{ selected_source.repo }}">
+  <section class="board-start-panel" aria-label="Start work for {{ selected_source.repo }}">
+    <form class="board-start-form" method="post" action="/work-items" data-chat-submit-form>
+      <input type="hidden" name="source_id" value="{{ selected_source.id }}" />
+      <label class="sr-only" for="board-start-message">Start work for {{ selected_source.repo }}</label>
       <input
-        class="sr-only"
-        type="radio"
-        name="kind"
-        value="{{ option.value }}"
-        {% if option.selected %}checked{% endif %}
-        hx-get="{{ board_form_action }}"
-        hx-trigger="change"
-        hx-target="#board-columns"
-        hx-select="#board-columns"
-        hx-swap="outerHTML"
-        hx-include="closest form"
-        hx-push-url="true"
-        hx-sync="closest form:replace"
+        id="board-start-message"
+        name="message"
+        placeholder="Ask Symphony or start work in {{ selected_source.repo }}"
+        autocomplete="off"
+        required
       />
-      <span>{{ option.label }}</span>
-    </label>
-    {% endfor %}
-  </div>
-  <label class="sr-only" for="board-search">Search board</label>
-  <input
-    id="board-search"
-    type="search"
-    name="q"
-    value="{{ board_query }}"
-    placeholder="Search this board"
-    autocomplete="off"
-    hx-get="{{ board_form_action }}"
-    hx-trigger="input changed delay:200ms, search"
-    hx-target="#board-columns"
-    hx-select="#board-columns"
-    hx-swap="outerHTML"
-    hx-include="closest form"
-    hx-push-url="true"
-    hx-sync="closest form:replace"
-  />
-  <button type="submit">Search</button>
-  {% if board_query %}
-  <a class="text-action" href="{{ board_clear_url }}">Clear</a>
-  {% endif %}
-</form>
+      <button type="submit">Start</button>
+    </form>
+  </section>
 
-<section id="board-columns" class="board" aria-label="Work board for {{ selected_source.repo }}">
-  {% for column in columns %}
-  <div class="board-column">
-    <div class="column-header">
-      <h2>{{ column.label }}</h2>
-      <span>{{ column.count }}</span>
+  <form class="board-search" method="get" action="{{ board_form_action }}" role="search">
+    <div class="board-kind-filter" role="radiogroup" aria-label="Item type">
+      {% for option in board_kind_options %}
+      <label class="board-filter-pill">
+        <input
+          class="sr-only"
+          type="radio"
+          name="kind"
+          value="{{ option.value }}"
+          {% if option.selected %}checked{% endif %}
+          hx-get="{{ board_form_action }}"
+          hx-trigger="change"
+          hx-target="#board-columns"
+          hx-select="#board-columns"
+          hx-swap="outerHTML"
+          hx-include="closest form"
+          hx-push-url="true"
+          hx-sync="closest form:replace"
+        />
+        <span>{{ option.label }}</span>
+      </label>
+      {% endfor %}
     </div>
-    {% if column.previous_url or column.next_url %}
-    <div class="pager" aria-label="{{ column.label }} pagination">
-      <span>{{ column.page_start }}-{{ column.page_end }} of {{ column.count }}</span>
-      <div>
-        {% if column.previous_url %}
-        <a class="pager-link" href="{{ column.previous_url }}">Prev</a>
-        {% else %}
-        <span class="pager-link is-disabled">Prev</span>
-        {% endif %}
-        {% if column.next_url %}
-        <a class="pager-link" href="{{ column.next_url }}">Next</a>
-        {% else %}
-        <span class="pager-link is-disabled">Next</span>
-        {% endif %}
+    <label class="sr-only" for="board-search">Search board</label>
+    <input
+      id="board-search"
+      type="search"
+      name="q"
+      value="{{ board_query }}"
+      placeholder="Search this board"
+      autocomplete="off"
+      hx-get="{{ board_form_action }}"
+      hx-trigger="input changed delay:200ms, search"
+      hx-target="#board-columns"
+      hx-select="#board-columns"
+      hx-swap="outerHTML"
+      hx-include="closest form"
+      hx-push-url="true"
+      hx-sync="closest form:replace"
+    />
+    <button type="submit">Search</button>
+    {% if board_query %}
+    <a class="text-action" href="{{ board_clear_url }}">Clear</a>
+    {% endif %}
+  </form>
+
+  <section id="board-columns" class="board" aria-label="Work board for {{ selected_source.repo }}">
+    {% for column in columns %}
+    <div class="board-column">
+      <div class="column-header">
+        <h2>{{ column.label }}</h2>
+        <span>{{ column.count }}</span>
       </div>
-    </div>
-    {% endif %}
-    {% if column.source_items %}
-    <div class="source-card-list kanban-list" data-state="{{ column.name }}">
-      {% for item in column.source_items %}
-      <article class="source-card" data-source-item-id="{{ item.id }}">
+      {% if column.previous_url or column.next_url %}
+      <div class="pager" aria-label="{{ column.label }} pagination">
+        <span>{{ column.page_start }}-{{ column.page_end }} of {{ column.count }}</span>
         <div>
-          <span class="source-card-kind">{{ item.kind_label }}</span>
-          {% if item.url %}
-          <a href="{{ item.url }}" target="_blank" rel="noreferrer">#{{ item.number }}</a>
+          {% if column.previous_url %}
+          <a class="pager-link" href="{{ column.previous_url }}">Prev</a>
           {% else %}
-          <span class="source-card-ref">#{{ item.number }}</span>
+          <span class="pager-link is-disabled">Prev</span>
+          {% endif %}
+          {% if column.next_url %}
+          <a class="pager-link" href="{{ column.next_url }}">Next</a>
+          {% else %}
+          <span class="pager-link is-disabled">Next</span>
           {% endif %}
         </div>
-        <strong>{{ item.title }}</strong>
-        <span class="muted">{{ item.author or "unknown author" }}</span>
-        <span class="muted">{{ item.activation_label }}</span>
-        {% if item.linked_items %}
-        <details class="linked-detail">
-          <summary>{{ item.linked_items|length }} linked PR{{ "s" if item.linked_items|length != 1 else "" }}</summary>
-          <ul>
-            {% for linked in item.linked_items %}
-            <li><a href="{{ linked.url }}" target="_blank" rel="noreferrer">#{{ linked.number }}</a> {{ linked.title }}</li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
-        <div class="card-actions">
-          <a class="text-action" href="/source-items/{{ item.id }}/activate">Queue</a>
-          <form method="post" action="/source-items/{{ item.id }}/ignore">
-            <button class="text-button" type="submit">Ignore</button>
+      </div>
+      {% endif %}
+      {% if column.source_items %}
+      <div class="source-card-list kanban-list" data-state="{{ column.name }}">
+        {% for item in column.source_items %}
+        <article class="source-card" data-source-item-id="{{ item.id }}">
+          <div>
+            <span class="source-card-kind">{{ item.kind_label }}</span>
+            {% if item.url %}
+            <a href="{{ item.url }}" target="_blank" rel="noreferrer">#{{ item.number }}</a>
+            {% else %}
+            <span class="source-card-ref">#{{ item.number }}</span>
+            {% endif %}
+          </div>
+          <strong>{{ item.title }}</strong>
+          <span class="muted">{{ item.author or "unknown author" }}</span>
+          <span class="muted">{{ item.activation_label }}</span>
+          {% if item.linked_items %}
+          <details class="linked-detail">
+            <summary>{{ item.linked_items|length }} linked PR{{ "s" if item.linked_items|length != 1 else "" }}</summary>
+            <ul>
+              {% for linked in item.linked_items %}
+              <li><a href="{{ linked.url }}" target="_blank" rel="noreferrer">#{{ linked.number }}</a> {{ linked.title }}</li>
+              {% endfor %}
+            </ul>
+          </details>
+          {% endif %}
+          <div class="card-actions">
+            <a class="text-action" href="/source-items/{{ item.id }}/activate">Queue</a>
+            <form method="post" action="/source-items/{{ item.id }}/ignore">
+              <button class="text-button" type="submit">Ignore</button>
+            </form>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% elif column.work_items %}
+      <div class="source-card-list kanban-list" data-state="{{ column.name }}">
+        {% for item in column.work_items %}
+        <article class="source-card" data-work-item-id="{{ item.id }}">
+          <div>
+            <span class="source-card-kind">{{ item.source_label }}</span>
+            {% if item.source_url %}
+            <a href="{{ item.source_url }}" target="_blank" rel="noreferrer">#{{ item.source_number }}</a>
+            {% else %}
+            <span class="source-card-ref">#{{ item.source_number }}</span>
+            {% endif %}
+          </div>
+          <strong>
+            {% if item.source_kind == "conversation" and item.latest_attempt_id %}
+            <a href="/attempts/{{ item.latest_attempt_id }}">{{ item.title }}</a>
+            {% else %}
+            <a href="/work-items/{{ item.id }}">{{ item.title }}</a>
+            {% endif %}
+          </strong>
+          <span class="muted">{{ item.task_type }} · work item #{{ item.id }}</span>
+          <form method="post" action="/work-items/{{ item.id }}/archive">
+            <button class="text-button" type="submit">Archive</button>
           </form>
-        </div>
-      </article>
-      {% endfor %}
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="source-card-list kanban-list is-empty" data-state="{{ column.name }}">
+        <div class="empty-state">No items</div>
+      </div>
+      {% endif %}
     </div>
-    {% elif column.work_items %}
-    <div class="source-card-list kanban-list" data-state="{{ column.name }}">
-      {% for item in column.work_items %}
-      <article class="source-card" data-work-item-id="{{ item.id }}">
-        <div>
-          <span class="source-card-kind">{{ item.source_label }}</span>
-          {% if item.source_url %}
-          <a href="{{ item.source_url }}" target="_blank" rel="noreferrer">#{{ item.source_number }}</a>
-          {% else %}
-          <span class="source-card-ref">#{{ item.source_number }}</span>
-          {% endif %}
-        </div>
-        <strong>
-          {% if item.source_kind == "conversation" and item.latest_attempt_id %}
-          <a href="/attempts/{{ item.latest_attempt_id }}">{{ item.title }}</a>
-          {% else %}
-          <a href="/work-items/{{ item.id }}">{{ item.title }}</a>
-          {% endif %}
-        </strong>
-        <span class="muted">{{ item.task_type }} · work item #{{ item.id }}</span>
-        <form method="post" action="/work-items/{{ item.id }}/archive">
-          <button class="text-button" type="submit">Archive</button>
-        </form>
-      </article>
-      {% endfor %}
-    </div>
-    {% else %}
-    <div class="source-card-list kanban-list is-empty" data-state="{{ column.name }}">
-      <div class="empty-state">No items</div>
-    </div>
-    {% endif %}
-  </div>
-  {% endfor %}
+    {% endfor %}
+  </section>
 </section>
 {% else %}
 <section class="panel">

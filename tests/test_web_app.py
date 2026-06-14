@@ -90,7 +90,7 @@ def _open_attempt_gate(store: Store, attempt_id: int, *, transition_name: str, g
 
 def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _add_source(client, "dbcli/litecli")
+    source_id = _add_source(client, "dbcli/litecli")
 
     response = client.get("/")
 
@@ -116,6 +116,16 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'hx-swap="outerHTML"' in response.text
     assert 'hx-push-url="true"' in response.text
     assert "dbcli/litecli" in response.text
+    assert 'role="tablist" aria-label="Source boards"' in response.text
+    assert 'role="tab"' in response.text
+    assert 'aria-selected="true"' in response.text
+    assert 'class="source-board-frame"' in response.text
+    assert 'aria-label="Board for dbcli/litecli"' in response.text
+    assert 'class="board-start-panel"' in response.text
+    assert 'aria-label="Start work for dbcli/litecli"' in response.text
+    assert 'id="board-start-message"' in response.text
+    assert 'placeholder="Ask Symphony or start work in dbcli/litecli"' in response.text
+    assert f'name="source_id" value="{source_id}"' in response.text
     assert "Sync Source" in response.text
     assert "data-theme-toggle" in response.text
     assert "data-theme-toggle-label>&#9790;</span>" in response.text
@@ -391,9 +401,6 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     assert "synced" in sources.text
     assert "Fix completion crash" in board.text
     assert "Improve docs" in board.text
-    assert "<time" in board.text
-    assert 'title="' in board.text
-    assert "just now" in board.text
     assert "#245" in board.text
     assert "#8" in board.text
     assert "data-source-item-id=" in board.text
@@ -514,7 +521,7 @@ def test_fastapi_board_filters_by_source_item_kind(tmp_path: Path) -> None:
     assert "Fix completion crash" not in prs_board.text
 
 
-def test_fastapi_work_item_start_creates_attempt_from_header_flow(tmp_path: Path) -> None:
+def test_fastapi_work_item_start_creates_attempt_from_board_form(tmp_path: Path) -> None:
     runtime = FakeRuntime()
     config = replace(default_config(), database=DatabaseConfig(path=str(tmp_path / "symphony.db")))
     store = Store(config.database.path)
@@ -553,7 +560,9 @@ def test_fastapi_work_item_start_creates_attempt_from_header_flow(tmp_path: Path
     assert attempt.status_code == 200
     assert 'aria-label="Attempt conversation"' in attempt.text
     assert "Can we add a retry button" in attempt.text
-    assert "data-chat-submit-form" in attempt.text
+    assert 'class="source-board-frame"' in board.text
+    assert 'class="board-start-panel"' in board.text
+    assert f'name="source_id" value="{source_id}"' in board.text
     assert 'href="/attempts/1"' in board.text
     assert "Can we add a retry button for failed workflow actions?" in board.text
     assert len(threads) == 1
