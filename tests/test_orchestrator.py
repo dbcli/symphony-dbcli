@@ -627,6 +627,13 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
         state="review",
         prompt="Review the drafted answer.",
     )
+    store.record_error(
+        attempt_id,
+        phase="workflow",
+        error_type="OrchestratorError",
+        message="previous post_answer failure",
+        recoverable=True,
+    )
     primitives = FakeWorkflowPrimitives()
 
     result = Orchestrator(
@@ -639,6 +646,11 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     instance = store.workflow_instance_by_id(instance_id)
     gate = store.workflow_gate_by_id(gate_id)
     attempt = store.attempt_by_id(attempt_id)
+    with store.connect() as conn:
+        stored_error = conn.execute(
+            "SELECT cleared_at FROM worker_errors WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
     assert primitives.transitions == ["post_answer"]
     assert result.current_state == "done"
     assert result.stop_reason == "terminal"
@@ -649,7 +661,68 @@ def test_orchestrator_runs_human_gate_from_workflow_transition(tmp_path: Path) -
     assert gate["decision"] == "approved"
     assert attempt is not None
     assert attempt["outcome"] == "done"
+    assert attempt["error_count"] == 0
+    assert stored_error is not None
+    assert stored_error["cleared_at"] is not None
     assert store.pending_workflow_gates_for_attempt(attempt_id) == []
+
+
+def test_orchestrator_keeps_workflow_error_when_human_gate_retry_fails(tmp_path: Path) -> None:
+    store = _seed_store(tmp_path)
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+        status="review",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+        initial_state="review",
+        attempt_id=attempt_id,
+    )
+    gate_id = store.open_workflow_gate(
+        instance_id=instance_id,
+        workflow_version_id=None,
+        gate="review_answer",
+        transition_name="post_answer",
+        state="review",
+        prompt="Review the drafted answer.",
+    )
+    store.record_error(
+        attempt_id,
+        phase="workflow",
+        error_type="OrchestratorError",
+        message="previous post_answer failure",
+        recoverable=True,
+    )
+    primitives = FakeWorkflowPrimitives(fail_once={"post_answer"})
+
+    with pytest.raises(OrchestratorError, match="post_answer failed once"):
+        Orchestrator(
+            default_config(),
+            store,
+            github=FakeCleanupGitHub(),
+            primitives=primitives,
+        ).run_human_gate(gate_id)
+
+    attempt = store.attempt_by_id(attempt_id)
+    detail = store.attempt_detail(attempt_id)
+    with store.connect() as conn:
+        action_run = conn.execute(
+            "SELECT status, error FROM workflow_action_runs WHERE attempt_id = ? ORDER BY id DESC LIMIT 1",
+            (attempt_id,),
+        ).fetchone()
+    assert attempt is not None
+    assert attempt["error_count"] == 1
+    assert detail is not None
+    assert [row["message"] for row in detail["errors"]] == ["previous post_answer failure"]
+    assert action_run is not None
+    assert action_run["status"] == "failed"
+    assert action_run["error"] == "post_answer failed once"
 
 
 def test_orchestrator_runs_started_human_gate_from_background_path(tmp_path: Path) -> None:

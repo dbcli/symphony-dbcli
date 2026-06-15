@@ -417,10 +417,23 @@ def test_store_prepare_workflow_action_retry_clears_attempt_workflow_errors(tmp_
 
     detail = store.attempt_detail(attempt_id)
     attempt = store.attempt_by_id(attempt_id)
+    with store.connect() as conn:
+        stored_errors = list(
+            conn.execute(
+                "SELECT phase, message, cleared_at FROM worker_errors WHERE attempt_id = ? ORDER BY id ASC",
+                (attempt_id,),
+            )
+        )
     assert detail is not None
     assert [row["message"] for row in detail["errors"]] == ["worker failed"]
     assert attempt is not None
     assert attempt["error_count"] == 1
+    assert [(row["phase"], row["message"]) for row in stored_errors] == [
+        ("workflow", "create_draft_pr failed"),
+        ("worker", "worker failed"),
+    ]
+    assert stored_errors[0]["cleared_at"] is not None
+    assert stored_errors[1]["cleared_at"] is None
 
 
 def test_store_records_workflow_artifacts(tmp_path: Path) -> None:
