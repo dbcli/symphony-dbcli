@@ -373,6 +373,11 @@ class Store:
                 """,
                 (f"manual_retry:{transition_name}", now, attempt_id),
             )
+            self._clear_workflow_errors(conn, attempt_id)
+
+    def clear_attempt_workflow_errors(self, attempt_id: int) -> None:
+        with self.connect() as conn:
+            self._clear_workflow_errors(conn, attempt_id)
 
     def workflow_instance_for_work_item(self, work_item_id: int) -> sqlite3.Row | None:
         with self.connect() as conn:
@@ -2060,6 +2065,13 @@ class Store:
             """,
             (turn_count, error_count, codex_duration, utc_now(), attempt_id),
         )
+
+    def _clear_workflow_errors(self, conn: sqlite3.Connection, attempt_id: int) -> None:
+        conn.execute(
+            "DELETE FROM worker_errors WHERE attempt_id = ? AND phase = 'workflow'",
+            (attempt_id,),
+        )
+        self._refresh_attempt_metrics(conn, attempt_id)
 
     def _duration_from_timeline(self, conn: sqlite3.Connection, attempt_id: int) -> int | None:
         row = conn.execute(

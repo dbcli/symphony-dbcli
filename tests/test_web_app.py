@@ -1831,6 +1831,13 @@ def test_fastapi_create_draft_pr_gate_runs_in_background(
         transition_name="create_draft_pr",
         gate="review_diff",
     )
+    store.record_error(
+        attempt_id,
+        phase="workflow",
+        error_type="RuntimeError",
+        message="previous draft PR failed",
+        recoverable=True,
+    )
     started_gates: list[tuple[int, dict[str, object]]] = []
 
     def fake_run_started_gate(
@@ -1856,6 +1863,7 @@ def test_fastapi_create_draft_pr_gate_runs_in_background(
     assert gate is not None
     assert gate["status"] == "running"
     assert "Draft pull request creation is running." in detail.text
+    assert "previous draft PR failed" not in detail.text
     assert "Ask Codex to Create Draft PR" not in detail.text
 
 

@@ -364,6 +364,65 @@ def test_store_running_workflow_gate_reserves_transition(tmp_path: Path) -> None
     assert store.pending_workflow_gates()[0]["id"] == gate_id
 
 
+def test_store_prepare_workflow_action_retry_clears_attempt_workflow_errors(tmp_path: Path) -> None:
+    store = Store(tmp_path / "symphony.db")
+    store.init()
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=9,
+            title="Fix completions",
+            url="https://github.com/dbcli/litecli/issues/9",
+            state="open",
+            labels=["symphony:todo"],
+            task_type="code",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=None,
+        status="failed",
+    )
+    instance_id = store.create_workflow_instance(
+        repo="dbcli/litecli",
+        issue_number=9,
+        task_type="code",
+        workflow_version_id=None,
+        initial_state="failed",
+        attempt_id=attempt_id,
+    )
+    store.record_error(
+        attempt_id,
+        phase="workflow",
+        error_type="OrchestratorError",
+        message="create_draft_pr failed",
+        recoverable=True,
+    )
+    store.record_error(
+        attempt_id,
+        phase="worker",
+        error_type="RuntimeError",
+        message="worker failed",
+        recoverable=False,
+    )
+
+    store.prepare_workflow_action_retry(
+        instance_id=instance_id,
+        attempt_id=attempt_id,
+        state="worker_complete",
+        transition_name="create_draft_pr",
+    )
+
+    detail = store.attempt_detail(attempt_id)
+    attempt = store.attempt_by_id(attempt_id)
+    assert detail is not None
+    assert [row["message"] for row in detail["errors"]] == ["worker failed"]
+    assert attempt is not None
+    assert attempt["error_count"] == 1
+
+
 def test_store_records_workflow_artifacts(tmp_path: Path) -> None:
     store = Store(tmp_path / "symphony.db")
     store.init()

@@ -525,6 +525,13 @@ def test_orchestrator_manually_retries_failed_automatic_action(tmp_path: Path) -
     )
     store.finish_workflow_action_run(action_run_id, status="failed", error="push failed")
     store.fail_workflow_instance(instance_id, workflow_version_id=None, message="push failed")
+    store.record_error(
+        attempt_id,
+        phase="workflow",
+        error_type="OrchestratorError",
+        message="Workflow transition retry limit exceeded: auto_create_draft_pr.",
+        recoverable=True,
+    )
     config = _config_with_transition_retry("auto_create_draft_pr", retry_limit=0)
     primitives = FakeWorkflowPrimitives()
 
@@ -543,6 +550,7 @@ def test_orchestrator_manually_retries_failed_automatic_action(tmp_path: Path) -
     assert attempt is not None
     assert attempt["status"] == "review"
     assert attempt["outcome"] == "needs_review"
+    assert attempt["error_count"] == 0
     assert instance is not None
     assert instance["current_state"] == "pr_waiting"
 

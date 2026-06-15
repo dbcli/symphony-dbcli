@@ -605,9 +605,12 @@ class Orchestrator:
         input_data: dict[str, Any] | None = None,
         decided_by: str = "dashboard",
     ) -> None:
-        self._human_gate_runtime(gate_id, input_data=input_data, expected_status="pending")
+        runtime = self._human_gate_runtime(gate_id, input_data=input_data, expected_status="pending")
         if not self.store.start_workflow_gate(gate_id, decided_by=decided_by):
             raise OrchestratorError(f"Workflow gate {gate_id} is not pending.")
+        attempt_id = _optional_int(runtime.instance["attempt_id"])
+        if attempt_id is not None:
+            self.store.clear_attempt_workflow_errors(attempt_id)
 
     def run_started_human_gate(
         self,
@@ -692,9 +695,12 @@ class Orchestrator:
         transition = runtime.transition
         transition_name = runtime.transition_name
         action_input = runtime.action_input
+        attempt_id = _optional_int(instance["attempt_id"])
+        if attempt_id is not None:
+            self.store.clear_attempt_workflow_errors(attempt_id)
         action = self._start_workflow_action(
             int(instance["id"]),
-            attempt_id=_optional_int(instance["attempt_id"]),
+            attempt_id=attempt_id,
             transition_name=transition_name,
             input_data=action_input,
         )
