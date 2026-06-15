@@ -389,6 +389,24 @@ log() {
   printf '\n==> %s\n' "$*"
 }
 
+render_systemd_unit() {
+  local template_path="$1"
+  local output_path="$2"
+  local content
+
+  [[ -f "$template_path" ]] || {
+    echo "Systemd unit template not found: $template_path" >&2
+    exit 1
+  }
+
+  content="$(<"$template_path")"
+  content="${content//\{\{SYMPHONY_USER\}\}/$remote_user}"
+  content="${content//\{\{SYMPHONY_WORKING_DIRECTORY\}\}/$remote_dir}"
+  content="${content//\{\{SYMPHONY_ENV_FILE\}\}/$env_file}"
+  content="${content//\{\{SYMPHONY_UV_BIN\}\}/$uv_bin}"
+  printf '%s\n' "$content" >"$output_path"
+}
+
 remote_user="$(id -un)"
 remote_group="$(id -gn)"
 repo_basename="${repo##*/}"
@@ -519,25 +537,7 @@ log "Validating workflow and initializing SQLite"
 
 log "Installing systemd unit"
 unit_tmp="$(mktemp)"
-cat > "$unit_tmp" <<EOF
-[Unit]
-Description=Symphony DBCLI
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${remote_user}
-WorkingDirectory=${remote_dir}
-EnvironmentFile=${env_file}
-ExecStart=${uv_bin} run symphony-dbcli --profile prod serve --no-reload
-Restart=always
-RestartSec=10
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-EOF
+render_systemd_unit "$remote_dir/deploy/systemd/symphony-dbcli.service.in" "$unit_tmp"
 sudo install -m 644 "$unit_tmp" "/etc/systemd/system/${service_name}.service"
 rm -f "$unit_tmp"
 sudo systemctl daemon-reload
