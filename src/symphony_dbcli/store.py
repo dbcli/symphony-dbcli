@@ -13,7 +13,7 @@ from .clock import elapsed_ms, monotonic_ns, utc_after, utc_now
 from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 ATTEMPT_ADJUSTMENT_RELATIONSHIP = "attempt_adjustment"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 CODEX_PROMPT_EVENT_TYPES = ("turn/start/request", "exec/request")
@@ -373,6 +373,11 @@ class Store:
                 """,
                 (f"manual_retry:{transition_name}", now, attempt_id),
             )
+            self._clear_workflow_errors(conn, attempt_id)
+
+    def clear_attempt_workflow_errors(self, attempt_id: int) -> None:
+        with self.connect() as conn:
+            self._clear_workflow_errors(conn, attempt_id)
 
     def workflow_instance_for_work_item(self, work_item_id: int) -> sqlite3.Row | None:
         with self.connect() as conn:
@@ -1815,7 +1820,9 @@ class Store:
             queued = conn.execute(
                 "SELECT COUNT(*) AS count FROM attempts WHERE status = 'queued'"
             ).fetchone()["count"]
-            errors = conn.execute("SELECT COUNT(*) AS count FROM worker_errors").fetchone()["count"]
+            errors = conn.execute(
+                "SELECT COUNT(*) AS count FROM worker_errors WHERE cleared_at IS NULL"
+            ).fetchone()["count"]
             turns = conn.execute("SELECT COUNT(*) AS count FROM codex_turns").fetchone()["count"]
             attempts = list(
                 conn.execute(
@@ -1903,7 +1910,13 @@ class Store:
                 "prompts": _codex_prompts_for_attempt(conn, attempt_id),
                 "errors": list(
                     conn.execute(
-                        "SELECT * FROM worker_errors WHERE attempt_id = ? ORDER BY id ASC", (attempt_id,)
+                        """
+                        SELECT *
+                        FROM worker_errors
+                        WHERE attempt_id = ? AND cleared_at IS NULL
+                        ORDER BY id ASC
+                        """,
+                        (attempt_id,),
                     )
                 ),
                 "logs": list(
@@ -2045,7 +2058,7 @@ class Store:
             (attempt_id,),
         ).fetchone()["count"]
         error_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM worker_errors WHERE attempt_id = ?",
+            "SELECT COUNT(*) AS count FROM worker_errors WHERE attempt_id = ? AND cleared_at IS NULL",
             (attempt_id,),
         ).fetchone()["count"]
         codex_duration = conn.execute(
@@ -2060,6 +2073,17 @@ class Store:
             """,
             (turn_count, error_count, codex_duration, utc_now(), attempt_id),
         )
+
+    def _clear_workflow_errors(self, conn: sqlite3.Connection, attempt_id: int) -> None:
+        conn.execute(
+            """
+            UPDATE worker_errors
+            SET cleared_at = ?
+            WHERE attempt_id = ? AND phase = 'workflow' AND cleared_at IS NULL
+            """,
+            (utc_now(), attempt_id),
+        )
+        self._refresh_attempt_metrics(conn, attempt_id)
 
     def _duration_from_timeline(self, conn: sqlite3.Connection, attempt_id: int) -> int | None:
         row = conn.execute(
@@ -2218,7 +2242,7 @@ def _live_error_events(
         """
         SELECT id, phase, error_type, message, recoverable, log_excerpt, created_at
         FROM worker_errors
-        WHERE attempt_id = ? AND id > ?
+        WHERE attempt_id = ? AND id > ? AND cleared_at IS NULL
         ORDER BY id ASC
         LIMIT ?
         """,
@@ -2445,6 +2469,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _add_column(conn, "pull_requests", "merged_at", "TEXT NOT NULL DEFAULT ''")
     _add_column(conn, "pull_requests", "worktree_cleaned_at", "TEXT")
     _add_column(conn, "pull_requests", "cleanup_error", "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, "worker_errors", "cleared_at", "TEXT")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -2729,6 +2754,7 @@ SCHEMA = [
         recoverable INTEGER NOT NULL DEFAULT 0,
         log_excerpt TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
+        cleared_at TEXT,
         FOREIGN KEY(attempt_id) REFERENCES attempts(id) ON DELETE CASCADE,
         FOREIGN KEY(turn_id) REFERENCES codex_turns(id)
     )
