@@ -1,0 +1,17 @@
+[Unit]
+Description=Symphony DBCLI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{SYMPHONY_USER}}
+WorkingDirectory={{SYMPHONY_WORKING_DIRECTORY}}
+EnvironmentFile={{SYMPHONY_ENV_FILE}}
+ExecStart={{SYMPHONY_UV_BIN}} run symphony-dbcli --profile prod serve --no-reload
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
