@@ -73,14 +73,6 @@ def build_parser() -> argparse.ArgumentParser:
     status = subcommands.add_parser("status", help="Show orchestrator status")
     status.set_defaults(func=cmd_status)
 
-    attempt = subcommands.add_parser("attempt", help="Attempt review and follow-up commands")
-    attempt_sub = attempt.add_subparsers(required=True)
-    follow_up = attempt_sub.add_parser(
-        "create-code-follow-up", help="Queue a code task from a research result"
-    )
-    follow_up.add_argument("--attempt-id", required=True, type=int)
-    follow_up.set_defaults(func=cmd_attempt_create_code_follow_up)
-
     ask = subcommands.add_parser("ask", help="Ask about workers, issues, timing, turns, or errors")
     ask.add_argument("question", nargs="+")
     ask.set_defaults(func=cmd_ask)
@@ -257,16 +249,6 @@ def cmd_ask(args: argparse.Namespace) -> int:
     store = Store(config.database.path)
     store.init()
     print(answer_question(store, " ".join(args.question)))
-    return 0
-
-
-def cmd_attempt_create_code_follow_up(args: argparse.Namespace) -> int:
-    _config, version_id, store = _load_config_store_and_record(
-        args.workflow,
-        profile=_runtime_profile(args),
-    )
-    attempt_id = store.create_code_follow_up_attempt(args.attempt_id, version_id)
-    print(f"Queued code follow-up attempt {attempt_id}")
     return 0
 
 

@@ -912,7 +912,8 @@ def test_fastapi_attempt_page_queues_codex_adjustment(tmp_path: Path) -> None:
 
 
 def test_fastapi_attempt_page_allows_adjustment_for_research_attempt(tmp_path: Path) -> None:
-    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    runtime = FakeRuntime()
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient(), runtime=runtime)
     source_id = _add_source(client, "dbcli/litecli")
     _sync_source(client, source_id)
     source_item_id = _source_item_id_for(client, source_id, "Fix completion crash")
@@ -938,13 +939,42 @@ def test_fastapi_attempt_page_allows_adjustment_for_research_attempt(tmp_path: P
         work_item_run_id=1,
         status="review",
     )
+    store.record_worker_result(
+        attempt_id=attempt_id,
+        repo="dbcli/litecli",
+        issue_number=245,
+        result_type="research_answer",
+        title="Research Answer",
+        body="The parser trims long strings in table output.",
+    )
 
     detail = client.get(f"/attempts/{attempt_id}")
+    response = client.post(
+        f"/attempts/{attempt_id}/adjustment",
+        data={
+            "note": "Please turn the research result above into a focused code change.",
+            "task_type": "code",
+            "return_to": f"/attempts/{attempt_id}",
+        },
+        follow_redirects=False,
+    )
+    _, runs = _work_item_events_and_runs(tmp_path)
+    work_item = _work_item(tmp_path, 1)
 
     assert detail.status_code == 200
     assert "Send Follow-up" in detail.text
+    assert "Code follow-up prompt" in detail.text
+    assert "Use prompt" in detail.text
+    assert 'data-fill-hidden-value="code"' in detail.text
     assert f'action="/attempts/{attempt_id}/adjustment"' in detail.text
+    assert 'name="task_type"' in detail.text
     assert 'placeholder="Send a follow-up for this attempt"' in detail.text
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/attempts/{attempt_id}"
+    assert runtime.triggers == ["attempt_adjustment"]
+    assert work_item.task_type == "code"
+    assert runs[-1].task_type == "code"
+    assert runs[-1].source_attempt_id == attempt_id
 
 
 def test_fastapi_operations_page_lists_operation_runs(tmp_path: Path) -> None:
@@ -1635,70 +1665,6 @@ def test_fastapi_attempt_and_issue_pages_cover_review_actions(tmp_path: Path) ->
     assert f'href="/attempts/{attempt_id}"' in issue.text
     assert "Post to GitHub" in issue.text
     assert 'action="/comments/' in issue.text
-
-
-def test_fastapi_attempt_page_creates_code_follow_up_and_renders_draft_pr_gate(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    store = _legacy_store(tmp_path)
-    _seed_legacy_issue(store)
-    research_attempt_id = store.create_attempt(
-        repo="dbcli/litecli",
-        issue_number=245,
-        task_type="research",
-        workflow_version_id=None,
-        status="review",
-    )
-    store.record_worker_result(
-        attempt_id=research_attempt_id,
-        repo="dbcli/litecli",
-        issue_number=245,
-        result_type="research_answer",
-        title="Research Answer",
-        body="Expand log_file before checking its parent directory.",
-    )
-    code_attempt_id = store.create_attempt(
-        repo="dbcli/litecli",
-        issue_number=245,
-        task_type="code",
-        workflow_version_id=None,
-        worktree_path="/tmp/litecli",
-        branch="symphony/dbcli-litecli-245-attempt-1",
-        status="review",
-    )
-    store.record_worker_result(
-        attempt_id=code_attempt_id,
-        repo="dbcli/litecli",
-        issue_number=245,
-        result_type="code_changes",
-        title="Code Changes",
-        body="Summary:\n- Expanded configured `log_file` paths.",
-    )
-    gate_id = _open_attempt_gate(
-        store,
-        code_attempt_id,
-        transition_name="create_draft_pr",
-        gate="review_diff",
-    )
-
-    follow_up = client.post(f"/attempts/{research_attempt_id}/follow-up-code", follow_redirects=False)
-    follow_up_detail = client.get(follow_up.headers["location"])
-    draft_pr = client.get(f"/attempts/{code_attempt_id}")
-
-    assert follow_up.status_code == 303
-    assert follow_up.headers["location"].startswith("/attempts/")
-    assert "Source Research" in follow_up_detail.text
-    assert "Expand log_file" in follow_up_detail.text
-    assert draft_pr.status_code == 200
-    assert "Create Draft PR" in draft_pr.text
-    assert "Ask Codex to Create Draft PR" not in draft_pr.text
-    assert f'action="/workflow-gates/{gate_id}/run"' in draft_pr.text
-    assert 'name="title"' not in draft_pr.text
-    assert 'name="body"' not in draft_pr.text
-    assert "Draft pull request" in draft_pr.text
-    assert "Ready to create a draft pull request from the worker result." in draft_pr.text
-    assert "Fix #245: Logging support question" not in draft_pr.text
-    assert "## Changes" not in draft_pr.text
-    assert "Fixes https://github.com/dbcli/litecli/issues/245" not in draft_pr.text
 
 
 def test_fastapi_attempt_page_renders_failed_action_retry_button(tmp_path: Path) -> None:

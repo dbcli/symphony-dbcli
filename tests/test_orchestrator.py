@@ -26,14 +26,17 @@ from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.work_items import WorkItemActivation, WorkItemAdjustment, WorkItemRepository
 
 
-def test_code_follow_up_prompt_includes_research_context() -> None:
+def test_worker_prompt_includes_adjustment_context() -> None:
     prompt = build_worker_prompt(
         default_config(),
         repo="dbcli/litecli",
         issue_number=245,
         task_type="code",
         title="Logging support question",
-        follow_up_context="Research result:\nExpand log_file before checking its parent directory.",
+        follow_up_context=(
+            "This task is a follow-up adjustment to attempt #1.\n"
+            "Prior attempt result:\nExpand log_file before checking its parent directory."
+        ),
     )
 
     assert "Task type: code" in prompt

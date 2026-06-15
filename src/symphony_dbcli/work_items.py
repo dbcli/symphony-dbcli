@@ -68,6 +68,7 @@ class WorkItemAdjustment:
     work_item_id: int
     source_attempt_id: int
     note: str
+    task_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -961,6 +962,7 @@ class WorkItemRepository:
         note = adjustment.note.strip()
         if not note:
             raise WorkItemError("Adjustment instructions are required.")
+        task_type = _validated_task_type(adjustment.task_type) if adjustment.task_type else ""
         now = utc_now()
         with self._session_factory() as session:
             row = session.execute(
@@ -973,11 +975,13 @@ class WorkItemRepository:
             work_item, source_item = row
             if work_item.disposition != "active":
                 raise WorkItemError("Archived work items cannot be adjusted.")
+            target_task_type = task_type or work_item.task_type
             codex_thread_id = _codex_thread_id_for_source_attempt(
                 session, adjustment.source_attempt_id
             ) or _latest_codex_thread_id_for_work_item(session, work_item.id)
             previous_state = work_item.state
             work_item.state = "in_progress"
+            work_item.task_type = target_task_type
             work_item.updated_at = now
             if previous_state != "in_progress":
                 session.add(
@@ -994,7 +998,7 @@ class WorkItemRepository:
                 WorkItemRun(
                     work_item_id=work_item.id,
                     source_attempt_id=adjustment.source_attempt_id,
-                    task_type=work_item.task_type,
+                    task_type=target_task_type,
                     trigger="adjustment",
                     status="queued",
                     reasons_json=reasons_json(["revise_implementation"]),

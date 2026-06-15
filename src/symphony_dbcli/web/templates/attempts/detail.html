@@ -157,18 +157,22 @@
       <span class="status-pill is-ok">{{ attempt_result.status }}</span>
     </div>
     {{ formatted_result(attempt_result.formatted) }}
-    {% if detail.attempt.task_type == "research" and attempt_result.body %}
+    {% if detail.attempt.task_type == "research" and attempt_result.body and can_request_adjustment %}
+    {% set code_follow_up_prompt = "Please turn the research result above into a focused code change. Verify the finding in the codebase, make the minimal implementation change, run the relevant checks, and prepare a draft PR if code changes are needed." %}
     <div class="attempt-action-row">
-      {% if detail.code_follow_up %}
-      <a class="button-link" href="/attempts/{{ detail.code_follow_up.id }}">
-        Code follow-up attempt {{ detail.code_follow_up.id }}
-      </a>
-      <span class="muted">{{ detail.code_follow_up.status }}</span>
-      {% else %}
-      <form action="/attempts/{{ detail.attempt.id }}/follow-up-code" method="post">
-        <button type="submit">Create Code Follow-up</button>
-      </form>
-      {% endif %}
+      <div class="canned-prompt">
+        <div>
+          <strong>Code follow-up prompt</strong>
+          <p>{{ code_follow_up_prompt }}</p>
+        </div>
+        <button
+          type="button"
+          data-fill-target="#attempt-follow-up"
+          data-fill-value="{{ code_follow_up_prompt }}"
+          data-fill-hidden-target="#attempt-follow-up-task-type"
+          data-fill-hidden-value="code"
+        >Use prompt</button>
+      </div>
     </div>
     {% endif %}
   </article>
@@ -399,6 +403,7 @@
       data-chat-submit-form
     >
       <input type="hidden" name="return_to" value="/attempts/{{ detail.attempt.id }}" />
+      <input type="hidden" id="attempt-follow-up-task-type" name="task_type" value="" />
       <label for="attempt-follow-up">Reply</label>
       <textarea
         id="attempt-follow-up"

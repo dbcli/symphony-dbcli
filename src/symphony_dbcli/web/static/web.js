@@ -318,6 +318,42 @@ function setupChatSubmitProgress(root = document) {
 
 setupChatSubmitProgress();
 
+function setupPromptFillers(root = document) {
+  const buttons = [...root.querySelectorAll("[data-fill-target]")];
+  if (root instanceof Element && root.matches("[data-fill-target]")) {
+    buttons.unshift(root);
+  }
+  for (const button of buttons) {
+    if (button.dataset.fillReady === "true") {
+      continue;
+    }
+    button.dataset.fillReady = "true";
+    button.addEventListener("click", () => {
+      const targetSelector = button.getAttribute("data-fill-target");
+      if (!targetSelector) {
+        return;
+      }
+      const target = document.querySelector(targetSelector);
+      if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) {
+        return;
+      }
+      target.value = button.getAttribute("data-fill-value") || "";
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+
+      const hiddenSelector = button.getAttribute("data-fill-hidden-target");
+      if (hiddenSelector) {
+        const hidden = document.querySelector(hiddenSelector);
+        if (hidden instanceof HTMLInputElement) {
+          hidden.value = button.getAttribute("data-fill-hidden-value") || "";
+        }
+      }
+      target.focus();
+    });
+  }
+}
+
+setupPromptFillers();
+
 function closeModal() {
   const modalRoot = document.querySelector("#modal-root");
   if (modalRoot) {
@@ -782,5 +818,6 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
     setupWorkflowFlowchart();
     setupLiveCodexPanels(event.target);
     setupChatSubmitProgress(event.target);
+    setupPromptFillers(event.target);
   }
 });

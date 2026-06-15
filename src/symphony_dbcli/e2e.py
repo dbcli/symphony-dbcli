@@ -39,7 +39,6 @@ class FixtureScenario:
     task_type: str
     create_pr: bool
     description: str
-    create_code_follow_up: bool = False
     codex_follow_up_action: str = ""
     create_associated_pr_before_claim: bool = False
 
@@ -47,12 +46,6 @@ class FixtureScenario:
 FIXTURE_SCENARIOS = {
     "code_happy_path": FixtureScenario("code", True, "Code issue through draft PR creation."),
     "research_answer_review": FixtureScenario("research", False, "Research answer through human review."),
-    "research_to_code_follow_up": FixtureScenario(
-        "research",
-        True,
-        "Research answer followed by a code task and draft PR.",
-        create_code_follow_up=True,
-    ),
     "pr_review_comments": FixtureScenario(
         "code",
         True,
@@ -92,7 +85,6 @@ class E2EFixtureResult:
     database_path: Path
     worktree_path: str
     pull_request_url: str = ""
-    follow_up_attempt_id: int | None = None
     scenario: str = "code_happy_path"
 
 
@@ -142,12 +134,6 @@ def run_fixture(config: E2EFixtureConfig) -> E2EFixtureResult:
     orchestrator.run_attempt(attempt_id)
 
     target_attempt_id = attempt_id
-    follow_up_attempt_id = None
-    if scenario.create_code_follow_up:
-        follow_up_attempt_id = store.create_code_follow_up_attempt(attempt_id, workflow_version_id)
-        orchestrator.run_attempt(follow_up_attempt_id)
-        target_attempt_id = follow_up_attempt_id
-
     pull_request_url = associated_pull_request_url
     target_attempt = store.attempt_by_id(target_attempt_id)
     if config.create_pr and target_attempt and str(target_attempt["task_type"]) == "code":
@@ -176,7 +162,6 @@ def run_fixture(config: E2EFixtureConfig) -> E2EFixtureResult:
         database_path=paths.database,
         worktree_path=worktree_path,
         pull_request_url=pull_request_url,
-        follow_up_attempt_id=follow_up_attempt_id,
         scenario=config.scenario,
     )
 

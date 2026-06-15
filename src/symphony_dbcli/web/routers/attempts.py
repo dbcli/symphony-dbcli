@@ -70,21 +70,6 @@ def attempt_detail(request: Request, attempt_id: int) -> Response:
     )
 
 
-@router.post("/attempts/{attempt_id}/follow-up-code")
-def create_code_follow_up(request: Request, attempt_id: int) -> Response:
-    state = get_app_state(request)
-    try:
-        workflow = state.store.latest_workflow_version()
-        workflow_version_id = int(workflow["id"]) if workflow else None
-        target_attempt_id = state.store.create_code_follow_up_attempt(attempt_id, workflow_version_id)
-    except (ValueError, sqlite3.Error) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return RedirectResponse(
-        f"/attempts/{target_attempt_id}",
-        status_code=status.HTTP_303_SEE_OTHER,
-    )
-
-
 @router.post("/workflow-actions/{action_run_id}/retry")
 def retry_workflow_action(
     request: Request,
@@ -133,6 +118,7 @@ def request_adjustment(
     request: Request,
     attempt_id: int,
     note: Annotated[str, Form()],
+    task_type: Annotated[str, Form()] = "",
     return_to: Annotated[str, Form()] = "",
 ) -> Response:
     state = get_app_state(request)
@@ -151,6 +137,7 @@ def request_adjustment(
                 work_item_id=work_item_id,
                 source_attempt_id=attempt_id,
                 note=note,
+                task_type=task_type or None,
             )
         )
     except WorkItemError as exc:

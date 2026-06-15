@@ -224,19 +224,13 @@ def format_follow_up_context(source_result: sqlite3.Row | None) -> str:
     body = str(source_result["body"]).strip()
     if not body:
         return ""
-    if str(source_result["relationship"]) == ATTEMPT_ADJUSTMENT_RELATIONSHIP:
-        return f"""\
+    if str(source_result["relationship"]) != ATTEMPT_ADJUSTMENT_RELATIONSHIP:
+        return ""
+    return f"""\
 This task is a follow-up adjustment to attempt #{source_result["source_attempt_id"]}.
 Use the prior attempt result as context, but keep the new changes focused on the operator hint.
 
 Prior attempt result:
-{body}
-"""
-    return f"""\
-This code task was created from research attempt #{source_result["source_attempt_id"]}.
-Use the research findings as implementation guidance, but verify them against the code before editing.
-
-Research result:
 {body}
 """
 

@@ -14,7 +14,6 @@ from .config import WorkflowConfig, workflow_hash
 from .types import AttemptSummary
 
 SCHEMA_VERSION = 10
-FOLLOW_UP_CODE_RELATIONSHIP = "follow_up_code"
 ATTEMPT_ADJUSTMENT_RELATIONSHIP = "attempt_adjustment"
 START_QUEUED_WORK_AUTOMATICALLY_KEY = "start_queued_work_automatically"
 CODEX_PROMPT_EVENT_TYPES = ("turn/start/request", "exec/request")
@@ -1705,40 +1704,6 @@ class Store:
                 (f"retry_queued:{reason}", now, now, attempt_id),
             )
 
-    def create_code_follow_up_attempt(self, source_attempt_id: int, workflow_version_id: int | None) -> int:
-        source = self.attempt_by_id(source_attempt_id)
-        if not source:
-            raise ValueError(f"Attempt {source_attempt_id} does not exist.")
-        if str(source["task_type"]) != "research":
-            raise ValueError("Only research attempts can create code follow-up attempts.")
-        result = self.worker_result_for_attempt(source_attempt_id)
-        if not result or not str(result["body"]).strip():
-            raise ValueError("Research attempt does not have a worker result to feed into a code task.")
-        existing = self.code_follow_up_attempt(source_attempt_id)
-        if existing:
-            return int(existing["id"])
-        target_attempt_id = self.create_attempt(
-            repo=str(source["repo"]),
-            issue_number=int(source["issue_number"]),
-            task_type="code",
-            workflow_version_id=workflow_version_id,
-            status="queued",
-        )
-        self.record_attempt_link(
-            source_attempt_id=source_attempt_id,
-            target_attempt_id=target_attempt_id,
-            relationship=FOLLOW_UP_CODE_RELATIONSHIP,
-            metadata={"source_result_id": int(result["id"])},
-        )
-        self.record_timeline_event(
-            target_attempt_id,
-            phase="queue",
-            event_type="created_from_research",
-            message=f"attempt {source_attempt_id}",
-            data={"source_attempt_id": source_attempt_id},
-        )
-        return target_attempt_id
-
     def record_attempt_link(
         self,
         *,
@@ -1773,25 +1738,6 @@ class Store:
                 conn.execute("SELECT * FROM worker_results WHERE attempt_id = ?", (attempt_id,)).fetchone(),
             )
 
-    def code_follow_up_attempt(self, source_attempt_id: int) -> sqlite3.Row | None:
-        with self.connect() as conn:
-            return cast(
-                sqlite3.Row | None,
-                conn.execute(
-                    """
-                    SELECT target.*
-                    FROM attempt_links link
-                    JOIN attempts target ON target.id = link.target_attempt_id
-                    WHERE link.source_attempt_id = ?
-                      AND link.relationship = ?
-                      AND target.status IN ('queued', 'running', 'review', 'done')
-                    ORDER BY target.id DESC
-                    LIMIT 1
-                    """,
-                    (source_attempt_id, FOLLOW_UP_CODE_RELATIONSHIP),
-                ).fetchone(),
-            )
-
     def follow_up_source_result(self, target_attempt_id: int) -> sqlite3.Row | None:
         with self.connect() as conn:
             return cast(
@@ -1815,13 +1761,12 @@ class Store:
                     JOIN attempts source ON source.id = link.source_attempt_id
                     JOIN worker_results result ON result.attempt_id = source.id
                     WHERE link.target_attempt_id = ?
-                      AND link.relationship IN (?, ?)
+                      AND link.relationship = ?
                     ORDER BY link.id DESC
                     LIMIT 1
                     """,
                     (
                         target_attempt_id,
-                        FOLLOW_UP_CODE_RELATIONSHIP,
                         ATTEMPT_ADJUSTMENT_RELATIONSHIP,
                     ),
                 ).fetchone(),
@@ -1941,7 +1886,6 @@ class Store:
                 "pull_requests": self.pull_requests_for_attempt(attempt_id),
                 "source_result": self.follow_up_source_result(attempt_id),
                 "follow_up_targets": self.attempt_follow_up_targets(attempt_id),
-                "code_follow_up": self.code_follow_up_attempt(attempt_id),
                 "workflow_action_runs": self.workflow_action_runs_for_attempt(attempt_id),
                 "timeline": list(
                     conn.execute(
