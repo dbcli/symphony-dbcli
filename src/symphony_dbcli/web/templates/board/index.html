@@ -3,6 +3,8 @@
 {% block page_title %}{% endblock %}
 {% block body %}
 {% if sources %}
+{% include "board/_sync_sources_control.html" %}
+
 <section class="source-switcher" role="tablist" aria-label="Source boards">
   {% for source in sources %}
   <a
@@ -17,12 +19,6 @@
 </section>
 
 <section class="source-board-frame" aria-label="Board for {{ selected_source.repo }}">
-  <div class="source-board-toolbar">
-    <form method="post" action="/sources/{{ selected_source.id }}/sync">
-      <button type="submit">Sync Source</button>
-    </form>
-  </div>
-
   <section class="board-start-panel" aria-label="Start work for {{ selected_source.repo }}">
     <form class="board-start-form" method="post" action="/work-items" data-chat-submit-form>
       <input type="hidden" name="source_id" value="{{ selected_source.id }}" />

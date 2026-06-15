@@ -70,6 +70,28 @@ def create(request: Request, repo: Annotated[str, Form()]) -> Response:
     return RedirectResponse("/sources", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.post("/sources/sync")
+def sync_all(
+    request: Request,
+    source_id: Annotated[int | None, Form()] = None,
+) -> Response:
+    state = get_app_state(request)
+    repo = source_repository(request)
+    client = state.source_sync_client or GitHubClient(state.config.github)
+    service = SourceSyncService(repo, client)
+    try:
+        for source in repo.list_sources():
+            if source.enabled:
+                service.sync_source(source.id)
+    except RuntimeError:
+        return RedirectResponse(
+            _board_sync_redirect(source_id, "failed"), status_code=status.HTTP_303_SEE_OTHER
+        )
+    return RedirectResponse(
+        _board_sync_redirect(source_id, "sources_synced"), status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
 @router.get("/sources/{source_id}/edit")
 def edit(request: Request, source_id: int) -> Response:
     source = source_repository(request).get_source(source_id)
@@ -206,3 +228,8 @@ def sync(request: Request, source_id: int) -> Response:
     return RedirectResponse(
         f"/board/source/{source_id}?sync=succeeded", status_code=status.HTTP_303_SEE_OTHER
     )
+
+
+def _board_sync_redirect(source_id: int | None, sync_status: str) -> str:
+    board_path = "/board" if source_id is None else f"/board/source/{source_id}"
+    return f"{board_path}?sync={sync_status}"

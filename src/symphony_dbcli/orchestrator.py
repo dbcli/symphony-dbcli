@@ -199,23 +199,9 @@ class Orchestrator:
 
     def poll_once(self) -> int:
         if self.work_items.has_sources():
-            return int(
-                self.primitives.execute(
-                    PrimitiveContext(
-                        instance_id=0,
-                        transition_name="source.sync_all",
-                        transition=WorkflowTransitionConfig(
-                            from_state="poll",
-                            to_state="poll",
-                            action="source.sync_all",
-                        ),
-                        repo="",
-                        issue_number=0,
-                        task_type="",
-                        issue_title="",
-                    )
-                ).output["synced"]
-            )
+            # Source boards are synced manually to avoid spending external API quota
+            # during every runtime poll cycle.
+            return 0
         return int(self.primitives.fetch_issues().output["synced"])
 
     def claim_next(self) -> int | None:

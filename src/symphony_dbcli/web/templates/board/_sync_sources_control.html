@@ -1,0 +1,19 @@
+<div
+  id="sync-sources-control"
+  class="board-toolbar"
+  hx-get="/board/sync-sources-button?source_id={{ selected_source.id }}"
+  hx-trigger="every 60s"
+  hx-swap="outerHTML"
+>
+  <form method="post" action="/sources/sync">
+    <input type="hidden" name="source_id" value="{{ selected_source.id }}" />
+    <button
+      class="sync-sources-button"
+      type="submit"
+      title="{% if sources_last_synced_at %}Synced {{ sources_last_synced_at|relative_time }} ({{ sources_last_synced_at|tooltip_localtime }}){% else %}Not synced yet{% endif %}"
+    >
+      <span class="sync-status-dot is-{{ sources_sync_indicator }}" aria-hidden="true"></span>
+      <span>Sync Sources</span>
+    </button>
+  </form>
+</div>

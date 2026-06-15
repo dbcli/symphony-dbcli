@@ -40,6 +40,7 @@ from symphony_dbcli.web.dependencies import (
     _format_localtime,
     _format_relative_time,
     _format_tokens,
+    _format_tooltip_localtime,
 )
 from symphony_dbcli.web.routers import attempts, work_items
 from symphony_dbcli.work_items import WorkItemActivation, WorkItemRepository
@@ -121,13 +122,19 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'aria-selected="true"' in response.text
     assert 'class="source-board-frame"' in response.text
     assert 'aria-label="Board for dbcli/litecli"' in response.text
-    assert 'class="source-board-toolbar"' in response.text
+    assert 'class="board-toolbar"' in response.text
+    assert 'id="sync-sources-control"' in response.text
+    assert f'hx-get="/board/sync-sources-button?source_id={source_id}"' in response.text
+    assert 'hx-trigger="every 60s"' in response.text
     assert 'class="board-start-panel"' in response.text
     assert 'aria-label="Start work for dbcli/litecli"' in response.text
     assert 'id="board-start-message"' in response.text
     assert 'placeholder="Ask Symphony or start work in dbcli/litecli"' in response.text
     assert f'name="source_id" value="{source_id}"' in response.text
-    assert "Sync Source" in response.text
+    assert 'action="/sources/sync"' in response.text
+    assert "Sync Sources" in response.text
+    assert 'class="sync-status-dot is-warning"' in response.text
+    assert 'title="Not synced yet"' in response.text
     assert "data-theme-toggle" in response.text
     assert "data-theme-toggle-label>&#9790;</span>" in response.text
     assert "Switch to dark mode" in response.text
@@ -136,6 +143,20 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert '<script src="/web-static/vendor/sortable.min.js"' in response.text
     assert '<script src="/web-static/web.js?v=' in response.text
     assert "<style>" not in response.text
+
+
+def test_fastapi_board_sync_button_refresh_endpoint_returns_control(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    response = client.get(f"/board/sync-sources-button?source_id={source_id}")
+
+    assert response.status_code == 200
+    assert 'id="sync-sources-control"' in response.text
+    assert f'hx-get="/board/sync-sources-button?source_id={source_id}"' in response.text
+    assert 'hx-trigger="every 60s"' in response.text
+    assert 'action="/sources/sync"' in response.text
+    assert "Sync Sources" in response.text
 
 
 def test_fastapi_dashboard_hierarchy_routes_render(tmp_path: Path) -> None:
@@ -179,6 +200,13 @@ def test_compact_localtime_seconds_filter_formats_utc_timestamps_as_pacific_time
     assert _format_compact_localtime_seconds("2026-01-25T12:00:00Z") == "Jan 25, 4:00:00am"
     assert _format_compact_localtime_seconds("") == "-"
     assert _format_compact_localtime_seconds("not-a-date") == "not-a-date"
+
+
+def test_tooltip_localtime_filter_formats_utc_timestamps_compactly() -> None:
+    assert _format_tooltip_localtime("2026-06-15T12:59:23+00:00") == "Jun 15 05:59:23"
+    assert _format_tooltip_localtime("2026-01-25T12:00:00Z") == "Jan 25 04:00:00"
+    assert _format_tooltip_localtime("") == "-"
+    assert _format_tooltip_localtime("not-a-date") == "not-a-date"
 
 
 def test_relative_time_filter_formats_recent_timestamps() -> None:
@@ -407,6 +435,27 @@ def test_fastapi_source_sync_populates_selected_board_backlog(tmp_path: Path) ->
     assert "data-source-item-id=" in board.text
     assert "<span>2</span>" in board.text
     assert 'aria-label="Backlog pagination"' not in board.text
+
+
+def test_fastapi_source_sync_all_populates_sources_and_updates_board_indicator(tmp_path: Path) -> None:
+    client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
+    litecli_id = _add_source(client, "dbcli/litecli")
+    pgcli_id = _add_source(client, "dbcli/pgcli")
+
+    response = client.post(
+        "/sources/sync",
+        data={"source_id": str(litecli_id)},
+        follow_redirects=False,
+    )
+    board = client.get(response.headers["location"])
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/board/source/{litecli_id}?sync=sources_synced"
+    assert "Sync Sources" in board.text
+    assert 'class="sync-status-dot is-ok"' in board.text
+    assert 'title="Synced just now (' in board.text
+    assert len(_source_item_ids_for_source(tmp_path, litecli_id)) == 2
+    assert len(_source_item_ids_for_source(tmp_path, pgcli_id)) == 2
 
 
 def test_fastapi_board_paginates_backlog_by_latest_github_update(tmp_path: Path) -> None:

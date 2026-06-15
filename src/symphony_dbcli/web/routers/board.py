@@ -33,6 +33,7 @@ BACKLOG_STATE = "backlog"
 BOARD_STATE_LABELS = {"backlog": "Backlog", **STATE_LABELS}
 BoardKindFilter = Literal["all", "issue", "pull_request"]
 SourceItemKind = Literal["issue", "pull_request", "local_ticket"]
+SourceSyncIndicator = Literal["ok", "warning", "danger"]
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,24 @@ def source_index(
     )
 
 
+@router.get("/board/sync-sources-button")
+def sync_sources_button(request: Request, source_id: int) -> Response:
+    repo = source_repository(request)
+    sources = repo.list_sources()
+    selected_source = _selected_source(repo, sources, source_id)
+    if selected_source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    context: dict[str, object] = {
+        "selected_source": selected_source,
+        **_source_sync_context(sources),
+    }
+    return templates.TemplateResponse(
+        request=request,
+        name="board/_sync_sources_control.html",
+        context=context,
+    )
+
+
 def _render_board(request: Request, filters: BoardFilters) -> Response:
     repo = source_repository(request)
     work_items = work_item_repository(request)
@@ -126,6 +145,7 @@ def _render_board(request: Request, filters: BoardFilters) -> Response:
     context["selected_source"] = selected_source
     context["columns"] = _board_columns(repo, work_items, selected_source, filters)
     source_id = None if selected_source is None else selected_source.id
+    context.update(_source_sync_context(sources))
     context["board_query"] = filters.q
     context["board_kind"] = filters.kind
     context["board_kind_options"] = _board_kind_options(filters)
@@ -153,6 +173,31 @@ def _selected_source(
 
 def _board_title(source: SourceView | None) -> str:
     return f"Board · {source.repo}" if source else "Board"
+
+
+def _source_sync_context(sources: list[SourceView]) -> dict[str, object]:
+    sources_last_synced_at = _latest_source_sync_at(sources)
+    return {
+        "sources_last_synced_at": sources_last_synced_at,
+        "sources_sync_indicator": _sources_sync_indicator(sources, sources_last_synced_at),
+    }
+
+
+def _latest_source_sync_at(sources: list[SourceView]) -> str:
+    return max((source.last_synced_at or "" for source in sources if source.enabled), default="")
+
+
+def _sources_sync_indicator(
+    sources: list[SourceView],
+    latest_sync_at: str,
+) -> SourceSyncIndicator:
+    enabled_sources = [source for source in sources if source.enabled]
+    statuses = {source.sync_status for source in enabled_sources}
+    if "failed" in statuses:
+        return "danger"
+    if not enabled_sources or not latest_sync_at or any(status != "synced" for status in statuses):
+        return "warning"
+    return "ok"
 
 
 def _board_columns(

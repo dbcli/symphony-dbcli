@@ -90,6 +90,16 @@ def _format_compact_localtime_seconds(value: object) -> str:
     return _format_compact_localtime_value(value, include_seconds=True)
 
 
+def _format_tooltip_localtime(value: object) -> str:
+    raw_value = _timestamp_text(value)
+    if raw_value is None:
+        return "-"
+    timestamp = _parse_timestamp(raw_value)
+    if timestamp is None:
+        return raw_value
+    return timestamp.astimezone(PACIFIC_TIME).strftime("%b %d %H:%M:%S")
+
+
 def _format_compact_localtime_value(value: object, *, include_seconds: bool) -> str:
     raw_value = _timestamp_text(value)
     if raw_value is None:
@@ -188,6 +198,7 @@ templates.env.filters["tokens"] = _format_tokens
 templates.env.filters["localtime"] = _format_localtime
 templates.env.filters["compact_localtime"] = _format_compact_localtime
 templates.env.filters["compact_localtime_seconds"] = _format_compact_localtime_seconds
+templates.env.filters["tooltip_localtime"] = _format_tooltip_localtime
 templates.env.filters["relative_time"] = _format_relative_time
 templates.env.filters["numbered_lines"] = _numbered_lines
 templates.env.filters["inline_markdown"] = _inline_markdown
