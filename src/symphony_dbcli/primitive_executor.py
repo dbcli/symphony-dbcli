@@ -557,13 +557,14 @@ class PrimitiveExecutor:
             },
         )
         self.store.record_worker_log(attempt_id, "info", body)
-        if context.task_type == "research" and body:
+        draft_body = _draft_comment_body_from_worker_result(body)
+        if context.task_type == "research" and draft_body:
             self.store.record_comment(
                 attempt_id,
                 context.repo,
                 context.issue_number,
                 "",
-                body,
+                draft_body,
                 "drafted",
             )
         return PrimitiveOutcome(
@@ -1103,6 +1104,41 @@ def _codex_result_title(context: PrimitiveContext) -> str:
     if context.transition.action == "codex.address_pr_feedback":
         return "PR Feedback Update"
     return result_title(context.task_type)
+
+
+_DRAFT_REPLY_HEADING_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*)?Draft reply(?:\s*:\s*\*\*|\*\*\s*:|\s*:)\s*(?P<inline>.*)$",
+    re.IGNORECASE,
+)
+_DRAFT_REPLY_BOUNDARY_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*)?"
+    r"(?:Work summary|Summary|Tests|Tests run|Checks run|Verification|Remaining risks|"
+    r"Risks/blockers|Risks|Blockers|PR title|PR body)"
+    r"(?:\s*:\s*\*\*|\*\*\s*:|\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _draft_comment_body_from_worker_result(body: str) -> str:
+    stripped = body.strip()
+    if not stripped:
+        return ""
+    lines = stripped.splitlines()
+    for index, line in enumerate(lines):
+        heading = _DRAFT_REPLY_HEADING_RE.match(line)
+        if not heading:
+            continue
+        draft_lines: list[str] = []
+        inline = heading.group("inline").strip()
+        if inline:
+            draft_lines.append(inline)
+        for draft_line in lines[index + 1 :]:
+            if _DRAFT_REPLY_BOUNDARY_RE.match(draft_line):
+                break
+            draft_lines.append(draft_line)
+        draft_body = "\n".join(draft_lines).strip()
+        return draft_body or stripped
+    return stripped
 
 
 def _input_dicts(data: dict[str, Any], key: str) -> list[dict[str, Any]]:

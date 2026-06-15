@@ -67,6 +67,84 @@ def test_fetch_comments_returns_comment_snapshots(tmp_path: Path) -> None:
     ]
 
 
+def test_codex_research_issue_records_only_draft_reply_as_comment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    store.upsert_issue(
+        IssueSnapshot(
+            repo="dbcli/litecli",
+            number=245,
+            title="Support question",
+            url="https://github.com/dbcli/litecli/issues/245",
+            state="open",
+            labels=[],
+            task_type="research",
+        )
+    )
+    attempt_id = store.create_attempt(
+        repo="dbcli/litecli",
+        issue_number=245,
+        task_type="research",
+        workflow_version_id=None,
+        status="running",
+        worktree_path=str(worktree),
+    )
+    final_message = (
+        "Work summary:\n"
+        "- Inspected the issue and implementation.\n\n"
+        "Checks run:\n"
+        "- `rg record_comment`\n\n"
+        "**Draft reply:**\n"
+        "Thanks for the report. The draft comment should contain only the reply text.\n\n"
+        "**Remaining risks:**\n"
+        "- None."
+    )
+
+    class FakeCodexRunner:
+        def __init__(self, config: CodexConfig) -> None:
+            self.config = config
+
+        def run(
+            self,
+            *,
+            prompt: str,
+            cwd: str,
+            attempt_id: int,
+            store: Store,
+            resume_thread_id: str | None = None,
+            persistent_thread: bool = False,
+        ) -> CodexResult:
+            return CodexResult(
+                thread_id="thread-research-1",
+                turn_count=1,
+                final_message=final_message,
+                duration_ms=25,
+            )
+
+    monkeypatch.setattr("symphony_dbcli.primitive_executor.CodexRunner", FakeCodexRunner)
+
+    PrimitiveExecutor(default_config(), store, github=FakePrimitiveGitHub()).execute(
+        _context(
+            "codex.research_issue",
+            attempt_id=attempt_id,
+            issue_title="Support question",
+            task_type="research",
+            worktree_path=str(worktree),
+        )
+    )
+
+    detail = store.attempt_detail(attempt_id)
+
+    assert detail is not None
+    assert detail["result"]["body"] == final_message
+    assert detail["comments"][0]["body"] == (
+        "Thanks for the report. The draft comment should contain only the reply text."
+    )
+
+
 def test_apply_labels_skips_conversation_source_items(tmp_path: Path) -> None:
     github = FakePrimitiveGitHub()
     executor = PrimitiveExecutor(default_config(), _store(tmp_path), github=github)
@@ -1512,6 +1590,7 @@ def _context(
     branch: str = "",
     commit_sha: str = "",
     input_data: dict[str, Any] | None = None,
+    task_type: str = "code",
 ) -> PrimitiveContext:
     return PrimitiveContext(
         instance_id=1,
@@ -1523,7 +1602,7 @@ def _context(
         ),
         repo="dbcli/litecli",
         issue_number=issue_number,
-        task_type="code",
+        task_type=task_type,
         issue_title=issue_title,
         attempt_id=attempt_id,
         source_item_id=source_item_id,
