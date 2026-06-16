@@ -356,6 +356,7 @@ h2 {
   align-items: flex-end;
   gap: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   margin-bottom: 0;
   padding: 0 8px;
   border-bottom: 2px solid var(--line);
