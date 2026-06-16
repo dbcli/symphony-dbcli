@@ -1423,6 +1423,7 @@ class Store:
         state: str = "",
         merged_at: str = "",
     ) -> None:
+        now = utc_now()
         with self.connect() as conn:
             conn.execute(
                 """
@@ -1438,8 +1439,15 @@ class Store:
                     merged_at = excluded.merged_at,
                     cleanup_error = ''
                 """,
-                (attempt_id, repo, number, url, title, state, merged_at, utc_now()),
+                (attempt_id, repo, number, url, title, state, merged_at, now),
             )
+            if merged_at:
+                row = conn.execute(
+                    "SELECT id FROM pull_requests WHERE repo = ? AND number = ?",
+                    (repo, number),
+                ).fetchone()
+                if row is not None:
+                    self._mark_work_item_done_for_merged_pull_request(conn, int(row["id"]), now)
 
     def record_issue_pull_request_link(
         self,
@@ -1539,6 +1547,7 @@ class Store:
         state: str,
         merged_at: str,
     ) -> None:
+        now = utc_now()
         with self.connect() as conn:
             conn.execute(
                 """
@@ -1548,6 +1557,53 @@ class Store:
                 """,
                 (state, merged_at, pull_request_id),
             )
+            if merged_at:
+                self._mark_work_item_done_for_merged_pull_request(conn, pull_request_id, now)
+
+    def _mark_work_item_done_for_merged_pull_request(
+        self,
+        conn: sqlite3.Connection,
+        pull_request_id: int,
+        now: str,
+    ) -> None:
+        if not _sqlite_table_exists(conn, "work_items"):
+            return
+        row = conn.execute(
+            """
+            SELECT a.work_item_id
+            FROM pull_requests pr
+            JOIN attempts a ON a.id = pr.attempt_id
+            WHERE pr.id = ?
+            """,
+            (pull_request_id,),
+        ).fetchone()
+        if row is None or row["work_item_id"] is None:
+            return
+        work_item = conn.execute(
+            "SELECT id, state, disposition FROM work_items WHERE id = ?",
+            (row["work_item_id"],),
+        ).fetchone()
+        if work_item is None or work_item["state"] == "done" or work_item["disposition"] != "active":
+            return
+        conn.execute(
+            """
+            UPDATE work_items
+            SET state = 'done', outcome = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            ("pull_request_merged", now, work_item["id"]),
+        )
+        if not _sqlite_table_exists(conn, "work_item_state_events"):
+            return
+        conn.execute(
+            """
+            INSERT INTO work_item_state_events(
+                work_item_id, from_state, to_state, reasons_json, note, created_at
+            )
+            VALUES(?, ?, 'done', '[]', ?, ?)
+            """,
+            (work_item["id"], work_item["state"], "pull_request_merged", now),
+        )
 
     def mark_pull_request_worktree_cleaned(self, pull_request_id: int) -> None:
         with self.connect() as conn:
