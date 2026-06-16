@@ -21,6 +21,7 @@ from symphony_dbcli.github import (
 from symphony_dbcli.models import WorkItem, WorkItemRun, create_model_tables
 from symphony_dbcli.orchestrator import Orchestrator, OrchestratorError, build_worker_prompt
 from symphony_dbcli.primitive_executor import PrimitiveContext, PrimitiveExecutionError, PrimitiveOutcome
+from symphony_dbcli.review_actions import issue_link_marker
 from symphony_dbcli.sources import SourceCreate, SourceItemUpsert, SourceRepository
 from symphony_dbcli.store import IssueSnapshot, Store
 from symphony_dbcli.work_items import WorkItemActivation, WorkItemAdjustment, WorkItemRepository
@@ -780,6 +781,39 @@ def test_orchestrator_advances_ready_workflow_instances(tmp_path: Path) -> None:
 
 def test_orchestrator_cleans_worktree_after_pr_merge(tmp_path: Path) -> None:
     store = _seed_store(tmp_path)
+    source_repo, work_item_repo = _source_work_item_repositories(tmp_path)
+    source_view = source_repo.create_source(SourceCreate(repo="dbcli/litecli"))
+    source_repo.upsert_source_items(
+        source_id=source_view.id,
+        items=[
+            SourceItemUpsert(
+                kind="issue",
+                number=245,
+                title="Logging support question",
+                url="https://github.com/dbcli/litecli/issues/245",
+                state="open",
+                author="alice",
+                labels=["symphony:todo"],
+                body="The log_file option does not expand ~.",
+                github_updated_at="2026-05-24T11:00:00Z",
+            ),
+            SourceItemUpsert(
+                kind="pull_request",
+                number=254,
+                title="Fix #245",
+                url="https://github.com/dbcli/litecli/pull/254",
+                state="open",
+                author="bob",
+                labels=[],
+                body=issue_link_marker("dbcli/litecli", 245),
+                github_updated_at="2026-05-24T12:00:00Z",
+            ),
+        ],
+    )
+    source_item = source_repo.backlog_source_items(source_view.id)[0]
+    work_item = work_item_repo.activate_source_item(
+        WorkItemActivation(source_item_id=source_item.id, task_type="code")
+    )
     source = tmp_path / "source"
     bare = tmp_path / "repos" / "litecli.git"
     worktree = tmp_path / "worktrees" / "litecli"
@@ -802,6 +836,7 @@ def test_orchestrator_cleans_worktree_after_pr_merge(tmp_path: Path) -> None:
         task_type="code",
         workflow_version_id=None,
         status="review",
+        work_item_id=work_item.id,
     )
     store.update_attempt_workspace(
         attempt_id,
@@ -834,6 +869,22 @@ def test_orchestrator_cleans_worktree_after_pr_merge(tmp_path: Path) -> None:
     assert pull_request["merged_at"] == "2026-05-24T14:00:00Z"
     assert pull_request["worktree_cleaned_at"]
     assert detail["timeline"][-1]["event_type"] == "cleaned_after_pr_merge"
+    saved_work_item, _run = _work_item_and_run(tmp_path, work_item.id)
+    with store.connect() as conn:
+        state_event = conn.execute(
+            """
+            SELECT * FROM work_item_state_events
+            WHERE work_item_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (work_item.id,),
+        ).fetchone()
+    assert saved_work_item.state == "done"
+    assert saved_work_item.outcome == "pull_request_merged"
+    assert state_event is not None
+    assert state_event["to_state"] == "done"
+    assert state_event["note"] == "pull_request_merged"
 
 
 def test_orchestrator_skips_open_pr_worktree_cleanup(tmp_path: Path) -> None:
