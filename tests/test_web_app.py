@@ -638,6 +638,35 @@ def test_fastapi_work_item_start_creates_attempt_from_board_form(tmp_path: Path)
     assert runtime.triggers == ["chat_implementation"]
 
 
+def test_fastapi_done_chat_work_item_does_not_reappear_in_backlog(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source_id = _add_source(client, "dbcli/litecli")
+
+    response = client.post(
+        "/work-items",
+        data={
+            "message": "Why is the board showing duplicate chat cards?",
+            "source_id": str(source_id),
+        },
+        follow_redirects=False,
+    )
+    threads, _messages, source_items, work_items, _links, _runs = _chat_records(tmp_path)
+    move = client.post(
+        f"/work-items/{work_items[0].id}/move",
+        data={"target_state": "done"},
+        follow_redirects=False,
+    )
+    board = client.get(f"/board/source/{source_id}")
+
+    assert response.status_code == 303
+    assert move.status_code == 303
+    assert len(threads) == 1
+    assert source_items[0].kind == "conversation"
+    assert f'data-work-item-id="{work_items[0].id}"' in board.text
+    assert f'data-source-item-id="{source_items[0].id}"' not in board.text
+    assert board.text.count("Why is the board showing duplicate chat cards?") == 1
+
+
 def test_fastapi_source_item_activation_creates_todo_work_item(tmp_path: Path) -> None:
     client = _client(tmp_path, source_sync_client=FakeSourceSyncClient())
     source_id = _add_source(client, "dbcli/litecli")

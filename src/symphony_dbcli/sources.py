@@ -380,11 +380,7 @@ class SourceRepository:
     ) -> SourceItemPage:
         page_number = _positive_page(page)
         page_limit = _positive_page_limit(limit)
-        linked_active_source_items = (
-            select(WorkItemLink.source_item_id)
-            .join(WorkItem, WorkItemLink.work_item_id == WorkItem.id)
-            .where(WorkItem.state != "done")
-        )
+        linked_work_source_items = select(WorkItemLink.source_item_id)
         with self._session_factory() as session:
             visible_match_ids = _visible_match_ids(session, source_id, query)
             if query.strip() and not visible_match_ids:
@@ -393,7 +389,7 @@ class SourceRepository:
                 SourceItem.source_id == source_id,
                 SourceItem.state == "open",
                 SourceItem.disposition == "active",
-                ~SourceItem.id.in_(linked_active_source_items),
+                ~SourceItem.id.in_(linked_work_source_items),
             ]
             if visible_match_ids:
                 conditions.append(SourceItem.id.in_(visible_match_ids))

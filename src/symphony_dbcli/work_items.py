@@ -266,7 +266,6 @@ class WorkItemRepository:
                 .join(WorkItemLink, WorkItemLink.work_item_id == WorkItem.id)
                 .where(
                     WorkItemLink.source_item_id == activation.source_item_id,
-                    WorkItem.state != DONE_STATE,
                     WorkItem.disposition == "active",
                 )
                 .order_by(WorkItem.id.desc())
