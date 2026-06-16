@@ -1,30 +1,52 @@
 :root {
   color-scheme: light;
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-subtle: #fafbfc;
-  --text: #20242a;
-  --muted: #677085;
-  --line: #d9dee7;
-  --accent: #1f7a5a;
-  --accent-soft: #e8f4ef;
-  --warning: #a86800;
-  --danger: #9f3a38;
-  --shadow: 0 1px 2px rgb(16 24 40 / 6%);
+  --bg: #fdf6e3;
+  --surface: #fffaf0;
+  --surface-subtle: #eee8d5;
+  --text: #586e75;
+  --muted: #657b83;
+  --line: #d8cfb5;
+  --accent: #859900;
+  --accent-soft: color-mix(in srgb, #859900 14%, #fdf6e3);
+  --link: #268bd2;
+  --warning: #b58900;
+  --danger: #dc322f;
+  --button-border: #93a1a1;
+  --button-border-hover: #839496;
+  --decision: color-mix(in srgb, #268bd2 8%, #fdf6e3);
+  --flow-line: #839496;
+  --flow-text: #657b83;
+  --human: #cb4b16;
+  --ok-soft: color-mix(in srgb, #859900 11%, #fdf6e3);
+  --warning-soft: color-mix(in srgb, #b58900 16%, #fdf6e3);
+  --danger-soft: color-mix(in srgb, #dc322f 9%, #fdf6e3);
+  --overlay: rgb(0 43 54 / 52%);
+  --shadow: 0 1px 2px rgb(0 43 54 / 8%);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #17191d;
-  --surface: #22262c;
-  --surface-subtle: #2c3138;
-  --text: #edf0f3;
-  --muted: #aab3c1;
-  --line: #3b424d;
-  --accent: #47b881;
-  --accent-soft: #18392c;
-  --warning: #d9a441;
-  --danger: #f08a82;
+  --bg: #002b36;
+  --surface: #073642;
+  --surface-subtle: #0b3f4d;
+  --text: #93a1a1;
+  --muted: #839496;
+  --line: #586e75;
+  --accent: #859900;
+  --accent-soft: color-mix(in srgb, #859900 22%, #073642);
+  --link: #268bd2;
+  --warning: #b58900;
+  --danger: #dc322f;
+  --button-border: #586e75;
+  --button-border-hover: #839496;
+  --decision: color-mix(in srgb, #268bd2 16%, #073642);
+  --flow-line: #839496;
+  --flow-text: #93a1a1;
+  --human: #cb4b16;
+  --ok-soft: color-mix(in srgb, #859900 17%, #073642);
+  --warning-soft: color-mix(in srgb, #b58900 18%, #073642);
+  --danger-soft: color-mix(in srgb, #dc322f 17%, #073642);
+  --overlay: rgb(0 43 54 / 70%);
   --shadow: 0 1px 2px rgb(0 0 0 / 22%);
 }
 
@@ -40,13 +62,13 @@ body {
 }
 
 a {
-  color: #145f78;
+  color: var(--link);
 }
 
 button,
 .button-link {
   min-height: 34px;
-  border: 1px solid #b9c2cf;
+  border: 1px solid var(--button-border);
   border-radius: 6px;
   padding: 6px 11px;
   background: var(--surface);
@@ -59,7 +81,7 @@ button,
 
 button:hover,
 .button-link:hover {
-  border-color: #96a3b4;
+  border-color: var(--button-border-hover);
   background: var(--surface-subtle);
 }
 
@@ -134,7 +156,7 @@ code {
 .main-nav a:hover,
 .main-nav a.is-active {
   background: var(--accent-soft);
-  color: #176349;
+  color: var(--accent);
 }
 
 .header-actions {
@@ -393,7 +415,7 @@ h2 {
   font-weight: 800;
   text-decoration: none;
   z-index: 1;
-  box-shadow: 0 -1px 2px rgb(16 24 40 / 8%);
+  box-shadow: var(--shadow);
 }
 
 .source-board-frame {
@@ -406,7 +428,7 @@ h2 {
   border-radius: 0 0 10px 10px;
   padding: 16px;
   background: var(--surface);
-  box-shadow: 0 1px 2px rgb(16 24 40 / 5%);
+  box-shadow: var(--shadow);
 }
 
 .board-toolbar {
@@ -539,7 +561,7 @@ h2 {
 }
 
 .board-filter-pill input:focus-visible + span {
-  outline: 2px solid #2684ff;
+  outline: 2px solid var(--link);
   outline-offset: 2px;
 }
 
@@ -587,7 +609,7 @@ h2 {
 
 .empty-state {
   margin: 12px;
-  border: 1px dashed #c6ccd6;
+  border: 1px dashed var(--line);
   border-radius: 8px;
   padding: 18px 12px;
   background: var(--surface-subtle);
@@ -780,18 +802,18 @@ h2 {
 }
 
 .chat-message.is-final {
-  border-color: rgb(38 130 82 / 28%);
-  background: rgb(38 130 82 / 7%);
+  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+  background: var(--ok-soft);
 }
 
 .chat-message.is-error {
-  border-color: rgb(185 74 72 / 35%);
-  background: rgb(185 74 72 / 7%);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
 }
 
 .chat-message.attempt-worker-status {
-  border-color: rgb(153 111 34 / 28%);
-  background: rgb(153 111 34 / 7%);
+  border-color: color-mix(in srgb, var(--warning) 36%, transparent);
+  background: var(--warning-soft);
 }
 
 .chat-message.is-pending {
@@ -840,7 +862,7 @@ h2 {
 }
 
 .chat-result-section.is-summary {
-  border-left-color: rgb(38 130 82 / 70%);
+  border-left-color: var(--accent);
 }
 
 .chat-result-section-title {
@@ -851,7 +873,7 @@ h2 {
 }
 
 .chat-result-section-title span {
-  color: rgb(38 130 82);
+  color: var(--accent);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -1070,7 +1092,7 @@ h2 {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgb(15 18 24 / 52%);
+  background: var(--overlay);
 }
 
 .modal-dialog {
@@ -1113,14 +1135,14 @@ h2 {
 }
 
 .status-pill.is-ok {
-  border-color: rgb(38 130 82 / 35%);
-  background: rgb(38 130 82 / 10%);
-  color: #26724c;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--ok-soft);
+  color: var(--accent);
 }
 
 .status-pill.is-error {
-  border-color: rgb(185 74 72 / 35%);
-  background: rgb(185 74 72 / 10%);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -1129,9 +1151,9 @@ h2 {
 }
 
 .status-pill.is-warning {
-  border-color: rgb(128 86 0 / 30%);
-  background: #fff1d6;
-  color: #805600;
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .workflow-error {
@@ -1141,7 +1163,7 @@ h2 {
 }
 
 .cycle-result.has-error {
-  border-color: #e2aaa7;
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
 }
 
 .workers-page {
@@ -1266,18 +1288,18 @@ h2 {
   display: inline-block;
   width: 12px;
   height: 12px;
-  border: 1px solid #6c7a8d;
-  background: #f7fbff;
+  border: 1px solid var(--flow-line);
+  background: var(--decision);
   transform: rotate(45deg);
 }
 
 .legend-line {
   width: 22px;
-  border-top: 2px solid #8491a3;
+  border-top: 2px solid var(--flow-line);
 }
 
 .legend-line.is-human {
-  border-color: #b4791f;
+  border-color: var(--human);
   border-top-style: dashed;
 }
 
@@ -1291,7 +1313,7 @@ h2 {
 
 .legend-box.is-terminal {
   background: var(--surface-subtle);
-  border-color: #98a2b3;
+  border-color: var(--flow-line);
 }
 
 .legend-box.is-active {
@@ -1306,8 +1328,18 @@ h2 {
   border-radius: 8px;
   background:
     linear-gradient(var(--surface-subtle), var(--surface-subtle)) padding-box,
-    repeating-linear-gradient(0deg, transparent, transparent 23px, rgb(120 130 145 / 10%) 24px),
-    repeating-linear-gradient(90deg, transparent, transparent 23px, rgb(120 130 145 / 10%) 24px);
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 23px,
+      color-mix(in srgb, var(--line) 42%, transparent) 24px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 23px,
+      color-mix(in srgb, var(--line) 42%, transparent) 24px
+    );
   cursor: grab;
 }
 
@@ -1330,13 +1362,13 @@ h2 {
 
 .workflow-flow-edge path {
   fill: none;
-  stroke: #8491a3;
+  stroke: var(--flow-line);
   stroke-linecap: round;
   stroke-width: 2;
 }
 
 .workflow-flow-edge.is-human path {
-  stroke: #b4791f;
+  stroke: var(--human);
   stroke-dasharray: 6 5;
 }
 
@@ -1349,7 +1381,7 @@ h2 {
 }
 
 .workflow-flow-edge text {
-  fill: #4f5b6c;
+  fill: var(--flow-text);
   font-size: 11px;
   font-weight: 750;
   paint-order: stroke;
@@ -1359,15 +1391,15 @@ h2 {
 }
 
 .workflow-flow-edge.is-human text {
-  fill: #7b5415;
+  fill: var(--human);
 }
 
 .workflow-flow-arrowhead {
-  fill: #8491a3;
+  fill: var(--flow-line);
 }
 
 .workflow-flow-arrowhead-human {
-  fill: #b4791f;
+  fill: var(--human);
 }
 
 .workflow-flow-node rect,
@@ -1378,15 +1410,15 @@ h2 {
 }
 
 .workflow-flow-node.is-decision polygon {
-  fill: #f7fbff;
-  stroke: #6c7a8d;
+  fill: var(--decision);
+  stroke: var(--flow-line);
   stroke-width: 1.8;
 }
 
 :root[data-theme="dark"] .workflow-flow-node.is-decision polygon,
 :root[data-theme="dark"] .legend-diamond {
-  background: #25313c;
-  fill: #25313c;
+  background: var(--decision);
+  fill: var(--decision);
 }
 
 .workflow-flow-node.is-initial rect,
@@ -1398,12 +1430,12 @@ h2 {
 .workflow-flow-node.is-terminal rect,
 .workflow-flow-node.is-terminal polygon {
   fill: var(--surface-subtle);
-  stroke: #98a2b3;
+  stroke: var(--flow-line);
 }
 
 .workflow-flow-node.has-gate rect,
 .workflow-flow-node.has-gate polygon {
-  stroke: #b4791f;
+  stroke: var(--human);
 }
 
 .workflow-flow-node.has-active rect,
@@ -1588,14 +1620,14 @@ h2 {
 
 [data-live-status][data-live-state="connecting"],
 [data-live-status][data-live-state="warning"] {
-  border-color: rgb(128 86 0 / 30%);
-  background: #fff1d6;
-  color: #805600;
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 [data-live-status][data-live-state="error"] {
-  border-color: rgb(185 74 72 / 35%);
-  background: rgb(185 74 72 / 10%);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -1707,7 +1739,7 @@ h2 {
 }
 
 .live-event.is-error {
-  border-color: rgb(185 74 72 / 35%);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
 .live-event-header {

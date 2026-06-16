@@ -145,6 +145,18 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert "<style>" not in response.text
 
 
+def test_dashboard_styles_define_solarized_dark_mode() -> None:
+    css = Path("src/symphony_dbcli/web/static/web.css").read_text(encoding="utf-8")
+
+    assert ':root[data-theme="dark"]' in css
+    assert "--bg: #002b36;" in css
+    assert "--surface: #073642;" in css
+    assert "--text: #93a1a1;" in css
+    assert "--accent: #859900;" in css
+    assert "color-mix(in srgb, var(--accent) 40%, transparent)" in css
+    assert "background: var(--warning-soft);" in css
+
+
 def test_fastapi_board_sync_button_refresh_endpoint_returns_control(tmp_path: Path) -> None:
     client = _client(tmp_path)
     source_id = _add_source(client, "dbcli/litecli")
