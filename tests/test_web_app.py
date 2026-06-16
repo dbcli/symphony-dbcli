@@ -128,7 +128,8 @@ def test_fastapi_dashboard_exposes_navigation_and_board(tmp_path: Path) -> None:
     assert 'hx-trigger="every 60s"' in response.text
     assert 'class="board-start-panel"' in response.text
     assert 'aria-label="Start work for dbcli/litecli"' in response.text
-    assert 'id="board-start-message"' in response.text
+    assert '<textarea\n        id="board-start-message"' in response.text
+    assert 'name="message"\n        rows="3"' in response.text
     assert 'placeholder="Ask Symphony or start work in dbcli/litecli"' in response.text
     assert f'name="source_id" value="{source_id}"' in response.text
     assert 'action="/sources/sync"' in response.text

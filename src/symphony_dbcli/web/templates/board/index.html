@@ -23,13 +23,14 @@
     <form class="board-start-form" method="post" action="/work-items" data-chat-submit-form>
       <input type="hidden" name="source_id" value="{{ selected_source.id }}" />
       <label class="sr-only" for="board-start-message">Start work for {{ selected_source.repo }}</label>
-      <input
+      <textarea
         id="board-start-message"
         name="message"
+        rows="3"
         placeholder="Ask Symphony or start work in {{ selected_source.repo }}"
         autocomplete="off"
         required
-      />
+      ></textarea>
       <button type="submit">Start</button>
     </form>
   </section>

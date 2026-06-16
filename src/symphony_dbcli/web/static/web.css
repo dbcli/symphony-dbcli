@@ -364,6 +364,7 @@ h2 {
   align-items: flex-end;
   gap: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   margin-bottom: 0;
   padding: 0 8px;
   border-bottom: 2px solid var(--line);
@@ -462,13 +463,13 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
   gap: 8px;
-  align-items: center;
+  align-items: end;
 }
 
-.board-start-form input[name="message"] {
+.board-start-form textarea[name="message"] {
   min-width: 0;
-  min-height: 36px;
-  padding: 7px 10px;
+  min-height: 72px;
+  resize: vertical;
 }
 
 .board-start-form button {
